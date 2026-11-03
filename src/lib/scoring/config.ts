@@ -31,6 +31,8 @@ export const ScoringConfigSchema = z.object({
   minRecoveryFactor: z.number().default(2),
   /** Copyability. */
   copyDelaySeconds: z.number().int().min(0).default(120),
+  /** Added to the delayed mid price to approximate crossing the spread (price points). */
+  copySlippage: z.number().min(0).max(0.1).default(0.01),
   minCopyAdjRoi: z.number().default(0),
   maxTradesPerDay: z.number().default(200),
   maxBothSidesRatio: z.number().min(0).max(1).default(0.3),

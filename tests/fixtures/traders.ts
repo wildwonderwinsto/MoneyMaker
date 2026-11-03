@@ -68,7 +68,7 @@ export function seriesFromPositions(positions: PositionRecord[], start: number):
 }
 
 /** Bets near 50/50 and wins 68% of the time, every month, small even sizes. */
-export const steadyGrinder = () => {
+export const steadyGrinder = (seed = 7) => {
   const t = generateTrader({
     wallet: "0xgrinder",
     n: 160,
@@ -76,7 +76,7 @@ export const steadyGrinder = () => {
     winProb: () => 0.68,
     shares: () => 200,
     days: 240,
-    seed: 7,
+    seed,
   });
   t.copyReplays = t.positions.map((p) => ({
     delayedPrice: p.avgPrice + 0.01,

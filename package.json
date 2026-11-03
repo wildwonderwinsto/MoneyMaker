@@ -19,6 +19,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env --import tsx src/scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
+    "job": "node --env-file-if-exists=.env --import tsx src/scripts/job.ts",
     "smoke:polymarket": "node --env-file-if-exists=.env --import tsx src/scripts/smoke-polymarket.ts"
   },
   "dependencies": {

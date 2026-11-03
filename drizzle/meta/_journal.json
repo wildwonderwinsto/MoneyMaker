@@ -8,6 +8,20 @@
       "when": 1793748365074,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793748978767,
+      "tag": "0001_position_shares_and_entry",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793749009910,
+      "tag": "0002_trader_profile_fields",
+      "breakpoints": true
     }
   ]
 }

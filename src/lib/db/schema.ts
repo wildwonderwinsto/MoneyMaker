@@ -41,6 +41,12 @@ export const traders = pgTable("traders", {
   profileImage: text(),
   xUsername: text(),
   verifiedBadge: boolean().notNull().default(false),
+  /** Lifetime fills (from /v2/user-stats); used to detect bots. */
+  tradeCount: bigint({ mode: "number" }),
+  joinedAt: tsz(),
+  /** Best (lowest) leaderboard rank seen and the non-"overall" category it came from. */
+  bestRank: integer(),
+  leaderboardCategory: text(),
   firstSeenAt: createdAt(),
   lastBackfillAt: tsz(),
   updatedAt: createdAt(),
@@ -106,7 +112,10 @@ export const traderPositions = pgTable(
     outcomeIndex: integer(),
     status: text().notNull(),
     avgPrice: money(),
+    /** Shares currently held. */
     size: doublePrecision(),
+    /** Total shares ever bought (Polymarket `total_size`). */
+    sharesBought: doublePrecision(),
     totalCost: money(),
     realizedPnl: money(),
     unrealizedPnl: money(),
@@ -118,6 +127,7 @@ export const traderPositions = pgTable(
     endDate: tsz(),
     /** True/false once the market resolved; null if unresolved or unknown. */
     won: boolean(),
+    firstEntryAt: tsz(),
     lastActivityAt: tsz(),
     updatedAt: createdAt(),
   },

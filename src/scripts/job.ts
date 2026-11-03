@@ -1,0 +1,124 @@
+/**
+ * Job CLI.
+ *   npm run job -- discover [--limit 300] [--per-board 100]
+ *   npm run job -- backfill            # all known candidates without recent backfill
+ *   npm run job -- score
+ *   npm run job -- backtest [--months 6] [--top 10]
+ *   npm run job -- daily [--limit 300] # discover → backfill → resolve → score → backtest → prune
+ */
+import { parseArgs } from "node:util";
+
+import { and, isNull, lt, or } from "drizzle-orm";
+
+import { closeDb, getDb, type Db } from "@/lib/db/client";
+import { traders } from "@/lib/db/schema";
+import {
+  backfillTrader,
+  DEFAULT_BACKFILL,
+  cleanupStorage,
+  prunePositions,
+  resolveMarkets,
+} from "@/lib/jobs/backfill";
+import { backtestJob } from "@/lib/jobs/backtest";
+import { DEFAULT_DISCOVER, discoverCandidates } from "@/lib/jobs/discover";
+import { DEFAULT_SCORE, scoreAll } from "@/lib/jobs/score";
+import { mapPool, runJob } from "@/lib/jobs/util";
+import { DEFAULT_BACKTEST } from "@/lib/scoring/backtest";
+import { getScoringConfig } from "@/lib/settings";
+
+const { positionals, values } = parseArgs({
+  allowPositionals: true,
+  options: {
+    limit: { type: "string" },
+    "per-board": { type: "string" },
+    months: { type: "string" },
+    top: { type: "string" },
+    "no-prune": { type: "boolean", default: false },
+  },
+});
+const num = (v: string | undefined, fallback: number) => (v === undefined ? fallback : Number(v));
+
+async function backfillMany(db: Db, wallets: string[], log: (m: string) => void) {
+  let done = 0;
+  let failed = 0;
+  let positions = 0;
+  await mapPool(wallets, 3, async (wallet) => {
+    try {
+      const r = await backfillTrader(db, wallet, DEFAULT_BACKFILL);
+      positions += r.positions;
+    } catch (err) {
+      failed++;
+      log(`backfill failed for ${wallet}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (++done % 25 === 0) log(`backfilled ${done}/${wallets.length}`);
+  });
+  const resolved = await resolveMarkets(db, log);
+  return { traders: wallets.length, failed, positions, ...resolved };
+}
+
+async function staleWallets(db: Db): Promise<string[]> {
+  const cutoff = new Date(Date.now() - 20 * 3600 * 1000);
+  const rows = await db
+    .select({ wallet: traders.wallet })
+    .from(traders)
+    .where(and(or(isNull(traders.lastBackfillAt), lt(traders.lastBackfillAt, cutoff))));
+  return rows.map((r) => r.wallet);
+}
+
+async function main() {
+  const command = positionals[0];
+  const db = getDb();
+  const cfg = await getScoringConfig(db);
+  const discoverOpts = {
+    ...DEFAULT_DISCOVER,
+    maxCandidates: num(values.limit, DEFAULT_DISCOVER.maxCandidates),
+    perBoard: num(values["per-board"], DEFAULT_DISCOVER.perBoard),
+  };
+  const backtestOpts = {
+    ...DEFAULT_BACKTEST,
+    months: num(values.months, DEFAULT_BACKTEST.months),
+    topK: num(values.top, DEFAULT_BACKTEST.topK),
+    copySlippage: cfg.copySlippage,
+  };
+
+  switch (command) {
+    case "discover":
+      await runJob(db, "discover", (log) => discoverCandidates(db, cfg, discoverOpts, log));
+      break;
+    case "backfill":
+      await runJob(db, "backfill", async (log) => backfillMany(db, await staleWallets(db), log));
+      break;
+    case "score":
+      await runJob(db, "score", async (log) => {
+        const { rejected, ...stats } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
+        return { ...stats, rejected: rejected.length };
+      });
+      break;
+    case "backtest":
+      await runJob(db, "backtest", (log) => backtestJob(db, cfg, backtestOpts, log));
+      break;
+    case "daily":
+      await runJob(db, "daily", async (log) => {
+        const discovered = await discoverCandidates(db, cfg, discoverOpts, log);
+        const backfill = await backfillMany(db, discovered.wallets, log);
+        const { rejected, ...score } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
+        const backtest = await backtestJob(db, cfg, backtestOpts, log);
+        const pruned = values["no-prune"] ? 0 : await prunePositions(db, rejected);
+        log(`pruned ${pruned} position rows of ${rejected.length} rejected traders`);
+        const cleaned = await cleanupStorage(db);
+        log(`removed ${cleaned.markets} orphan markets and ${cleaned.trades} old trades`);
+        return { discovered: discovered.kept, backfill, score, backtest, pruned, cleaned };
+      });
+      break;
+    default:
+      console.error("Usage: npm run job -- <discover|backfill|score|backtest|daily> [options]");
+      process.exitCode = 1;
+  }
+}
+
+main()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => closeDb());

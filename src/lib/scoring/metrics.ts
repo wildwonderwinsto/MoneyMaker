@@ -25,6 +25,8 @@ export interface PositionRecord {
   /** Epoch seconds. */
   firstEntryAt: number | null;
   lastActivityAt: number | null;
+  /** Market end date (epoch seconds), used by the backtest to avoid look-ahead. */
+  endAt?: number | null;
 }
 
 export interface PnlSeriesPoint {
@@ -47,6 +49,8 @@ export interface CopyReplay {
   delayedPrice: number;
   /** 1/0 if resolved, otherwise the latest price (mark-to-market). */
   exitValue: number;
+  /** Leader's stake in USDC; copies are sized proportionally (defaults to 1). */
+  weight?: number;
 }
 
 export interface TraderMetrics {
@@ -221,11 +225,19 @@ export function drawdownStats(series: PnlSeriesPoint[]) {
 // Copyability
 // ---------------------------------------------------------------------------
 
-/** Equal-weight ROI of replayed copies (each copy stakes $1 at the delayed price). */
+/** Stake-weighted ROI of replayed copies (sized proportionally to the leader's stake). */
 export function copyAdjustedRoi(replays: CopyReplay[]): number | null {
-  const valid = replays.filter((r) => r.delayedPrice > 0 && r.delayedPrice < 0.99);
+  const valid = replays.filter(
+    (r) => r.delayedPrice > 0 && r.delayedPrice < 0.99 && (r.weight ?? 1) > 0,
+  );
   if (valid.length === 0) return null;
-  return mean(valid.map((r) => (r.exitValue - r.delayedPrice) / r.delayedPrice));
+  const totalWeight = valid.reduce((a, r) => a + (r.weight ?? 1), 0);
+  return (
+    valid.reduce(
+      (a, r) => a + (r.weight ?? 1) * ((r.exitValue - r.delayedPrice) / r.delayedPrice),
+      0,
+    ) / totalWeight
+  );
 }
 
 export function bothSidesRatio(positions: PositionRecord[]): number {
