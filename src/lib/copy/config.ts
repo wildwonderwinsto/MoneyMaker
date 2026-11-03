@@ -21,6 +21,13 @@ export const RiskConfigSchema = z.object({
   fixedUsd: z.number().min(1).default(25),
   /** Smallest order worth placing. */
   minOrderUsd: z.number().min(0).default(1),
+  /** Ignore leader trades smaller than this (dust / order-splitting noise). */
+  minLeaderUsd: z.number().min(0).default(25),
+  /**
+   * Floor for proportional copies of meaningful trades. Whales commit tiny fractions of
+   * huge books, which would round to $0 on a small bankroll. Risk caps still apply.
+   */
+  minCopyUsd: z.number().min(0).default(5),
   /** Caps as fractions of current equity. */
   maxPositionPct: z.number().min(0).max(1).default(0.1),
   maxTraderExposurePct: z.number().min(0).max(1).default(0.3),

@@ -72,9 +72,21 @@ describe("sizeBuy", () => {
     expect(sizeBuy({ ...base, leaderUsd: 5000 }, cfg)).toEqual({ usd: 100 });
   });
 
-  it("explains why tiny copies are skipped", () => {
+  it("ignores the leader's dust trades with a clear reason", () => {
     const r = sizeBuy({ ...base, leaderUsd: 5 }, cfg);
     expect(r.usd).toBe(0);
+    expect("reason" in r && r.reason).toMatch(/too small/);
+  });
+
+  it("applies the minimum copy size to a whale's meaningful but tiny-fraction trade", () => {
+    // $100 of a $1M book = 0.01% → $0.10 on our $1000, floored to $5.
+    expect(sizeBuy({ ...base, leaderUsd: 100, leaderPortfolioUsd: 1_000_000 }, cfg)).toEqual({
+      usd: 5,
+    });
+  });
+
+  it("skips copies below the order minimum", () => {
+    const r = sizeBuy({ ...base, leaderPortfolioUsd: 1_000_000 }, { ...cfg, minCopyUsd: 0 });
     expect("reason" in r && r.reason).toMatch(/below/);
   });
 
