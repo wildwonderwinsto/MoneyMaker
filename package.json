@@ -18,7 +18,8 @@
     "check": "npm run typecheck && npm run lint && npm run test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env --import tsx src/scripts/migrate.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "smoke:polymarket": "node --env-file-if-exists=.env --import tsx src/scripts/smoke-polymarket.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.15",
