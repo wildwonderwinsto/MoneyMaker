@@ -150,12 +150,15 @@ export function getPositions(params: {
   limit?: number;
   cursor?: string;
   sortBy?: string;
+  /** Restrict to one or more markets (condition ids, max 20). */
+  condition?: string | string[];
 }): Promise<Page<Position>> {
   return get(
     "/v2/positions",
     {
       user: params.user,
       status: params.status,
+      condition: Array.isArray(params.condition) ? params.condition.join(",") : params.condition,
       limit: params.limit ?? 1000,
       cursor: params.cursor,
       sort_by: params.sortBy,

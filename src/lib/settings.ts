@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { z } from "zod";
 
+import { RiskConfigSchema, type RiskConfig } from "@/lib/copy/config";
 import type { Db } from "@/lib/db/client";
 import { appSettings } from "@/lib/db/schema";
 import { ScoringConfigSchema, type ScoringConfig } from "@/lib/scoring/config";
@@ -25,4 +26,8 @@ export async function writeSetting(db: Db, key: string, value: unknown): Promise
 
 export function getScoringConfig(db: Db): Promise<ScoringConfig> {
   return readSetting(db, "scoring", ScoringConfigSchema);
+}
+
+export function getRiskConfig(db: Db): Promise<RiskConfig> {
+  return readSetting(db, "risk", RiskConfigSchema);
 }

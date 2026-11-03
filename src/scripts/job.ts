@@ -5,13 +5,16 @@
  *   npm run job -- score
  *   npm run job -- backtest [--months 6] [--top 10]
  *   npm run job -- daily [--limit 300] # discover → backfill → resolve → score → backtest → prune
+ *   npm run job -- follow <wallet>     # follow a trader (paper copy)
+ *   npm run job -- tick                # run one copy-engine tick locally
  */
 import { parseArgs } from "node:util";
 
 import { and, isNull, lt, or } from "drizzle-orm";
 
 import { closeDb, getDb, type Db } from "@/lib/db/client";
-import { traders } from "@/lib/db/schema";
+import { runTick } from "@/lib/copy/tick";
+import { follows, traders } from "@/lib/db/schema";
 import {
   backfillTrader,
   DEFAULT_BACKFILL,
@@ -110,8 +113,26 @@ async function main() {
         return { discovered: discovered.kept, backfill, score, backtest, pruned, cleaned };
       });
       break;
+    case "follow": {
+      const wallet = positionals[1]?.toLowerCase();
+      if (!wallet || !/^0x[0-9a-f]{40}$/.test(wallet)) throw new Error("Usage: follow <0x wallet>");
+      await db
+        .insert(follows)
+        .values({ wallet })
+        .onConflictDoUpdate({
+          target: follows.wallet,
+          set: { enabled: true },
+        });
+      console.log(`Following ${wallet}`);
+      break;
+    }
+    case "tick":
+      console.log(JSON.stringify(await runTick(db), null, 2));
+      break;
     default:
-      console.error("Usage: npm run job -- <discover|backfill|score|backtest|daily> [options]");
+      console.error(
+        "Usage: npm run job -- <discover|backfill|score|backtest|daily|follow|tick> [options]",
+      );
       process.exitCode = 1;
   }
 }
