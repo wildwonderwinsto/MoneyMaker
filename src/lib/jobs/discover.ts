@@ -1,19 +1,24 @@
 /**
- * Discovery: merge Polymarket leaderboards into a candidate pool, then drop wallets that
- * can't possibly qualify (too few markets, obvious high-frequency bots) using one cheap
- * /v2/user-stats call each.
+ * Discovery: build a candidate pool from (1) Polymarket leaderboards and (2) the largest
+ * holders of the most active markets (traders who never top a leaderboard), then drop
+ * wallets that can't qualify using one cheap /v2/user-stats call each.
+ *
+ * Leaderboards rank by total dollars won, which favours whales and one big win. So the
+ * kept candidates are ordered by a quality score instead: profit per dollar traded, and
+ * appearing across several time windows (consistency), not by raw leaderboard rank.
  */
 import { sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { leaderboardSnapshots, traders } from "@/lib/db/schema";
 import {
+  getHolders,
   getLeaderboard,
   getUserStats,
   type LeaderboardCategory,
-  type LeaderboardEntry,
   type TimePeriod,
 } from "@/lib/polymarket/data";
+import { getTopMarkets } from "@/lib/polymarket/gamma";
 import type { ScoringConfig } from "@/lib/scoring/config";
 
 import { chunk, mapPool, toDate } from "./util";
@@ -21,34 +26,83 @@ import { chunk, mapPool, toDate } from "./util";
 export interface DiscoverOptions {
   /** Top-N wallets taken from each leaderboard. */
   perBoard: number;
-  /** Cap on candidates kept after pre-filtering (best ranks first). */
+  /** Cap on candidates kept after pre-filtering (highest discovery score first). */
   maxCandidates: number;
   timePeriods: TimePeriod[];
   categories: LeaderboardCategory[];
+  /** Most-active open markets whose biggest holders are added to the pool. */
+  holderMarkets: number;
+  holdersPerMarket: number;
 }
 
 export const DEFAULT_DISCOVER: DiscoverOptions = {
-  perBoard: 100,
+  perBoard: 300,
   // ~150 keeps a full run comfortably inside Supabase's free 500 MB.
   maxCandidates: 150,
   timePeriods: ["week", "month", "all"],
   categories: ["overall", "politics", "sports", "crypto", "economics", "tech", "culture"],
+  holderMarkets: 40,
+  holdersPerMarket: 25,
 };
 
 interface Candidate {
   wallet: string;
-  entry: LeaderboardEntry;
-  bestRank: number;
+  name: string | null;
+  profileImage: string | null;
+  xUsername: string | null;
+  verified: boolean;
+  /** Best leaderboard rank seen; null if found only through market holders. */
+  bestRank: number | null;
   category: string | null;
   categoryRank: number;
+  /** Distinct leaderboard time windows (week/month/all) the wallet appeared in. */
+  periods: Set<string>;
+  /** Distinct non-"overall" categories the wallet appeared in. */
+  categories: Set<string>;
 }
+
+/**
+ * Order candidates by quality rather than size (higher = backfill first):
+ * up to 3 points for appearing in every time window, up to 1 for breadth across
+ * categories, and up to 3 for profit per dollar traded (30%+ earns the maximum).
+ */
+export function discoveryScore(c: {
+  periods: number;
+  categories: number;
+  efficiency: number;
+}): number {
+  return (
+    Math.min(c.periods, 3) +
+    0.25 * Math.min(c.categories, 4) +
+    Math.min(3, Math.max(0, c.efficiency / 0.1))
+  );
+}
+
+const newCandidate = (wallet: string): Candidate => ({
+  wallet,
+  name: null,
+  profileImage: null,
+  xUsername: null,
+  verified: false,
+  bestRank: null,
+  category: null,
+  categoryRank: Infinity,
+  periods: new Set(),
+  categories: new Set(),
+});
 
 export async function discoverCandidates(
   db: Db,
   cfg: ScoringConfig,
   opts: DiscoverOptions,
   log: (m: string) => void,
-): Promise<{ wallets: string[]; boards: number; seen: number; kept: number }> {
+): Promise<{
+  wallets: string[];
+  boards: number;
+  seen: number;
+  kept: number;
+  fromHolders: number;
+}> {
   const pool = new Map<string, Candidate>();
   const snapshots: (typeof leaderboardSnapshots.$inferInsert)[] = [];
   let boards = 0;
@@ -74,18 +128,19 @@ export async function discoverCandidates(
           pnl: entry.pnl,
           volume: entry.volume,
         });
-        const prev = pool.get(wallet);
-        const c: Candidate = prev ?? {
-          wallet,
-          entry,
-          bestRank: entry.rank,
-          category: null,
-          categoryRank: Infinity,
-        };
-        c.bestRank = Math.min(c.bestRank, entry.rank);
-        if (category !== "overall" && entry.rank < c.categoryRank) {
-          c.category = category;
-          c.categoryRank = entry.rank;
+        const c = pool.get(wallet) ?? newCandidate(wallet);
+        c.name ??= entry.user_name || null;
+        c.profileImage ??= entry.profile_image || null;
+        c.xUsername ??= entry.x_username || null;
+        c.verified ||= entry.verified ?? false;
+        c.bestRank = Math.min(c.bestRank ?? Infinity, entry.rank);
+        c.periods.add(timePeriod);
+        if (category !== "overall") {
+          c.categories.add(category);
+          if (entry.rank < c.categoryRank) {
+            c.category = category;
+            c.categoryRank = entry.rank;
+          }
         }
         pool.set(wallet, c);
       }
@@ -93,36 +148,79 @@ export async function discoverCandidates(
   }
   log(`${boards} leaderboards → ${pool.size} unique wallets`);
 
+  // Biggest holders of today's most active markets: finds steady traders who never
+  // reach a leaderboard. Failures here are non-fatal (leaderboards are enough to run).
+  let fromHolders = 0;
+  try {
+    const top = await getTopMarkets(opts.holderMarkets);
+    for (const part of chunk(
+      top.map((m) => m.conditionId),
+      20,
+    )) {
+      for (const h of await getHolders(part, opts.holdersPerMarket)) {
+        const wallet = h.proxy_wallet.toLowerCase();
+        if (!pool.has(wallet)) {
+          fromHolders++;
+          pool.set(wallet, {
+            ...newCandidate(wallet),
+            name: h.name || null,
+            profileImage: h.profile_image || null,
+            verified: h.verified ?? false,
+          });
+        }
+      }
+    }
+    log(`market holders added ${fromHolders} wallets not on any leaderboard`);
+  } catch (err) {
+    log(`holder discovery skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   for (const part of chunk(snapshots, 1000)) await db.insert(leaderboardSnapshots).values(part);
 
   // Pre-filter with lifetime stats.
-  const candidates = [...pool.values()].sort((a, b) => a.bestRank - b.bestRank);
+  const candidates = [...pool.values()];
   const stats = await mapPool(candidates, 6, (c) => getUserStats(c.wallet).catch(() => null));
   const now = Date.now() / 1000;
 
-  const kept: Candidate[] = [];
+  const kept: Array<{ c: Candidate; score: number }> = [];
   const rows: (typeof traders.$inferInsert)[] = [];
+  let losers = 0;
   candidates.forEach((c, i) => {
     const s = stats[i];
     const tradeCount = s?.all_time_pnl?.trade_count ?? null;
     const joinDate = s?.join_date ?? null;
+    if (!s) return;
+    const days = joinDate ? Math.max(1, (now - joinDate) / 86_400) : null;
+    const tooFewMarkets = s.trades < cfg.minResolved;
+    const isBot = tradeCount !== null && days !== null && tradeCount / days > cfg.maxTradesPerDay;
+    const realized = s.all_time_pnl?.realized_pnl ?? 0;
+    const volume = s.all_time_pnl?.volume_usdc ?? 0;
+    // Lifetime losers can't pass the profit checks; don't let them take a slot.
+    if (realized <= 0) losers++;
+    if (tooFewMarkets || isBot || realized <= 0) return;
+
     rows.push({
       wallet: c.wallet,
-      name: c.entry.user_name || null,
-      profileImage: c.entry.profile_image || null,
-      xUsername: c.entry.x_username || null,
-      verifiedBadge: c.entry.verified ?? false,
+      name: c.name,
+      profileImage: c.profileImage,
+      xUsername: c.xUsername,
+      verifiedBadge: c.verified,
       tradeCount,
       joinedAt: toDate(joinDate),
       bestRank: c.bestRank,
       leaderboardCategory: c.category,
     });
-    if (!s) return;
-    const days = joinDate ? Math.max(1, (now - joinDate) / 86_400) : null;
-    const tooFewMarkets = s.trades < cfg.minResolved;
-    const isBot = tradeCount !== null && days !== null && tradeCount / days > cfg.maxTradesPerDay;
-    if (!tooFewMarkets && !isBot) kept.push(c);
+    kept.push({
+      c,
+      score: discoveryScore({
+        periods: c.periods.size,
+        categories: c.categories.size,
+        efficiency: volume > 0 ? realized / volume : 0,
+      }),
+    });
   });
+  kept.sort((a, b) => b.score - a.score);
+  log(`dropped ${losers} lifetime-losing wallets`);
 
   for (const part of chunk(rows, 500)) {
     await db
@@ -144,7 +242,9 @@ export async function discoverCandidates(
       });
   }
 
-  const wallets = kept.slice(0, opts.maxCandidates).map((c) => c.wallet);
-  log(`pre-filter kept ${kept.length}/${candidates.length}; using top ${wallets.length}`);
-  return { wallets, boards, seen: pool.size, kept: wallets.length };
+  const wallets = kept.slice(0, opts.maxCandidates).map((k) => k.c.wallet);
+  log(
+    `pre-filter kept ${kept.length}/${candidates.length}; using top ${wallets.length} by quality`,
+  );
+  return { wallets, boards, seen: pool.size, kept: wallets.length, fromHolders };
 }

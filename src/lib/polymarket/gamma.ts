@@ -152,3 +152,15 @@ export async function getPublicProfile(address: string): Promise<PublicProfile> 
     limiter: gammaLimiter,
   });
 }
+
+/** Open markets with the most trading volume in the last 24 hours. */
+export async function getTopMarkets(limit = 40): Promise<GammaMarket[]> {
+  const url = buildUrl(GAMMA_API, "/markets/keyset", {
+    closed: false,
+    order: "volume24hr",
+    ascending: false,
+    limit: Math.min(100, limit),
+  });
+  const res = await fetchJson(url, { schema: KeysetResponse, limiter: gammaLimiter });
+  return res.markets;
+}

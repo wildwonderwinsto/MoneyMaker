@@ -115,7 +115,7 @@ describe("storage maintenance", () => {
     expect(await db.select().from(traderPnlDaily)).toHaveLength(0);
 
     const cleaned = await cleanupStorage(db);
-    expect(cleaned).toEqual({ markets: 1, trades: 1 });
+    expect(cleaned).toEqual({ markets: 1, trades: 1, snapshots: 0 });
     const left = await db.select({ id: markets.conditionId }).from(markets);
     expect(left.map((m) => m.id)).toEqual(["c-keep"]);
   });

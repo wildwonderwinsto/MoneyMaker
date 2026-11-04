@@ -283,3 +283,28 @@ export async function getPortfolioValue(user: string): Promise<number> {
   );
   return res.data?.value ?? 0;
 }
+
+// ---------------------------------------------------------------------------
+// Holders (largest current holders of a market's outcome tokens)
+// ---------------------------------------------------------------------------
+
+export const Holder = z.object({
+  proxy_wallet: z.string(),
+  amount: z.number(),
+  outcome_index: num,
+  name: str,
+  pseudonym: str,
+  profile_image: str,
+  verified: z.boolean().nullish(),
+});
+export type Holder = z.infer<typeof Holder>;
+
+/** Top holders per outcome token for up to 20 markets in one request. */
+export async function getHolders(conditionIds: string[], limit = 25): Promise<Holder[]> {
+  const res = await get(
+    "/v2/holders",
+    { condition: conditionIds.slice(0, 20).join(","), limit },
+    page(z.object({ token_id: z.string(), holders: z.array(Holder) })),
+  );
+  return res.data.flatMap((t) => t.holders);
+}

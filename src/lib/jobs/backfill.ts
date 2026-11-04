@@ -9,7 +9,14 @@
 import { and, eq, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
-import { markets, traderPnlDaily, traderPositions, traders, traderTrades } from "@/lib/db/schema";
+import {
+  leaderboardSnapshots,
+  markets,
+  traderPnlDaily,
+  traderPositions,
+  traders,
+  traderTrades,
+} from "@/lib/db/schema";
 import { collect, getPositions, getUserPnl, paginate, type Position } from "@/lib/polymarket/data";
 import { getMarketsByConditionIds, winnerIndex } from "@/lib/polymarket/gamma";
 
@@ -221,7 +228,8 @@ export async function prunePositions(db: Db, wallets: string[]): Promise<number>
 export async function cleanupStorage(
   db: Db,
   tradeRetentionDays = 120,
-): Promise<{ markets: number; trades: number }> {
+  snapshotRetentionDays = 90,
+): Promise<{ markets: number; trades: number; snapshots: number }> {
   const orphanMarkets = await db.execute(sql`
     delete from markets m
     where not exists (select 1 from trader_positions p where p.condition_id = m.condition_id)
@@ -233,7 +241,21 @@ export async function cleanupStorage(
     .delete(traderTrades)
     .where(lt(traderTrades.ts, cutoff))
     .returning({ id: traderTrades.id });
-  return { markets: affectedRows(orphanMarkets), trades: oldTrades.length };
+  // Leaderboard history (~6k rows/day) is useful for a while, then just costs space.
+  const oldSnapshots = await db
+    .delete(leaderboardSnapshots)
+    .where(
+      lt(
+        leaderboardSnapshots.capturedAt,
+        new Date(Date.now() - snapshotRetentionDays * 86_400_000),
+      ),
+    )
+    .returning({ id: leaderboardSnapshots.id });
+  return {
+    markets: affectedRows(orphanMarkets),
+    trades: oldTrades.length,
+    snapshots: oldSnapshots.length,
+  };
 }
 
 /** Row count from a raw `execute` result (postgres-js and PGlite report it differently). */

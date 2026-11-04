@@ -109,7 +109,9 @@ async function main() {
         const pruned = values["no-prune"] ? 0 : await prunePositions(db, rejected);
         log(`pruned ${pruned} position rows of ${rejected.length} rejected traders`);
         const cleaned = await cleanupStorage(db);
-        log(`removed ${cleaned.markets} orphan markets and ${cleaned.trades} old trades`);
+        log(
+          `removed ${cleaned.markets} orphan markets, ${cleaned.trades} old trades, ${cleaned.snapshots} old leaderboard rows`,
+        );
         return { discovered: discovered.kept, backfill, score, backtest, pruned, cleaned };
       });
       break;
