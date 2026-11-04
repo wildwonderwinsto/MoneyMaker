@@ -4,11 +4,11 @@ name: Daily trader scoring
 # Runs on GitHub's free runners so the heavy work never touches the free Render instance.
 on:
   schedule:
-    # 10:17 UTC daily (5:17 AM ET / 2:17 AM PT in winter):
+    # 10:00 UTC daily (5:00 AM ET / 2:00 AM PT in winter):
     # - after the 00:00 UTC daily PnL rollover, so yesterday's data is complete
     # - after late US games (~06:00 UTC) clear Polymarket's ~2h resolution window
-    # - low US trading activity; :17 avoids GitHub's busy top-of-hour queue
-    - cron: "17 10 * * *"
+    # - low US trading activity (GitHub may start top-of-hour runs a few minutes late)
+    - cron: "0 10 * * *"
   workflow_dispatch:
     inputs:
       limit:
