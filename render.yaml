@@ -1,0 +1,24 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Free web service hosting the dashboards + the /api/cron/tick copy-engine endpoint.
+# cron-job.org calls the tick every minute, which also keeps the free instance awake
+# (one always-on service uses ~744 of the 750 free hours per month).
+services:
+  - type: web
+    name: moneymaker
+    runtime: node
+    plan: free
+    region: oregon
+    # Migrations run during the build so the schema is ready before the new version starts.
+    buildCommand: npm ci && npm run db:migrate && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DATABASE_URL # Supabase "Session pooler" connection string (port 5432)
+        sync: false
+      - key: ADMIN_PASSWORD # password to unlock dashboard changes
+        sync: false
+      - key: CRON_SECRET # random secret; copy it into the cron-job.org request header
+        generateValue: true
+      - key: NODE_OPTIONS # stay well inside the 512 MB free instance
+        value: --max-old-space-size=384

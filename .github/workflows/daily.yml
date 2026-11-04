@@ -1,0 +1,40 @@
+name: Daily trader scoring
+
+# Discover → backfill → resolve → score → backtest → prune, against the Supabase database.
+# Runs on GitHub's free runners so the heavy work never touches the free Render instance.
+on:
+  schedule:
+    - cron: "17 6 * * *" # 06:17 UTC daily (off the top of the hour, when GitHub is busiest)
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max candidates to backfill"
+        required: false
+        default: "150"
+
+concurrency:
+  group: daily-scoring
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Check secret
+        run: test -n "$DATABASE_URL" || (echo "Add the DATABASE_URL repository secret" && exit 1)
+      - run: npm run db:migrate
+      - name: Run daily pipeline
+        env:
+          LIMIT: ${{ inputs.limit || '150' }} # via env, never inlined into the script
+        run: |
+          [[ "$LIMIT" =~ ^[0-9]+$ ]] || { echo "limit must be a number"; exit 1; }
+          npm run job -- daily --limit "$LIMIT"
