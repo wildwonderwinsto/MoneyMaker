@@ -4,88 +4,27 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
-import { PageHeader, TierBadge } from "@/components/common";
+import { Avatar, PageHeader, TierBadge } from "@/components/common";
 import { AddFollowForm, UnlockForm } from "@/components/forms";
-import {
-  FollowRowControls,
-  LockButton,
-  SettingsForm,
-  type FieldSpec,
-} from "@/components/settings-forms";
+import { FollowRowControls, LockButton } from "@/components/settings-forms";
+import { SettingsEditor } from "@/components/settings/settings-editor";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isAdmin } from "@/lib/admin";
+import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
+import { getDb } from "@/lib/db/client";
 import { env } from "@/lib/env";
 import { timeAgo, traderName } from "@/lib/format";
 import { getFollowList, getJobRuns, getSettings } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Settings" };
 
-const RISK_FIELDS: FieldSpec[] = [
-  {
-    name: "sizingMode",
-    label: "Sizing mode",
-    kind: "select",
-    options: ["proportional", "fixed"],
-    help: "Proportional mirrors the leader's conviction; fixed always uses the same $ amount.",
-  },
-  { name: "fixedUsd", label: "Fixed size ($)", help: "Used in fixed mode." },
-  { name: "proportionalMultiplier", label: "Proportional multiplier", step: 0.1 },
-  {
-    name: "minCopyUsd",
-    label: "Minimum copy size ($)",
-    help: "Floor for meaningful whale trades.",
-  },
-  { name: "minLeaderUsd", label: "Ignore leader trades under ($)" },
-  { name: "maxPositionPct", label: "Max per market (fraction of equity)", step: 0.01 },
-  { name: "maxTraderExposurePct", label: "Max per trader (fraction of equity)", step: 0.01 },
-  {
-    name: "maxDailyLossPct",
-    label: "Daily loss limit (fraction)",
-    step: 0.01,
-    help: "No new positions after this loss today.",
-  },
-  { name: "maxEntryPrice", label: "Max entry price (0–1)", step: 0.01 },
-  { name: "minEntryPrice", label: "Min entry price (0–1)", step: 0.01 },
-  {
-    name: "maxPriceDrift",
-    label: "Max price move vs. leader (0–1)",
-    step: 0.005,
-    help: "0.03 = 3¢",
-  },
-  { name: "minMinutesToEnd", label: "Skip markets ending within (min)" },
-  { name: "maxSignalAgeSeconds", label: "Ignore signals older than (s)" },
-  { name: "takerFeeBps", label: "Taker fee (bps)" },
-  { name: "copySells", label: "Mirror leader sells", kind: "boolean" },
-];
-
-const SCORING_FIELDS: FieldSpec[] = [
-  { name: "minResolved", label: "Min resolved markets" },
-  { name: "minEvents", label: "Min distinct events" },
-  { name: "minZ", label: "Min skill z-score", step: 0.1 },
-  { name: "fdrQ", label: "False discovery rate", step: 0.01 },
-  { name: "minRoiShrunk", label: "Min return (adjusted)", step: 0.01 },
-  { name: "maxTopMarketShare", label: "Max biggest-win share", step: 0.01 },
-  { name: "maxTop3Share", label: "Max top-3 share", step: 0.01 },
-  { name: "minMonths", label: "Min active months" },
-  { name: "minProfitableMonthsPct", label: "Min profitable months", step: 0.05 },
-  { name: "minRecoveryFactor", label: "Min recovery factor", step: 0.1 },
-  { name: "copyDelaySeconds", label: "Copy delay to simulate (s)" },
-  { name: "copySlippage", label: "Copy slippage (0–1)", step: 0.005 },
-  { name: "maxTradesPerDay", label: "Max trades/day (bot filter)" },
-  { name: "minMedianHoldHours", label: "Min median hold (hours)", step: 0.5 },
-  { name: "oosDays", label: "Recent window (days)" },
-  { name: "maxDaysSinceTrade", label: "Must have traded within (days)" },
-  { name: "eliteScore", label: "Elite score threshold" },
-  { name: "simulations", label: "Monte Carlo simulations" },
-];
-
 export default function SettingsPage() {
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Who to copy, how much to risk, and how strict the trader verification is."
+        description="Who to copy, how fast, how much to risk, and how strict trader verification is. Every setting explains what it does."
       />
       <Suspense fallback={<Skeleton className="h-[600px] rounded-xl" />}>
         <SettingsContent />
@@ -96,28 +35,31 @@ export default function SettingsPage() {
 
 async function SettingsContent() {
   await connection();
-  const [admin, settings, followList, runs] = await Promise.all([
+  const db = getDb();
+  const [admin, settings, followList, runs, account] = await Promise.all([
     isAdmin(),
     getSettings(),
     getFollowList(),
     getJobRuns(8),
+    ensureDefaultAccount(db),
   ]);
+  const { equity } = await loadAccountState(db, account.id);
   const passwordSet = Boolean(env().ADMIN_PASSWORD);
 
   return (
-    <div className="space-y-6">
-      <Card>
+    <div className="space-y-4 sm:space-y-6">
+      <Card id="access" className="scroll-mt-24">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             {admin ? <ShieldCheck className="text-yes size-4" /> : <Lock className="size-4" />}
-            {admin ? "Unlocked" : "Locked"}
+            {admin ? "Unlocked" : "View only"}
           </CardTitle>
           <CardDescription>
             {admin
               ? passwordSet
-                ? "You can change settings and follow traders on this device."
+                ? "You can change settings, follow or hide traders, hedge and reset on this device."
                 : "No ADMIN_PASSWORD is set, so changes are open (local development only)."
-              : "Enter the admin password to follow traders or change settings."}
+              : "Visitors can look but not change anything. Enter the admin password to make changes."}
           </CardDescription>
         </CardHeader>
         <CardContent>{admin ? passwordSet && <LockButton /> : <UnlockForm />}</CardContent>
@@ -127,7 +69,9 @@ async function SettingsContent() {
         <CardHeader>
           <CardTitle>Following</CardTitle>
           <CardDescription>
-            Weight scales copy size for that trader (1 = normal). The switch pauses copying.
+            {admin
+              ? "Weight scales the copy size for that trader (1 = normal, 2 = double, 0.5 = half). The switch pauses copying."
+              : "Traders being copied."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -142,42 +86,54 @@ async function SettingsContent() {
           ) : (
             <ul className="divide-y">
               {followList.map(({ follow: f, name, tier }) => (
-                <li key={f.wallet} className="flex flex-wrap items-center gap-3 py-2.5">
-                  <Link href={`/traders/${f.wallet}`} className="font-medium hover:underline">
-                    {traderName({ name, wallet: f.wallet })}
-                  </Link>
-                  {tier && <TierBadge tier={tier} />}
-                  <span className="text-muted-foreground text-xs">
-                    since {timeAgo(f.createdAt)}
-                  </span>
-                  <div className="ml-auto">
-                    <FollowRowControls wallet={f.wallet} enabled={f.enabled} weight={f.weight} />
+                <li key={f.wallet} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+                  <Avatar wallet={f.wallet} size={28} />
+                  <div className="min-w-0 flex-1">
+                    <Link href={`/traders/${f.wallet}`} className="font-medium hover:underline">
+                      {traderName({ name, wallet: f.wallet })}
+                    </Link>
+                    <p className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
+                      {tier && <TierBadge tier={tier} />}
+                      since {timeAgo(f.createdAt)}
+                    </p>
                   </div>
+                  {admin ? (
+                    <FollowRowControls wallet={f.wallet} enabled={f.enabled} weight={f.weight} />
+                  ) : (
+                    <span className="text-muted-foreground text-sm tabular-nums">
+                      {f.enabled ? "Copying" : "Paused"} · {f.weight}×
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
           )}
-          <AddFollowForm />
+          {admin && <AddFollowForm />}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Risk & sizing</CardTitle>
-          <CardDescription>Applied by the copy engine on its next tick.</CardDescription>
+          <CardTitle>Copy engine: speed, sizing &amp; risk</CardTitle>
+          <CardDescription>
+            Saved changes apply from the engine&apos;s very next trade. Examples use your current
+            paper equity.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <SettingsForm kind="risk" fields={RISK_FIELDS} values={settings.risk} />
+        <CardContent className="px-3 sm:px-6">
+          <SettingsEditor kind="risk" values={settings.risk} admin={admin} ctx={{ equity }} />
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>Trader verification rules</CardTitle>
-          <CardDescription>Applied at the next daily scoring run.</CardDescription>
+          <CardDescription>
+            What a trader must pass to be Verified. Applied at the next daily scoring run.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <SettingsForm kind="scoring" fields={SCORING_FIELDS} values={settings.scoring} />
+        <CardContent className="px-3 sm:px-6">
+          <SettingsEditor kind="scoring" values={settings.scoring} admin={admin} ctx={{ equity }} />
         </CardContent>
       </Card>
 
@@ -196,19 +152,21 @@ async function SettingsContent() {
                   <span
                     className={
                       r.status === "ok"
-                        ? "text-yes w-16 font-medium"
+                        ? "text-yes w-14 shrink-0 font-medium"
                         : r.status === "error"
-                          ? "text-no w-16 font-medium"
-                          : "text-muted-foreground w-16"
+                          ? "text-no w-14 shrink-0 font-medium"
+                          : "text-muted-foreground w-14 shrink-0"
                     }
                   >
                     {r.status}
                   </span>
-                  <span className="w-24 font-medium">{r.job}</span>
-                  <span className="text-muted-foreground flex-1 truncate">
+                  <span className="w-20 shrink-0 font-medium">{r.job}</span>
+                  <span className="text-muted-foreground min-w-0 flex-1 truncate">
                     {r.error ? r.error.split("\n")[0] : ""}
                   </span>
-                  <span className="text-muted-foreground text-xs">{timeAgo(r.startedAt)}</span>
+                  <span className="text-muted-foreground shrink-0 text-xs">
+                    {timeAgo(r.startedAt)}
+                  </span>
                 </li>
               ))}
             </ul>

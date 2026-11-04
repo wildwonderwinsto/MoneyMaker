@@ -35,15 +35,31 @@ last month's top earners.
 
 ## How copying works (paper)
 
-Every minute, `/api/cron/tick`:
+Copying fast comes first. The server runs the engine itself (`src/instrumentation.ts`):
 
-1. fetches new trades from each trader you follow
-2. checks the risk rules (price moved too much? market ending? daily loss limit? position caps?)
-3. simulates the fill against the **live order book** (real slippage), sized proportionally
-   to the leader's conviction
-4. mirrors partial sells, settles resolved markets at $1 or $0, and snapshots equity
+1. **Real-time feed:** Polymarket's live trade stream delivers a followed trader's trade
+   ~25 ms after it happens (the Data API takes ~15 s), so copies land within seconds.
+2. **Checks every 15, 30 or 60 s** (Settings → Speed) poll every trader as a safety net,
+   re-check trades skipped because the price ran away, settle resolved markets at $1 or $0,
+   mark prices, auto-hedge (if on) and snapshot equity.
+3. Each trade passes the risk rules (price moved too much? market ending? daily loss limit?
+   caps?), then fills against the **live order book** (real slippage). Pieces of one order
+   are combined first, so sizing and the "too small" filter see the whole order.
+4. Sells are mirrored proportionally (and any hedge is sold with them).
 
-Every decision, including skips, is logged with a plain-English reason on the **Live** page.
+`/api/cron/tick` (cron-job.org, every minute) keeps the free instance awake and runs a tick
+itself if the loop ever stalls. Set `ENGINE_LOOP=off` to rely on cron alone.
+
+Every decision, including skips, is logged on the **Live** page. Hover or tap a reason for
+the full explanation with the exact prices and limits involved.
+
+**Hedging ("cancel out"):** any open copy can be hedged from its position page by buying
+the other outcome: _lock in_ (the loss stops growing) or _break even if it flips_. Auto-hedge
+can do this when a copy is down a set amount, within a cost cap.
+
+**Access:** visitors can view everything but change nothing. The admin password unlocks
+following, hiding ("No"), hedging, settings and resets; every server action re-checks it,
+and wrong passwords are rate-limited.
 
 ## Architecture (all free)
 

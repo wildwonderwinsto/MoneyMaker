@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { delayedEntryPrice, toPositionRecord } from "@/lib/jobs/score";
+import { delayedEntryPrice, leaderExits, toPositionRecord } from "@/lib/jobs/score";
 import { asOf, copiedBetReturn, runBacktest } from "@/lib/scoring/backtest";
 import { DEFAULT_SCORING_CONFIG as cfg } from "@/lib/scoring/config";
-import { copyAdjustedRoi } from "@/lib/scoring/metrics";
+import { computeMetrics, copyAdjustedRoi } from "@/lib/scoring/metrics";
 
 import { coinFlipper, NOW, oneHitWonder, steadyGrinder } from "./fixtures/traders";
 
@@ -127,5 +127,56 @@ describe("toPositionRecord", () => {
     expect(p.closed).toBe(false);
     expect(p.realizedPnl).toBe(-10);
     expect(p.unrealizedPnl).toBe(-560);
+  });
+});
+
+describe("leaderExits", () => {
+  const row = (
+    id: string,
+    t: number,
+    side: string,
+    size: number,
+    price: number,
+    tokenId = "y",
+  ) => ({
+    id,
+    ts: new Date(t * 1000),
+    tokenId,
+    side,
+    size,
+    price,
+  });
+
+  it("assigns later sells to earlier buys first (FIFO) with their average price", () => {
+    const exits = leaderExits([
+      row("b1", 1, "BUY", 100, 0.4),
+      row("b2", 2, "BUY", 100, 0.5),
+      row("s1", 3, "SELL", 150, 0.7),
+      row("other", 4, "SELL", 50, 0.9, "n"),
+    ]);
+    expect(exits.get("b1")).toEqual({ soldFraction: 1, avgPrice: 0.7 });
+    expect(exits.get("b2")?.soldFraction).toBeCloseTo(0.5);
+    expect(exits.has("s1")).toBe(false);
+  });
+
+  it("leaves buys that were held untouched", () => {
+    expect(leaderExits([row("b1", 1, "BUY", 10, 0.4)]).size).toBe(0);
+  });
+});
+
+describe("copy-adjusted ROI sample size", () => {
+  it("is not measured from too few replays", () => {
+    const replays = Array.from({ length: 5 }, () => ({ delayedPrice: 0.5, exitValue: 1 }));
+    const input = {
+      wallet: "0x1",
+      positions: [],
+      pnlSeries: [],
+      activity: { tradeCount: null, joinDate: null },
+      copyReplays: replays,
+      now: 1_800_000_000,
+    };
+    expect(computeMetrics(input, cfg).copyAdjRoi).toBeNull();
+    const many = { ...input, copyReplays: Array.from({ length: 30 }, () => replays[0]) };
+    expect(computeMetrics(many, cfg).copyAdjRoi).toBeCloseTo(1);
   });
 });

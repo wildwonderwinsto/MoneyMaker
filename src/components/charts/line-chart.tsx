@@ -156,37 +156,81 @@ export function LineChart({
           </RLineChart>
         </ResponsiveContainer>
       </div>
-      <details className="mt-2 text-xs">
-        <summary className="text-muted-foreground hover:text-foreground cursor-pointer">
-          Show data table
-        </summary>
-        <div className="mt-2 max-h-56 overflow-auto rounded-md border">
-          <table className="w-full text-left tabular-nums">
-            <thead className="bg-muted/50 sticky top-0">
-              <tr>
-                <th className="px-2 py-1 font-medium">Date</th>
-                {series.map((s) => (
-                  <th key={s.key} className="px-2 py-1 font-medium">
-                    {s.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((row, i) => (
+      <DataTable data={data} series={series} format={format} />
+    </figure>
+  );
+}
+
+/** Newest first, with the change since the previous row so trends read at a glance. */
+function DataTable({
+  data,
+  series,
+  format,
+}: {
+  data: Array<Record<string, string | number>>;
+  series: Series[];
+  format: ValueFormat;
+}) {
+  if (data.length === 0) return null;
+  const rows = data.map((row, i) => ({ row, prev: i > 0 ? data[i - 1] : null })).reverse();
+  return (
+    <details className="mt-3 text-xs">
+      <summary className="text-muted-foreground hover:text-foreground cursor-pointer">
+        Show data table ({data.length} rows)
+      </summary>
+      <p className="text-muted-foreground mt-2">
+        Newest first. “Change” is the difference from the row below it.
+      </p>
+      <div className="mt-2 max-h-72 overflow-auto rounded-md border">
+        <table className="w-full text-left tabular-nums">
+          <thead className="bg-muted/80 sticky top-0 backdrop-blur">
+            <tr>
+              <th className="px-2.5 py-1.5 font-medium">Date</th>
+              {series.map((s) => (
+                <th key={s.key} className="px-2.5 py-1.5 text-right font-medium">
+                  {s.label}
+                </th>
+              ))}
+              {series.length === 1 && (
+                <th className="px-2.5 py-1.5 text-right font-medium">Change</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ row, prev }, i) => {
+              const key = series[0]?.key;
+              const change = key && prev ? Number(row[key]) - Number(prev[key]) : null;
+              return (
                 <tr key={i} className="border-t">
-                  <td className="px-2 py-1">{fmtX(String(row.t))}</td>
+                  <td className="px-2.5 py-1.5 whitespace-nowrap">{fmtX(String(row.t))}</td>
                   {series.map((s) => (
-                    <td key={s.key} className="px-2 py-1">
+                    <td key={s.key} className="px-2.5 py-1.5 text-right">
                       {fmt(Number(row[s.key]), format)}
                     </td>
                   ))}
+                  {series.length === 1 && (
+                    <td
+                      className={
+                        change === null || Math.abs(change) < 1e-9
+                          ? "text-muted-foreground px-2.5 py-1.5 text-right"
+                          : change > 0
+                            ? "text-gain px-2.5 py-1.5 text-right"
+                            : "text-loss px-2.5 py-1.5 text-right"
+                      }
+                    >
+                      {change === null
+                        ? "—"
+                        : format === "usd"
+                          ? usd(change, { sign: true, compact: true })
+                          : pct(change, 1, { sign: true })}
+                    </td>
+                  )}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
-    </figure>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }

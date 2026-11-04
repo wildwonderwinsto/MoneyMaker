@@ -1,15 +1,18 @@
 import "server-only";
 
-import { and, asc, desc, eq, gt, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 
 import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
+import { readEngineStatus } from "@/lib/copy/status";
 import { getDb } from "@/lib/db/client";
 import {
   appSettings,
   backtestRuns,
   equitySnapshots,
   follows,
+  hiddenTraders,
   jobRuns,
+  markets,
   paperFills,
   paperPositions,
   signals,
@@ -21,7 +24,7 @@ import {
 } from "@/lib/db/schema";
 import { getRiskConfig, getScoringConfig } from "@/lib/settings";
 
-export type TierFilter = ScoreTier | "all" | "followed";
+export type TierFilter = ScoreTier | "all" | "followed" | "hidden";
 
 const TIER_ORDER = sql`case ${traderScores.tier} when 'elite' then 0 when 'verified' then 1 when 'watchlist' then 2 else 3 end`;
 
@@ -35,7 +38,11 @@ export async function getTraderList(opts: {
   const conditions = [];
   if (tier === "verified") conditions.push(inArray(traderScores.tier, ["elite", "verified"]));
   else if (tier === "followed") conditions.push(eq(follows.enabled, true));
-  else if (tier !== "all") conditions.push(eq(traderScores.tier, tier));
+  else if (tier !== "all" && tier !== "hidden") conditions.push(eq(traderScores.tier, tier));
+  // Traders the admin said "no" to only show up under the Hidden filter.
+  conditions.push(
+    tier === "hidden" ? isNotNull(hiddenTraders.wallet) : isNull(hiddenTraders.wallet),
+  );
   if (opts.category) conditions.push(eq(traderScores.primaryCategory, opts.category));
 
   return db
@@ -60,10 +67,12 @@ export async function getTraderList(opts: {
       profileImage: traders.profileImage,
       xUsername: traders.xUsername,
       following: follows.enabled,
+      hidden: sql<boolean>`${hiddenTraders.wallet} is not null`,
     })
     .from(traderScores)
     .innerJoin(traders, eq(traders.wallet, traderScores.wallet))
     .leftJoin(follows, eq(follows.wallet, traderScores.wallet))
+    .leftJoin(hiddenTraders, eq(hiddenTraders.wallet, traderScores.wallet))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(TIER_ORDER, desc(traderScores.score))
     .limit(opts.limit ?? 120);
@@ -71,20 +80,30 @@ export async function getTraderList(opts: {
 export type TraderListItem = Awaited<ReturnType<typeof getTraderList>>[number];
 
 export async function getTierCounts() {
-  const rows = await getDb()
-    .select({ tier: traderScores.tier, n: sql<number>`count(*)::int` })
-    .from(traderScores)
-    .groupBy(traderScores.tier);
-  return Object.fromEntries(rows.map((r) => [r.tier, r.n])) as Partial<Record<ScoreTier, number>>;
+  const db = getDb();
+  const [rows, [hidden]] = await Promise.all([
+    db
+      .select({ tier: traderScores.tier, n: sql<number>`count(*)::int` })
+      .from(traderScores)
+      .leftJoin(hiddenTraders, eq(hiddenTraders.wallet, traderScores.wallet))
+      .where(isNull(hiddenTraders.wallet))
+      .groupBy(traderScores.tier),
+    db.select({ n: sql<number>`count(*)::int` }).from(hiddenTraders),
+  ]);
+  return {
+    tiers: Object.fromEntries(rows.map((r) => [r.tier, r.n])) as Partial<Record<ScoreTier, number>>,
+    hidden: hidden?.n ?? 0,
+  };
 }
 
 export async function getTrader(wallet: string) {
   const db = getDb();
   const [row] = await db
-    .select({ trader: traders, score: traderScores, follow: follows })
+    .select({ trader: traders, score: traderScores, follow: follows, hidden: hiddenTraders })
     .from(traders)
     .leftJoin(traderScores, eq(traderScores.wallet, traders.wallet))
     .leftJoin(follows, eq(follows.wallet, traders.wallet))
+    .leftJoin(hiddenTraders, eq(hiddenTraders.wallet, traders.wallet))
     .where(eq(traders.wallet, wallet));
   if (!row) return null;
 
@@ -105,14 +124,76 @@ export async function getTrader(wallet: string) {
   return { ...row, positions, pnl };
 }
 
-export async function getSignals(limit = 80) {
-  return getDb()
-    .select({ signal: signals, name: traders.name })
+/** What became of a signal: the P&L it locked in, or how its copied position is doing. */
+export interface SignalOutcome {
+  /** Realized P&L of the sell fills made for this signal (includes a closed hedge). */
+  realized: number | null;
+  /** The position a copied buy went into. */
+  position: {
+    id: number;
+    status: string;
+    realizedPnl: number;
+    unrealized: number;
+  } | null;
+}
+
+export async function getSignals(limit = 150) {
+  const db = getDb();
+  const rows = await db
+    .select({ signal: signals, name: traders.name, profileImage: traders.profileImage })
     .from(signals)
     .leftJoin(traders, eq(traders.wallet, signals.wallet))
-    .orderBy(desc(signals.detectedAt))
+    .orderBy(desc(signals.detectedAt), desc(signals.leaderTs))
     .limit(limit);
+  const acted = [
+    ...new Set(
+      rows
+        .filter((r) => r.signal.decision !== "skipped")
+        .map((r) => r.signal.groupId ?? r.signal.id),
+    ),
+  ];
+  const fills = acted.length
+    ? await db
+        .select({
+          signalId: paperFills.signalId,
+          side: paperFills.side,
+          realizedPnl: paperFills.realizedPnl,
+          positionId: paperFills.positionId,
+        })
+        .from(paperFills)
+        .where(inArray(paperFills.signalId, acted))
+    : [];
+  const positionIds = [
+    ...new Set(fills.map((f) => f.positionId).filter((x): x is number => x !== null)),
+  ];
+  const positions = positionIds.length
+    ? await db.select().from(paperPositions).where(inArray(paperPositions.id, positionIds))
+    : [];
+  const posById = new Map(positions.map((p) => [p.id, p]));
+
+  const outcomes = new Map<string, SignalOutcome>();
+  for (const f of fills) {
+    if (!f.signalId) continue;
+    const o = outcomes.get(f.signalId) ?? { realized: null, position: null };
+    if (f.side === "SELL" && f.realizedPnl !== null) o.realized = (o.realized ?? 0) + f.realizedPnl;
+    const p = f.positionId !== null ? posById.get(f.positionId) : undefined;
+    if (p && p.kind === "copy") {
+      o.position = {
+        id: p.id,
+        status: p.status,
+        realizedPnl: p.realizedPnl,
+        unrealized:
+          p.status === "open" ? p.shares * (p.currentPrice ?? p.avgPrice) - p.costBasis : 0,
+      };
+    }
+    outcomes.set(f.signalId, o);
+  }
+  return rows.map((r) => ({
+    ...r,
+    outcome: outcomes.get(r.signal.groupId ?? r.signal.id) ?? null,
+  }));
 }
+export type SignalRow = Awaited<ReturnType<typeof getSignals>>[number];
 
 export async function getFollowList() {
   return getDb()
@@ -134,7 +215,7 @@ export async function getPaperOverview() {
   const state = await loadAccountState(db, account.id);
   const since = new Date(Date.now() - 90 * 86_400_000);
 
-  const [closed, fills, equity, byTrader] = await Promise.all([
+  const [closed, fills, equity, byTrader, allPositions, markers] = await Promise.all([
     db
       .select()
       .from(paperPositions)
@@ -166,6 +247,48 @@ export async function getPaperOverview() {
       .leftJoin(traders, eq(traders.wallet, paperPositions.sourceWallet))
       .where(eq(paperPositions.accountId, account.id))
       .groupBy(paperPositions.sourceWallet, traders.name),
+    db
+      .select({
+        id: paperPositions.id,
+        sourceWallet: paperPositions.sourceWallet,
+        title: paperPositions.title,
+        outcome: paperPositions.outcome,
+        image: paperPositions.image,
+        status: paperPositions.status,
+        kind: paperPositions.kind,
+        shares: paperPositions.shares,
+        costBasis: paperPositions.costBasis,
+        avgPrice: paperPositions.avgPrice,
+        currentPrice: paperPositions.currentPrice,
+        realizedPnl: paperPositions.realizedPnl,
+        openedAt: paperPositions.openedAt,
+        closedAt: paperPositions.closedAt,
+        invested: sql<number>`coalesce((select sum(f.notional) from paper_fills f where f.position_id = ${paperPositions.id} and f.side = 'BUY'), 0)::float8`,
+      })
+      .from(paperPositions)
+      .where(eq(paperPositions.accountId, account.id))
+      .orderBy(desc(paperPositions.openedAt))
+      .limit(1000),
+    // Buys, sells and settlements to mark on the equity chart.
+    db
+      .select({
+        id: paperFills.id,
+        ts: paperFills.ts,
+        side: paperFills.side,
+        kind: paperFills.kind,
+        notional: paperFills.notional,
+        shares: paperFills.shares,
+        avgPrice: paperFills.avgPrice,
+        realizedPnl: paperFills.realizedPnl,
+        positionId: paperFills.positionId,
+        title: paperPositions.title,
+        outcome: paperPositions.outcome,
+      })
+      .from(paperFills)
+      .leftJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
+      .where(and(eq(paperFills.accountId, account.id), gte(paperFills.ts, since)))
+      .orderBy(asc(paperFills.ts))
+      .limit(2000),
   ]);
 
   const finished = closed.filter((p) => p.status === "settled" || p.status === "closed");
@@ -182,9 +305,110 @@ export async function getPaperOverview() {
     equityCurve: equity.map((e) => ({ t: e.ts.toISOString(), equity: e.equity })),
     winRate: finished.length ? wins / finished.length : null,
     finishedCount: finished.length,
-    byTrader,
+    byTrader: summarizeByTrader(byTrader, allPositions),
+    markers,
   };
 }
+export type PaperOverview = Awaited<ReturnType<typeof getPaperOverview>>;
+
+interface PositionSummary {
+  id: number;
+  sourceWallet: string;
+  status: string;
+  kind: string;
+  shares: number;
+  costBasis: number;
+  avgPrice: number;
+  currentPrice: number | null;
+  realizedPnl: number;
+  invested: number;
+}
+
+/** Per leader: how much money they made us, on how much capital, and their positions. */
+function summarizeByTrader<
+  T extends { wallet: string; name: string | null },
+  P extends PositionSummary,
+>(rows: T[], positions: P[]) {
+  const pnlOf = (p: P) =>
+    p.realizedPnl +
+    (p.status === "open" ? p.shares * (p.currentPrice ?? p.avgPrice) - p.costBasis : 0);
+  return rows
+    .map((t) => {
+      const mine = positions.filter((p) => p.sourceWallet === t.wallet);
+      const realized = mine.reduce((a, p) => a + p.realizedPnl, 0);
+      const total = mine.reduce((a, p) => a + pnlOf(p), 0);
+      const invested = mine.reduce((a, p) => a + p.invested, 0);
+      const finished = mine.filter((p) => p.status !== "open" && p.kind === "copy");
+      const wins = finished.filter((p) => p.realizedPnl > 0).length;
+      return {
+        wallet: t.wallet,
+        name: t.name,
+        realized,
+        unrealized: total - realized,
+        total,
+        invested,
+        roi: invested > 0 ? total / invested : null,
+        open: mine.filter((p) => p.status === "open").length,
+        wins,
+        losses: finished.length - wins,
+        positions: mine.map((p) => ({ ...p, pnl: pnlOf(p) })),
+      };
+    })
+    .sort((a, b) => b.total - a.total);
+}
+
+/** One paper position with everything behind it: fills, the leader's trades, its hedge. */
+export async function getPosition(id: number) {
+  const db = getDb();
+  const account = await ensureDefaultAccount(db);
+  const [position] = await db
+    .select()
+    .from(paperPositions)
+    .where(and(eq(paperPositions.id, id), eq(paperPositions.accountId, account.id)));
+  if (!position) return null;
+  const [fills, leader, market, related, leaderTrades] = await Promise.all([
+    db.select().from(paperFills).where(eq(paperFills.positionId, id)).orderBy(asc(paperFills.ts)),
+    db
+      .select({ name: traders.name, profileImage: traders.profileImage })
+      .from(traders)
+      .where(eq(traders.wallet, position.sourceWallet)),
+    db.select().from(markets).where(eq(markets.conditionId, position.conditionId)),
+    db
+      .select()
+      .from(paperPositions)
+      .where(
+        or(
+          eq(paperPositions.hedgeOf, position.id),
+          position.hedgeOf ? eq(paperPositions.id, position.hedgeOf) : sql`false`,
+        ),
+      ),
+    db
+      .select()
+      .from(signals)
+      .where(
+        and(
+          eq(signals.wallet, position.sourceWallet),
+          eq(signals.tokenId, position.tokenId),
+          gte(signals.leaderTs, new Date(position.openedAt.getTime() - 3_600_000)),
+        ),
+      )
+      .orderBy(asc(signals.leaderTs))
+      .limit(200),
+  ]);
+  return {
+    position,
+    fills,
+    leader: leader[0] ?? null,
+    market: market[0] ?? null,
+    hedge:
+      related.find((p) => p.hedgeOf === position.id && p.status === "open") ??
+      related.find((p) => p.hedgeOf === position.id) ??
+      null,
+    hedgedPosition: related.find((p) => p.id === position.hedgeOf) ?? null,
+    leaderTrades,
+  };
+}
+export type PositionDetail = NonNullable<Awaited<ReturnType<typeof getPosition>>>;
 
 export async function getBacktests(limit = 10) {
   return getDb().select().from(backtestRuns).orderBy(desc(backtestRuns.createdAt)).limit(limit);
@@ -203,7 +427,7 @@ export async function getSettings() {
 /** Last copy-engine tick (the tick lease row is touched on every run) and follow count. */
 export async function getEngineStatus() {
   const db = getDb();
-  const [[lease], [following]] = await Promise.all([
+  const [[lease], [following], status, risk] = await Promise.all([
     db
       .select({ at: appSettings.updatedAt })
       .from(appSettings)
@@ -212,12 +436,28 @@ export async function getEngineStatus() {
       .select({ n: sql<number>`count(*)::int` })
       .from(follows)
       .where(eq(follows.enabled, true)),
+    readEngineStatus(db),
+    getRiskConfig(db),
   ]);
   const lastTickAt = lease?.at ?? null;
+  const interval = status.intervalSeconds ?? risk.tickIntervalSeconds;
+  const loopAlive =
+    !!status.loopAliveAt &&
+    Date.now() - Date.parse(status.loopAliveAt) < (interval * 3 + 30) * 1000;
   return {
     lastTickAt,
-    // Healthy if a tick ran in the last 5 minutes (cron fires every minute).
-    healthy: lastTickAt !== null && Date.now() - lastTickAt.getTime() < 5 * 60_000,
+    // Healthy if the engine ran recently (loop: a few intervals; cron alone: 5 minutes).
+    healthy:
+      lastTickAt !== null &&
+      Date.now() - lastTickAt.getTime() < Math.max(5 * 60_000, interval * 3_000),
     following: following?.n ?? 0,
+    loop: loopAlive,
+    intervalSeconds: interval,
+    nextTickAt: loopAlive ? (status.nextTickAt ?? null) : null,
+    lastTickMs: status.lastTickMs ?? null,
+    realtime: risk.realtime,
+    stream: loopAlive ? (status.stream ?? null) : null,
+    lastStreamBatchAt: status.lastStreamBatchAt ?? null,
   };
 }
+export type EngineStatusView = Awaited<ReturnType<typeof getEngineStatus>>;

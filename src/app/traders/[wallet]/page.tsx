@@ -9,6 +9,8 @@ import { LineChart } from "@/components/charts/line-chart";
 import { PnlBars } from "@/components/charts/pnl-bars";
 import { Avatar, Signed, StatTile, TierBadge } from "@/components/common";
 import { FollowButton } from "@/components/follow-button";
+import { HideButton } from "@/components/hide-button";
+import { isAdmin } from "@/lib/admin";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -65,13 +67,14 @@ export default function TraderPage({ params }: PageProps<"/traders/[wallet]">) {
 async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">["params"] }) {
   await connection();
   const { wallet } = await params;
-  const data = await getTrader(wallet.toLowerCase());
+  const [data, admin] = await Promise.all([getTrader(wallet.toLowerCase()), isAdmin()]);
   if (!data) notFound();
-  const { trader, score, follow, positions, pnl } = data;
+  const { trader, score, follow, positions, pnl, hidden } = data;
   const metrics = (score?.metrics ?? {}) as {
     monthlyPnl?: Array<{ month: string; pnl: number }>;
     resolvedWinRate?: number | null;
     recoveryFactor?: number | null;
+    nCopyReplays?: number;
   };
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
@@ -108,7 +111,20 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
             <p className="text-muted-foreground text-xs">score / 100</p>
           </div>
         )}
-        <FollowButton wallet={trader.wallet} following={!!follow?.enabled} size="default" />
+        {admin ? (
+          <div className="flex items-center gap-1">
+            <HideButton wallet={trader.wallet} hidden={!!hidden} size="default" />
+            {!hidden && (
+              <FollowButton wallet={trader.wallet} following={!!follow?.enabled} size="default" />
+            )}
+          </div>
+        ) : (
+          follow?.enabled && (
+            <span className="bg-yes/10 text-yes rounded-full px-3 py-1.5 text-sm font-semibold">
+              Following
+            </span>
+          )
+        )}
       </div>
 
       {!score ? (
@@ -136,7 +152,11 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               label="If copied 2 min late"
               value={pct(score.copyAdjRoi, 1, { sign: true })}
               tone={score.copyAdjRoi === null ? undefined : score.copyAdjRoi >= 0 ? "gain" : "loss"}
-              hint="Delayed entry + spread"
+              hint={
+                typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0
+                  ? `Replayed ${metrics.nCopyReplays} of their trades`
+                  : "Delayed entry + spread"
+              }
             />
             <StatTile
               label="Profitable months"
@@ -217,7 +237,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
                   Position history is only kept for shortlisted traders.
                 </p>
               ) : (
-                <Table>
+                <Table className="min-w-[640px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Market</TableHead>

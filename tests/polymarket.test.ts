@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { normalizeBook, priceAtOrAfter } from "@/lib/polymarket/clob";
-import { tradeId } from "@/lib/polymarket/data";
+import { legacyTradeId, tradeId, tradeIds } from "@/lib/polymarket/data";
 import { categoryFromTags, GammaMarket, winnerIndex } from "@/lib/polymarket/gamma";
 
 describe("normalizeBook", () => {
@@ -71,7 +71,26 @@ describe("gamma parsing", () => {
 });
 
 describe("tradeId", () => {
-  it("is stable for the same trade", () => {
-    expect(tradeId({ transaction_hash: "0xh", token_id: "9", side: "BUY" })).toBe("0xh:9:BUY");
+  it("is stable for the same trade and tells same-transaction fills apart", () => {
+    const a = { transaction_hash: "0xAB", token_id: "9", side: "BUY", size: 45.7 };
+    expect(tradeId(a)).toBe("0xab:9:BUY:45.7");
+    expect(tradeId({ ...a, size: 666 })).not.toBe(tradeId(a));
+  });
+
+  it("keeps identical fills in one batch with an occurrence suffix", () => {
+    const a = { transaction_hash: "0xh", token_id: "9", side: "BUY", size: 5 };
+    const b = { ...a, size: 7 };
+    expect(tradeIds([a, b, a, a])).toEqual([
+      "0xh:9:BUY:5",
+      "0xh:9:BUY:7",
+      "0xh:9:BUY:5#2",
+      "0xh:9:BUY:5#3",
+    ]);
+  });
+
+  it("still recognizes ids written before fills were told apart", () => {
+    expect(legacyTradeId({ transaction_hash: "0xh", token_id: "9", side: "BUY" })).toBe(
+      "0xh:9:BUY",
+    );
   });
 });

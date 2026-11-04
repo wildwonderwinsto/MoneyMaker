@@ -60,19 +60,24 @@ const CHUNK = 50;
 
 /** Fetch markets (open and closed) for a list of condition ids. */
 export async function getMarketsByConditionIds(conditionIds: string[]): Promise<GammaMarket[]> {
-  const unique = [...new Set(conditionIds)];
+  // An empty id makes Gamma reject the whole request (HTTP 422).
+  const unique = [...new Set(conditionIds.filter(Boolean))];
   const out: GammaMarket[] = [];
   for (let i = 0; i < unique.length; i += CHUNK) {
     const ids = unique.slice(i, i + CHUNK);
-    for (const closed of [false, true]) {
-      const url = buildUrl(GAMMA_API, "/markets/keyset", {
-        condition_ids: ids,
-        closed,
-        limit: 100,
-      });
-      const res = await fetchJson(url, { schema: KeysetResponse, limiter: gammaLimiter });
-      out.push(...res.markets);
-    }
+    // Open and closed markets need separate requests; run them together (copy speed).
+    const pages = await Promise.all(
+      [false, true].map((closed) =>
+        fetchJson(
+          buildUrl(GAMMA_API, "/markets/keyset", { condition_ids: ids, closed, limit: 100 }),
+          {
+            schema: KeysetResponse,
+            limiter: gammaLimiter,
+          },
+        ),
+      ),
+    );
+    for (const res of pages) out.push(...res.markets);
   }
   return out;
 }

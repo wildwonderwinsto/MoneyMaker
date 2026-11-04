@@ -220,9 +220,38 @@ export function getActivity(params: {
   );
 }
 
-/** Stable id for a trade row, shared by trader_trades and signals. */
-export function tradeId(a: Pick<Activity, "transaction_hash" | "token_id" | "side">): string {
+type TradeKey = Pick<Activity, "transaction_hash" | "token_id" | "side" | "size">;
+
+/**
+ * Stable id for a trade row, shared by trader_trades, signals and the real-time stream.
+ *
+ * One order can fill against several counterparties in the SAME transaction, and the
+ * Data API (and the stream) then returns one row per fill with an identical
+ * (transaction, token, side). The fill size tells them apart, so it is part of the id.
+ * Verified against the live API (Nov 2026): stream and API sizes match exactly.
+ */
+export function tradeId(a: TradeKey): string {
+  const tx = (a.transaction_hash ?? "nohash").toLowerCase();
+  return `${tx}:${a.token_id ?? "notoken"}:${a.side ?? "?"}:${a.size}`;
+}
+
+/** The id format used before fills were told apart (kept to recognize old signals). */
+export function legacyTradeId(a: Pick<Activity, "transaction_hash" | "token_id" | "side">) {
   return `${a.transaction_hash ?? "nohash"}:${a.token_id ?? "notoken"}:${a.side ?? "?"}`;
+}
+
+/**
+ * Ids for a batch of rows. Two fills with the same transaction, token, side AND size are
+ * indistinguishable, so repeats get an occurrence suffix (#2, #3, …) to keep both.
+ */
+export function tradeIds(rows: TradeKey[]): string[] {
+  const counts = new Map<string, number>();
+  return rows.map((r) => {
+    const base = tradeId(r);
+    const n = (counts.get(base) ?? 0) + 1;
+    counts.set(base, n);
+    return n === 1 ? base : `${base}#${n}`;
+  });
 }
 
 // ---------------------------------------------------------------------------

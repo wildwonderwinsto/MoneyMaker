@@ -1,7 +1,10 @@
 /**
  * Copy decisions (pure). Given a leader's trade and our account/market state, decide
  * whether to copy it, how much, and at what simulated fill — or explain why not.
+ * Every decision carries a machine-readable code plus the numbers behind it, so the UI
+ * can explain it in plain English (see lib/explain.ts).
  */
+import type { ReasonCode } from "@/lib/db/schema";
 import type { OrderBook } from "@/lib/polymarket/clob";
 
 import type { RiskConfig } from "./config";
@@ -9,6 +12,7 @@ import { simulateBuy, simulateSell, type Fill } from "./fillSim";
 import { sizeBuy } from "./sizing";
 
 export interface LeaderTrade {
+  /** Id of the (first) fill; see polymarket/data.ts tradeId. */
   id: string;
   wallet: string;
   /** Epoch seconds. */
@@ -16,18 +20,23 @@ export interface LeaderTrade {
   conditionId: string;
   tokenId: string;
   side: "BUY" | "SELL";
+  /** Volume-weighted price across `ids`. */
   price: number;
   size: number;
   usdc: number;
   outcome: string | null;
   title: string | null;
   slug: string | null;
+  icon?: string | null;
+  /** Every fill id merged into this trade (one leader order often fills in pieces). */
+  ids?: string[];
 }
 
 export interface MarketInfo {
   conditionId: string;
   question: string;
   slug: string | null;
+  eventSlug?: string | null;
   image: string | null;
   endDate: Date | null;
   closed: boolean;
@@ -36,10 +45,12 @@ export interface MarketInfo {
   winnerIndex: number | null;
 }
 
+export type Details = Record<string, number | string | boolean | null>;
+
 export type Decision =
-  | { action: "buy"; fill: Fill; usd: number; limitPrice: number }
-  | { action: "sell"; fill: Fill; fraction: number }
-  | { action: "skip"; reason: string };
+  | { action: "buy"; fill: Fill; usd: number; limitPrice: number; details: Details }
+  | { action: "sell"; fill: Fill; fraction: number; details: Details }
+  | { action: "skip"; reason: string; code: ReasonCode; details?: Details };
 
 export interface BuyContext {
   now: number;
@@ -57,33 +68,78 @@ export interface BuyContext {
   cfg: RiskConfig;
 }
 
-const cents = (x: number) => `${(x * 100).toFixed(1)}¢`;
-const skip = (reason: string): Decision => ({ action: "skip", reason });
+export const cents = (x: number) => `${(x * 100).toFixed(1)}¢`;
+export const skip = (reason: string, code: ReasonCode, details?: Details): Decision => ({
+  action: "skip",
+  reason,
+  code,
+  details,
+});
+
+/** Codes worth re-checking later: the market may come back within our limits. */
+export const RETRYABLE_CODES: ReadonlySet<ReasonCode> = new Set([
+  "price_moved",
+  "no_sellers",
+  "no_liquidity",
+]);
 
 export function decideBuy(ctx: BuyContext): Decision {
   const { trade, market, book, cfg, now } = ctx;
   const age = now - trade.ts;
-  if (age > cfg.maxSignalAgeSeconds) return skip(`Signal is ${Math.round(age / 60)} min old`);
-  if (!market) return skip("Market info unavailable");
-  if (market.closed) return skip("Market is closed");
+  if (age > cfg.maxSignalAgeSeconds) {
+    return skip(`Signal is ${Math.round(age / 60)} min old`, "stale", {
+      ageSeconds: age,
+      maxAgeSeconds: cfg.maxSignalAgeSeconds,
+    });
+  }
+  if (!market) return skip("Market info unavailable", "no_market");
+  if (market.closed) return skip("Market is closed", "market_closed");
   if (market.endDate && market.endDate.getTime() / 1000 - now < cfg.minMinutesToEnd * 60) {
-    return skip(`Market ends in under ${cfg.minMinutesToEnd} min`);
+    return skip(`Market ends in under ${cfg.minMinutesToEnd} min`, "ending_soon", {
+      minutesLeft: Math.max(0, Math.round((market.endDate.getTime() / 1000 - now) / 60)),
+      minMinutesToEnd: cfg.minMinutesToEnd,
+    });
   }
   if (trade.price > cfg.maxEntryPrice) {
-    return skip(`Leader paid ${cents(trade.price)} (above ${cents(cfg.maxEntryPrice)} max)`);
+    return skip(
+      `Leader paid ${cents(trade.price)} (above ${cents(cfg.maxEntryPrice)} max)`,
+      "price_too_high",
+      { leaderPrice: trade.price, maxEntryPrice: cfg.maxEntryPrice },
+    );
   }
   if (trade.price < cfg.minEntryPrice) {
-    return skip(`Leader paid ${cents(trade.price)} (below ${cents(cfg.minEntryPrice)} min)`);
+    return skip(
+      `Leader paid ${cents(trade.price)} (below ${cents(cfg.minEntryPrice)} min)`,
+      "price_too_low",
+      { leaderPrice: trade.price, minEntryPrice: cfg.minEntryPrice },
+    );
   }
   if (ctx.dailyLossPct >= cfg.maxDailyLossPct) {
-    return skip(`Daily loss limit hit (${(ctx.dailyLossPct * 100).toFixed(1)}%)`);
+    return skip(`Daily loss limit hit (${(ctx.dailyLossPct * 100).toFixed(1)}%)`, "daily_loss", {
+      dailyLossPct: ctx.dailyLossPct,
+      maxDailyLossPct: cfg.maxDailyLossPct,
+    });
   }
-  if (!book || book.asks.length === 0) return skip("No sellers in the order book");
+  if (!book || book.asks.length === 0) {
+    return skip("No sellers in the order book", "no_sellers", { leaderPrice: trade.price });
+  }
 
   const limitPrice = Math.min(trade.price + cfg.maxPriceDrift, cfg.maxEntryPrice);
   const bestAsk = book.asks[0].price;
   if (bestAsk > limitPrice + 1e-9) {
-    return skip(`Price moved to ${cents(bestAsk)} (leader paid ${cents(trade.price)})`);
+    return skip(
+      `Price moved to ${cents(bestAsk)} (leader paid ${cents(trade.price)})`,
+      "price_moved",
+      {
+        bestAsk,
+        bestAskShares: book.asks[0].size,
+        leaderPrice: trade.price,
+        leaderShares: trade.size,
+        limitPrice,
+        maxPriceDrift: cfg.maxPriceDrift,
+        fills: trade.ids?.length ?? 1,
+      },
+    );
   }
 
   const size = sizeBuy(
@@ -98,14 +154,37 @@ export function decideBuy(ctx: BuyContext): Decision {
     },
     cfg,
   );
-  if ("reason" in size) return skip(size.reason);
+  if ("reason" in size) return skip(size.reason, size.code, size.details);
 
   const fill = simulateBuy(book.asks, size.usd, limitPrice, cfg.takerFeeBps);
-  if (fill.shares <= 0) return skip("Not enough liquidity within the price limit");
-  if (fill.shares < book.minOrderSize) {
-    return skip(`Order of ${fill.shares.toFixed(1)} shares is below the exchange minimum`);
+  if (fill.shares <= 0) {
+    return skip("Not enough liquidity within the price limit", "no_liquidity", {
+      limitPrice,
+      leaderPrice: trade.price,
+    });
   }
-  return { action: "buy", fill, usd: size.usd, limitPrice };
+  if (fill.shares < book.minOrderSize) {
+    return skip(
+      `Order of ${fill.shares.toFixed(1)} shares is below the exchange minimum`,
+      "below_exchange_min",
+      { shares: fill.shares, minOrderSize: book.minOrderSize },
+    );
+  }
+  return {
+    action: "buy",
+    fill,
+    usd: size.usd,
+    limitPrice,
+    details: {
+      ...size.details,
+      leaderPrice: trade.price,
+      leaderUsd: trade.usdc,
+      fillPrice: fill.avgPrice,
+      limitPrice,
+      partial: fill.partial,
+      fills: trade.ids?.length ?? 1,
+    },
+  };
 }
 
 export interface SellContext {
@@ -120,15 +199,62 @@ export interface SellContext {
 
 export function decideSell(ctx: SellContext): Decision {
   const { cfg, book } = ctx;
-  if (ctx.ourShares <= 1e-9) return skip("No copied position to close");
-  if (!cfg.copySells) return skip("Copying sells is turned off");
-  if (!book || book.bids.length === 0) return skip("No buyers in the order book");
+  if (ctx.ourShares <= 1e-9) return skip("No copied position to close", "no_position");
+  if (!cfg.copySells) return skip("Copying sells is turned off", "sells_off");
+  if (!book || book.bids.length === 0) return skip("No buyers in the order book", "no_buyers");
 
   const fraction = ctx.leaderSoldFraction >= 0.98 ? 1 : Math.max(0, ctx.leaderSoldFraction);
-  if (fraction <= 0) return skip("Leader's sell size is unknown");
+  if (fraction <= 0) return skip("Leader's sell size is unknown", "sell_size_unknown");
   const shares = ctx.ourShares * fraction;
   // Exits take whatever the book offers: getting out matters more than the price.
   const fill = simulateSell(book.bids, shares, 0, cfg.takerFeeBps);
-  if (fill.shares <= 0) return skip("No buyers in the order book");
-  return { action: "sell", fill, fraction };
+  if (fill.shares <= 0) return skip("No buyers in the order book", "no_buyers");
+  return {
+    action: "sell",
+    fill,
+    fraction,
+    details: {
+      leaderPrice: ctx.trade.price,
+      leaderSoldPct: fraction,
+      fillPrice: fill.avgPrice,
+      fills: ctx.trade.ids?.length ?? 1,
+    },
+  };
+}
+
+/**
+ * Merge fills of one leader order (same wallet, token and side, a few seconds apart, at
+ * about the same price) into a single trade. Sizing and the "too small" filter then see
+ * the whole order, not the pieces it happened to fill in. Orders at clearly different
+ * prices stay separate so each is judged on its own price. Input must be sorted by time.
+ */
+export function mergeFills(
+  trades: LeaderTrade[],
+  windowSeconds = 30,
+  priceTolerance = 0.03,
+): LeaderTrade[] {
+  const out: LeaderTrade[] = [];
+  const open = new Map<string, LeaderTrade>();
+  for (const t of trades) {
+    const key = `${t.wallet}|${t.tokenId}|${t.side}`;
+    const cur = open.get(key);
+    if (
+      cur &&
+      t.ts - cur.ts <= windowSeconds &&
+      Math.abs(t.price - cur.price) <= priceTolerance + 1e-9
+    ) {
+      const size = cur.size + t.size;
+      const usdc = cur.usdc + t.usdc;
+      cur.price = size > 0 ? (cur.price * cur.size + t.price * t.size) / size : cur.price;
+      cur.size = size;
+      cur.usdc = usdc;
+      cur.ids = [...(cur.ids ?? [cur.id]), ...(t.ids ?? [t.id])];
+      cur.icon ??= t.icon;
+      continue;
+    }
+    const copy: LeaderTrade = { ...t, ids: t.ids ?? [t.id] };
+    open.set(key, copy);
+    out.push(copy);
+  }
+  return out;
 }

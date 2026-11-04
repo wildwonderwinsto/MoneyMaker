@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { Activity, Lock, Radio } from "lucide-react";
+import { Activity, ChevronDown, Lock, Radio, Zap } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { connection } from "next/server";
@@ -7,22 +7,34 @@ import { Suspense } from "react";
 
 import { AutoRefresh } from "@/components/auto-refresh";
 import { EmptyState, MarketThumb, PageHeader } from "@/components/common";
+import { HoverExplain } from "@/components/hover-explain";
+import { NextTick } from "@/components/next-tick";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cents, polymarketMarketUrl, timeAgo, traderName, usd } from "@/lib/format";
-import { getEngineStatus, getSignals } from "@/lib/queries";
+import { explain } from "@/lib/explain";
+import { cents, num, polymarketMarketUrl, timeAgo, traderName, usd } from "@/lib/format";
+import { groupSignals, type SignalGroup } from "@/lib/live";
+import { getEngineStatus, getSignals, type EngineStatusView, type SignalRow } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Live" };
 
-export default function LivePage() {
+const FILTERS = [
+  { value: "all", label: "All" },
+  { value: "copied", label: "Copied" },
+  { value: "closed", label: "Sold" },
+  { value: "skipped", label: "Skipped" },
+] as const;
+type Filter = (typeof FILTERS)[number]["value"];
+
+export default function LivePage({ searchParams }: PageProps<"/live">) {
   return (
     <>
       <PageHeader
         title="Live signals"
-        description="Every trade made by the traders you follow, as soon as the engine sees it (checked every minute), and what the copy engine decided to do about it."
+        description="Every trade made by the traders you follow, what the copy engine did about it, and how it turned out. Hover or tap a reason for the full explanation."
       />
       <Suspense fallback={<Skeleton className="h-[500px] rounded-xl" />}>
-        <LiveContent />
+        <LiveContent searchParams={searchParams} />
       </Suspense>
     </>
   );
@@ -33,17 +45,63 @@ const DECISION_STYLE = {
   closed: "bg-primary/10 text-primary",
   skipped: "bg-muted text-muted-foreground",
 } as const;
+const DECISION_LABEL = { copied: "Copied", closed: "Sold", skipped: "Skipped" } as const;
 
-async function LiveContent() {
+async function LiveContent({ searchParams }: { searchParams: PageProps<"/live">["searchParams"] }) {
   await connection();
-  const [rows, status] = await Promise.all([getSignals(100), getEngineStatus()]);
-  const { healthy } = status;
+  const sp = await searchParams;
+  const filter: Filter = FILTERS.some((f) => f.value === sp.show) ? (sp.show as Filter) : "all";
+  const [all, status] = await Promise.all([getSignals(200), getEngineStatus()]);
+  const rows = filter === "all" ? all : all.filter((r) => r.signal.decision === filter);
+  const groups = groupSignals(rows.map((r) => ({ ...r.signal, row: r })));
 
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
-      <AutoRefresh seconds={20} />
+    <div className="grid gap-4 lg:grid-cols-3 lg:gap-6">
+      <AutoRefresh seconds={status.loop ? Math.min(15, status.intervalSeconds) : 20} />
+      <div className="space-y-4 lg:order-last">
+        <EngineCard status={status} />
+        <Card className="hidden border-dashed lg:flex">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Lock className="size-4" aria-hidden /> Real-money trading
+            </CardTitle>
+            <CardDescription>Locked until paper results prove the strategy</CardDescription>
+          </CardHeader>
+          <CardContent className="text-muted-foreground space-y-2 text-sm">
+            <p>
+              Phase 2 will place real orders on US-legal venues (<strong>Kalshi</strong> or{" "}
+              <strong>Polymarket US</strong>), with a kill switch, a daily loss limit and per-venue
+              caps.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="space-y-3 lg:col-span-2">
-        {rows.length === 0 ? (
+        <div
+          className="bg-muted flex w-full gap-1 rounded-lg p-1 sm:w-fit"
+          role="tablist"
+          aria-label="Show"
+        >
+          {FILTERS.map((f) => (
+            <Link
+              key={f.value}
+              href={f.value === "all" ? "/live" : `/live?show=${f.value}`}
+              role="tab"
+              aria-selected={f.value === filter}
+              className={cn(
+                "flex-1 rounded-md px-3 py-1.5 text-center text-sm font-medium transition-colors sm:flex-none",
+                f.value === filter
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {f.label}
+            </Link>
+          ))}
+        </div>
+
+        {groups.length === 0 ? (
           <EmptyState title="No signals yet" icon={Radio}>
             {status.following === 0 ? (
               <>
@@ -53,107 +111,221 @@ async function LiveContent() {
                 </Link>{" "}
                 page. Their new trades will show up here.
               </>
+            ) : filter !== "all" ? (
+              "Nothing in this filter yet."
             ) : (
               "Waiting for the traders you follow to place their next trade."
             )}
           </EmptyState>
         ) : (
-          rows.map(({ signal: s, name }) => (
-            <Card key={s.id} className="gap-0 py-3">
-              <CardContent className="flex items-start gap-3 px-4">
-                <MarketThumb src={s.image} size={44} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">
-                    {s.slug ? (
-                      <a
-                        href={polymarketMarketUrl(s.slug)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="hover:underline"
-                      >
-                        {s.title}
-                      </a>
-                    ) : (
-                      s.title
-                    )}
-                  </p>
-                  <p className="text-muted-foreground mt-0.5 text-sm">
-                    <Link href={`/traders/${s.wallet}`} className="text-foreground hover:underline">
-                      {traderName({ name, wallet: s.wallet })}
-                    </Link>{" "}
-                    <span
-                      className={cn(
-                        "mx-1 rounded px-1.5 py-0.5 text-xs font-semibold",
-                        s.side === "BUY" ? "bg-yes/10 text-yes" : "bg-no/10 text-no",
-                      )}
-                    >
-                      {s.side === "BUY" ? "Bought" : "Sold"} {s.outcome}
-                    </span>
-                    at {cents(s.leaderPrice)} · {usd(s.leaderUsdc, { compact: true })}
-                  </p>
-                  <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm">
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-xs font-semibold capitalize",
-                        DECISION_STYLE[s.decision],
-                      )}
-                    >
-                      {s.decision}
-                    </span>
-                    <span className="text-muted-foreground">{s.reason}</span>
-                  </p>
-                </div>
-                <span className="text-muted-foreground text-xs whitespace-nowrap">
-                  {timeAgo(s.leaderTs)}
-                </span>
-              </CardContent>
-            </Card>
-          ))
+          groups.map((g) => <SignalCard key={g.key} group={g} />)
         )}
       </div>
-
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="size-4" aria-hidden /> Copy engine
-            </CardTitle>
-            <CardDescription>Runs every minute via cron-job.org</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <p className="flex items-center gap-2">
-              <span
-                className={cn("size-2 rounded-full", healthy ? "bg-yes" : "bg-no")}
-                aria-hidden
-              />
-              {healthy ? "Running" : "Not running"} · last tick {timeAgo(status.lastTickAt)}
-            </p>
-            <p className="text-muted-foreground">
-              Following {status.following} trader{status.following === 1 ? "" : "s"} ·{" "}
-              <Link href="/paper" className="underline">
-                see paper results
-              </Link>
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-dashed">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Lock className="size-4" aria-hidden /> Real-money trading
-            </CardTitle>
-            <CardDescription>Locked until paper results prove the strategy</CardDescription>
-          </CardHeader>
-          <CardContent className="text-muted-foreground space-y-2 text-sm">
-            <p>
-              Phase 2 will place real orders on US-legal venues: <strong>Kalshi</strong> (API + free
-              demo account) or <strong>Polymarket US</strong>. Each Polymarket signal gets matched
-              to the same market there.
-            </p>
-            <p>It will come with a kill switch, a daily loss limit, and per-venue caps.</p>
-          </CardContent>
-        </Card>
-      </div>
     </div>
+  );
+}
+
+function EngineCard({ status }: { status: EngineStatusView }) {
+  const { healthy, stream } = status;
+  const live = !!stream?.enabled && stream.connected;
+  return (
+    <Card className="gap-3 py-4 sm:gap-4 sm:py-6">
+      <CardHeader className="px-4 sm:px-6">
+        <CardTitle className="flex items-center gap-2">
+          <Activity className="size-4" aria-hidden /> Copy engine
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2.5 px-4 text-sm sm:px-6">
+        <p className="flex items-center gap-2">
+          <span className={cn("size-2 rounded-full", healthy ? "bg-yes" : "bg-no")} aria-hidden />
+          {healthy ? "Running" : "Not running"} · last check {timeAgo(status.lastTickAt)}
+        </p>
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-muted-foreground">Next check</span>
+          <NextTick at={status.nextTickAt} intervalSeconds={status.intervalSeconds} />
+        </p>
+        <p className="flex items-start gap-2">
+          <Zap
+            className={cn("mt-0.5 size-4 shrink-0", live ? "text-yes" : "text-muted-foreground")}
+            aria-hidden
+          />
+          <span>
+            {live ? (
+              <>
+                <strong className="font-medium">Real-time feed on</strong>
+                <span className="text-muted-foreground">
+                  {" "}
+                  · trades are copied seconds after they happen
+                  {status.lastStreamBatchAt ? ` · last ${timeAgo(status.lastStreamBatchAt)}` : ""}
+                </span>
+              </>
+            ) : !status.realtime ? (
+              <span className="text-muted-foreground">
+                Real-time feed is off in Settings; copying waits for each check.
+              </span>
+            ) : stream?.enabled ? (
+              <span className="text-muted-foreground">Real-time feed reconnecting…</span>
+            ) : (
+              <span className="text-muted-foreground">
+                Real-time feed starts once you follow someone (needs the server loop).
+              </span>
+            )}
+          </span>
+        </p>
+        <p className="text-muted-foreground">
+          Following {status.following} trader{status.following === 1 ? "" : "s"} ·{" "}
+          <Link href="/paper" className="underline">
+            paper results
+          </Link>
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+type Row = SignalRow["signal"] & { row: SignalRow };
+
+function Outcome({ row }: { row: SignalRow }) {
+  const { signal: s, outcome } = row;
+  if (!outcome) return null;
+  const chip = (value: number, label: string) => (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums",
+        value > 0 ? "bg-gain/10 text-gain" : value < 0 ? "bg-loss/10 text-loss" : "bg-muted",
+      )}
+    >
+      {label} {usd(value, { sign: true })}
+    </span>
+  );
+  if (s.decision === "closed" && outcome.realized !== null) {
+    return chip(outcome.realized, outcome.realized >= 0 ? "Profit" : "Loss");
+  }
+  const p = outcome.position;
+  if (!p) return null;
+  const body =
+    p.status === "open"
+      ? chip(p.unrealized + p.realizedPnl, "Open")
+      : chip(
+          p.realizedPnl,
+          p.realizedPnl >= 0
+            ? p.status === "settled"
+              ? "Won"
+              : "Profit"
+            : p.status === "settled"
+              ? "Lost"
+              : "Loss",
+        );
+  return (
+    <Link href={`/paper/positions/${p.id}`} className="hover:opacity-80" title="Open the position">
+      {body}
+    </Link>
+  );
+}
+
+function SignalCard({ group }: { group: SignalGroup<Row> }) {
+  const s = group.head;
+  const many = group.rows.length > 1;
+  const name = traderName({ name: s.row.name, wallet: s.wallet });
+  const explanation = explain({
+    reason: s.reason,
+    code: s.reasonCode,
+    details: s.details,
+    side: s.side,
+    outcome: s.outcome,
+    retries: s.retries,
+  });
+  const title = s.slug ? (
+    <a
+      href={polymarketMarketUrl(s.slug)}
+      target="_blank"
+      rel="noreferrer"
+      className="hover:underline"
+    >
+      {s.title}
+    </a>
+  ) : (
+    s.title
+  );
+  return (
+    <Card className="gap-0 py-3">
+      <CardContent className="flex items-start gap-3 px-3 sm:px-4">
+        <MarketThumb src={s.image} size={40} label={s.title} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <p className="line-clamp-2 font-medium sm:line-clamp-1">{title}</p>
+            <span className="text-muted-foreground shrink-0 pt-0.5 text-xs whitespace-nowrap">
+              {timeAgo(s.leaderTs)}
+            </span>
+          </div>
+          <p className="text-muted-foreground mt-1 text-sm">
+            <Link
+              href={`/traders/${s.wallet}`}
+              className="text-foreground font-medium hover:underline"
+            >
+              {name}
+            </Link>{" "}
+            <span
+              className={cn(
+                "mx-0.5 rounded px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap",
+                s.side === "BUY" ? "bg-yes/10 text-yes" : "bg-no/10 text-no",
+              )}
+            >
+              {s.side === "BUY" ? "Bought" : "Sold"} {s.outcome}
+            </span>{" "}
+            <span className="whitespace-nowrap">
+              at {cents(group.avgPrice)}
+              {many ? " avg" : ""} · {usd(group.totalUsdc, { compact: true })}
+            </span>
+            {many && <span className="whitespace-nowrap"> · {group.rows.length} fills</span>}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-xs font-semibold",
+                DECISION_STYLE[s.decision],
+              )}
+            >
+              {DECISION_LABEL[s.decision]}
+            </span>
+            <HoverExplain explanation={explanation} className="text-muted-foreground">
+              {s.reason}
+            </HoverExplain>
+            <Outcome row={s.row} />
+          </div>
+          {many && (
+            <details className="group mt-2 text-xs">
+              <summary className="text-muted-foreground hover:text-foreground inline-flex cursor-pointer list-none items-center gap-1">
+                <ChevronDown
+                  className="size-3.5 transition-transform group-open:rotate-180"
+                  aria-hidden
+                />
+                Show {group.rows.length} fills
+              </summary>
+              <ul className="mt-2 divide-y rounded-md border">
+                {group.rows.map((r) => (
+                  <li
+                    key={r.id}
+                    className="flex items-center justify-between gap-3 px-2.5 py-1.5 tabular-nums"
+                  >
+                    <span className="text-muted-foreground">
+                      {new Date(r.leaderTs).toLocaleTimeString("en-US", {
+                        hour: "numeric",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </span>
+                    <span>
+                      {num(r.leaderSize, 1)} @ {cents(r.leaderPrice)}
+                    </span>
+                    <span className="font-medium">{usd(r.leaderUsdc)}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

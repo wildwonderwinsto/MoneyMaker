@@ -16,7 +16,7 @@ import {
   traderTrades,
 } from "@/lib/db/schema";
 import { getMidpoints, getPriceHistory, type PricePoint } from "@/lib/polymarket/clob";
-import { collect, getActivity, paginate, tradeId, type Activity } from "@/lib/polymarket/data";
+import { collect, getActivity, paginate, tradeIds, type Activity } from "@/lib/polymarket/data";
 import { getMarketsByConditionIds, winnerIndex } from "@/lib/polymarket/gamma";
 import type { ScoringConfig } from "@/lib/scoring/config";
 import {
@@ -40,7 +40,9 @@ export interface ScoreOptions {
 
 export const DEFAULT_SCORE: ScoreOptions = {
   shortlistSize: 60,
-  replaysPerTrader: 40,
+  // 40 was too few to tell a copyable edge from noise; 150 keeps the daily job well
+  // within its time budget (minute price history, rate-limited).
+  replaysPerTrader: 150,
   replayLookbackDays: 90,
 };
 
@@ -125,30 +127,35 @@ async function buildCopyReplays(
   );
 
   // Keep the shortlisted trader's raw trades (used by the profile page and backtests).
-  const rows = trades
-    .filter((t) => t.token_id && t.side && t.price !== null && t.price !== undefined)
-    .map((t) => ({
-      id: tradeId(t),
-      wallet,
-      ts: toDate(t.timestamp)!,
-      conditionId: t.condition_id,
-      tokenId: t.token_id!,
-      side: t.side!,
-      price: t.price!,
-      size: t.size,
-      usdcSize: t.usdc_size,
-      outcome: t.outcome ?? null,
-      outcomeIndex: t.outcome_index ?? null,
-      title: t.title ?? null,
-      slug: t.slug ?? null,
-      transactionHash: t.transaction_hash ?? null,
-    }));
+  const valid = trades.filter(
+    (t) => t.token_id && t.side && t.price !== null && t.price !== undefined,
+  );
+  const ids = tradeIds(valid);
+  const rows = valid.map((t, i) => ({
+    id: ids[i],
+    wallet,
+    ts: toDate(t.timestamp)!,
+    conditionId: t.condition_id,
+    tokenId: t.token_id!,
+    side: t.side!,
+    price: t.price!,
+    size: t.size,
+    usdcSize: t.usdc_size,
+    outcome: t.outcome ?? null,
+    outcomeIndex: t.outcome_index ?? null,
+    title: t.title ?? null,
+    slug: t.slug ?? null,
+    transactionHash: t.transaction_hash ?? null,
+  }));
   for (const part of chunk(rows, 500))
     await db.insert(traderTrades).values(part).onConflictDoNothing();
 
+  // Only trades the copy engine would actually copy: big enough, sensible price, old
+  // enough that the delayed entry price exists.
   const buys = rows.filter(
     (t) =>
       t.side === "BUY" &&
+      t.usdcSize >= cfg.minReplayLeaderUsd &&
       t.price > cfg.minEntryPrice &&
       t.price < 0.97 &&
       toEpoch(t.ts)! < now - cfg.copyDelaySeconds - 900,
@@ -157,6 +164,7 @@ async function buildCopyReplays(
   // Evenly spaced sample across the window.
   const step = Math.max(1, Math.floor(buys.length / opts.replaysPerTrader));
   const sample = buys.filter((_, i) => i % step === 0).slice(0, opts.replaysPerTrader);
+  const exits = leaderExits(rows);
 
   const marketsById = new Map(
     (await getMarketsByConditionIds(sample.map((s) => s.conditionId))).map((m) => [
@@ -178,12 +186,66 @@ async function buildCopyReplays(
 
     const market = marketsById.get(t.conditionId);
     const winner = market ? winnerIndex(market) : null;
-    let exitValue: number | undefined;
-    if (winner !== null && t.outcomeIndex !== null) exitValue = winner === t.outcomeIndex ? 1 : 0;
-    else exitValue = mids.get(t.tokenId);
-    return exitValue === undefined ? null : { delayedPrice, exitValue, weight: t.usdcSize };
+    let holdValue: number | undefined;
+    if (winner !== null && t.outcomeIndex !== null) holdValue = winner === t.outcomeIndex ? 1 : 0;
+    else holdValue = mids.get(t.tokenId);
+    if (holdValue === undefined) return null;
+    // The engine mirrors sells: the part the leader sold exits near their sell price
+    // (minus the same slippage); only the rest rides to resolution.
+    const exit = exits.get(t.id);
+    const exitValue = exit
+      ? exit.soldFraction * Math.max(0, exit.avgPrice - cfg.copySlippage) +
+        (1 - exit.soldFraction) * holdValue
+      : holdValue;
+    return { delayedPrice, exitValue, weight: t.usdcSize };
   });
   return replays.filter((r): r is CopyReplay => r !== null);
+}
+
+interface TradeRow {
+  id: string;
+  ts: Date;
+  tokenId: string;
+  side: string;
+  price: number;
+  size: number;
+}
+
+/**
+ * For each BUY: what share of the shares held at that point the leader later sold, and
+ * at what average price. Shares are tracked first-in-first-out per token. Pure (tested).
+ */
+export function leaderExits(
+  rows: TradeRow[],
+): Map<string, { soldFraction: number; avgPrice: number }> {
+  const out = new Map<string, { soldFraction: number; avgPrice: number }>();
+  const byToken = new Map<string, TradeRow[]>();
+  for (const r of rows) byToken.set(r.tokenId, [...(byToken.get(r.tokenId) ?? []), r]);
+  for (const list of byToken.values()) {
+    list.sort((a, b) => a.ts.getTime() - b.ts.getTime());
+    const lots: Array<{ id: string; size: number; left: number; proceeds: number }> = [];
+    for (const r of list) {
+      if (r.side === "BUY") {
+        lots.push({ id: r.id, size: r.size, left: r.size, proceeds: 0 });
+        continue;
+      }
+      let toSell = r.size;
+      for (const lot of lots) {
+        if (toSell <= 1e-9) break;
+        const take = Math.min(lot.left, toSell);
+        lot.left -= take;
+        lot.proceeds += take * r.price;
+        toSell -= take;
+      }
+    }
+    for (const lot of lots) {
+      const sold = lot.size - lot.left;
+      if (sold > 1e-9 && lot.size > 0) {
+        out.set(lot.id, { soldFraction: sold / lot.size, avgPrice: lot.proceeds / sold });
+      }
+    }
+  }
+  return out;
 }
 
 function scoreRow(wallet: string, m: TraderMetrics, r: ScoreResult, category: string | null) {

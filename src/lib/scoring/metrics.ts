@@ -342,7 +342,8 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     oosRoi:
       oos.length >= 5 && oosCost > 0 ? oos.reduce((a, p) => a + p.realizedPnl, 0) / oosCost : null,
     oosPnl: latest && atCutoff ? latest.pnl - atCutoff.pnl : null,
-    copyAdjRoi: replays ? copyAdjustedRoi(replays) : null,
+    // Too few replays is not evidence either way: report "not measured".
+    copyAdjRoi: replays && replays.length >= cfg.minCopyReplays ? copyAdjustedRoi(replays) : null,
     nCopyReplays: replays?.length ?? 0,
     lastTradeAt,
     daysSinceTrade: lastTradeAt === null ? null : Math.max(0, (now - lastTradeAt) / DAY),

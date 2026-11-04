@@ -2,7 +2,13 @@
 import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
-import { equitySnapshots, paperAccounts, paperFills, paperPositions } from "@/lib/db/schema";
+import {
+  equitySnapshots,
+  paperAccounts,
+  paperFills,
+  paperPositions,
+  type PaperPositionKind,
+} from "@/lib/db/schema";
 
 import type { LeaderTrade, MarketInfo } from "./engine";
 import type { Fill } from "./fillSim";
@@ -54,19 +60,24 @@ export async function loadAccountState(db: Db, accountId: number): Promise<Accou
   };
 }
 
+/** Capital at work in one market (copies + hedges) and with one leader (copies only). */
 export function exposure(state: AccountState, conditionId: string, wallet: string) {
   let market = 0;
   let trader = 0;
   for (const p of state.open) {
     if (p.conditionId === conditionId) market += p.costBasis;
-    if (p.sourceWallet === wallet) trader += p.costBasis;
+    if (p.sourceWallet === wallet && p.kind === "copy") trader += p.costBasis;
   }
   return { market, trader };
 }
 
-/** Loss since the first snapshot of the current UTC day, as a fraction (positive = loss). */
-export async function dailyLossPct(db: Db, accountId: number, equity: number): Promise<number> {
-  const dayStart = new Date();
+/** Equity at the first snapshot of the current UTC day (null before the first one). */
+export async function startOfDayEquity(
+  db: Db,
+  accountId: number,
+  nowMs = Date.now(),
+): Promise<number | null> {
+  const dayStart = new Date(nowMs);
   dayStart.setUTCHours(0, 0, 0, 0);
   const [first] = await db
     .select({ equity: equitySnapshots.equity })
@@ -74,17 +85,38 @@ export async function dailyLossPct(db: Db, accountId: number, equity: number): P
     .where(and(eq(equitySnapshots.accountId, accountId), gte(equitySnapshots.ts, dayStart)))
     .orderBy(asc(equitySnapshots.ts))
     .limit(1);
-  if (!first || first.equity <= 0) return 0;
-  return Math.max(0, (first.equity - equity) / first.equity);
+  return first && first.equity > 0 ? first.equity : null;
 }
 
+/** Today's loss as a fraction of start-of-day equity (positive = loss, never negative). */
+export function lossFraction(startEquity: number | null, equity: number): number {
+  if (startEquity === null || startEquity <= 0) return 0;
+  return Math.max(0, (startEquity - equity) / startEquity);
+}
+
+/** Loss since the first snapshot of the current UTC day, as a fraction (positive = loss). */
+export async function dailyLossPct(db: Db, accountId: number, equity: number): Promise<number> {
+  return lossFraction(await startOfDayEquity(db, accountId), equity);
+}
+
+export interface BuyOptions {
+  kind?: PaperPositionKind;
+  /** For hedges: the copy position being protected. */
+  hedgeOf?: number | null;
+  /** Override the outcome label (hedges buy the other side). */
+  outcome?: string | null;
+}
+
+/** Add a fill to the open position (creating it if needed). Returns the position id. */
 export async function applyBuy(
   tx: Tx,
   accountId: number,
   trade: LeaderTrade,
   market: MarketInfo,
   fill: Fill,
-): Promise<void> {
+  opts: BuyOptions = {},
+): Promise<number> {
+  const kind = opts.kind ?? "copy";
   const [existing] = await tx
     .select()
     .from(paperPositions)
@@ -93,6 +125,7 @@ export async function applyBuy(
         eq(paperPositions.accountId, accountId),
         eq(paperPositions.tokenId, trade.tokenId),
         eq(paperPositions.sourceWallet, trade.wallet),
+        eq(paperPositions.kind, kind),
         eq(paperPositions.status, "open"),
       ),
     );
@@ -114,10 +147,12 @@ export async function applyBuy(
         sourceWallet: trade.wallet,
         conditionId: trade.conditionId,
         tokenId: trade.tokenId,
-        outcome: trade.outcome,
+        outcome: opts.outcome !== undefined ? opts.outcome : trade.outcome,
         title: market.question,
         slug: market.slug,
-        image: market.image,
+        image: market.image ?? trade.icon ?? null,
+        kind,
+        hedgeOf: opts.hedgeOf ?? null,
         shares: fill.shares,
         costBasis: fill.notional,
         avgPrice: fill.notional / fill.shares,
@@ -140,8 +175,9 @@ export async function applyBuy(
     shares: fill.shares,
     avgPrice: fill.avgPrice,
     notional: fill.notional,
-    slippageBps: ((fill.avgPrice - trade.price) / trade.price) * 10_000,
+    slippageBps: trade.price > 0 ? ((fill.avgPrice - trade.price) / trade.price) * 10_000 : null,
   });
+  return positionId;
 }
 
 export async function applySell(
@@ -149,9 +185,10 @@ export async function applySell(
   position: PaperPosition,
   trade: LeaderTrade,
   fill: Fill,
-): Promise<void> {
+): Promise<number> {
   const sold = Math.min(fill.shares, position.shares);
   const costPortion = position.costBasis * (sold / position.shares);
+  const pnl = fill.notional - costPortion;
   const remaining = position.shares - sold;
   const done = remaining < 1e-6;
   await tx
@@ -159,7 +196,7 @@ export async function applySell(
     .set({
       shares: done ? 0 : remaining,
       costBasis: done ? 0 : position.costBasis - costPortion,
-      realizedPnl: position.realizedPnl + (fill.notional - costPortion),
+      realizedPnl: position.realizedPnl + pnl,
       status: done ? "closed" : "open",
       closedAt: done ? new Date() : null,
       updatedAt: new Date(),
@@ -178,8 +215,10 @@ export async function applySell(
     shares: sold,
     avgPrice: fill.avgPrice,
     notional: fill.notional,
-    slippageBps: ((trade.price - fill.avgPrice) / trade.price) * 10_000,
+    slippageBps: trade.price > 0 ? ((trade.price - fill.avgPrice) / trade.price) * 10_000 : null,
+    realizedPnl: pnl,
   });
+  return pnl;
 }
 
 /** Pay out a resolved position at $1 (won) or $0 (lost) per share. */
@@ -213,19 +252,20 @@ export async function settlePosition(
     shares: position.shares,
     avgPrice: won ? 1 : 0,
     notional: payout,
+    realizedPnl: payout - position.costBasis,
   });
   return payout - position.costBasis;
 }
 
-/** Record equity if the last snapshot is older than `everyMs`. */
-export async function maybeSnapshot(db: Db, accountId: number, everyMs = 15 * 60_000) {
+/** Record equity if the last snapshot is older than `everyMs` (0 = always). */
+export async function maybeSnapshot(db: Db, accountId: number, everyMs = 5 * 60_000) {
   const [last] = await db
     .select({ ts: equitySnapshots.ts })
     .from(equitySnapshots)
     .where(eq(equitySnapshots.accountId, accountId))
     .orderBy(desc(equitySnapshots.ts))
     .limit(1);
-  if (last && Date.now() - last.ts.getTime() < everyMs) return false;
+  if (last && everyMs > 0 && Date.now() - last.ts.getTime() < everyMs) return false;
   const state = await loadAccountState(db, accountId);
   await db.insert(equitySnapshots).values({
     accountId,

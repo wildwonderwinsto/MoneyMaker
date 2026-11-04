@@ -4,7 +4,6 @@ import { BadgeCheck, CircleSlash, Crown, Eye } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import type { ScoreTier } from "@/lib/db/schema";
-import { hashString } from "@/lib/scoring/stats";
 
 export function PageHeader({
   title,
@@ -16,9 +15,9 @@ export function PageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div className="mb-5 flex flex-wrap items-end justify-between gap-3 sm:mb-6 sm:gap-4">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{title}</h1>
         {description && (
           <p className="text-muted-foreground mt-1 max-w-3xl text-sm">{description}</p>
         )}
@@ -50,63 +49,7 @@ export function TierBadge({ tier }: { tier: ScoreTier }) {
   );
 }
 
-/** Profile picture, or a deterministic gradient generated from the wallet address. */
-export function Avatar({
-  wallet,
-  src,
-  size = 40,
-  className,
-}: {
-  wallet: string;
-  src?: string | null;
-  size?: number;
-  className?: string;
-}) {
-  if (src) {
-    return (
-      // External images from arbitrary hosts at avatar size: optimization not worth it.
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={src}
-        alt=""
-        width={size}
-        height={size}
-        className={cn("shrink-0 rounded-full object-cover", className)}
-        style={{ width: size, height: size }}
-      />
-    );
-  }
-  const h = hashString(wallet);
-  const a = h % 360;
-  const b = (a + 40 + ((h >> 9) % 80)) % 360;
-  return (
-    <span
-      aria-hidden
-      className={cn("inline-block shrink-0 rounded-full", className)}
-      style={{
-        width: size,
-        height: size,
-        background: `linear-gradient(135deg, oklch(0.7 0.15 ${a}), oklch(0.55 0.18 ${b}))`,
-      }}
-    />
-  );
-}
-
-export function MarketThumb({ src, size = 40 }: { src?: string | null; size?: number }) {
-  if (!src)
-    return <span className="bg-muted shrink-0 rounded-md" style={{ width: size, height: size }} />;
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt=""
-      width={size}
-      height={size}
-      className="shrink-0 rounded-md object-cover"
-      style={{ width: size, height: size }}
-    />
-  );
-}
+export { Avatar, MarketThumb } from "@/components/images";
 
 /** KPI tile: one headline number, a label, and optional context. */
 export function StatTile({
@@ -121,12 +64,14 @@ export function StatTile({
   tone?: "gain" | "loss";
 }) {
   return (
-    <Card className="gap-0 py-4">
-      <CardContent className="px-4">
-        <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">{label}</p>
+    <Card className="gap-0 py-3 sm:py-4">
+      <CardContent className="px-3 sm:px-4">
+        <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase sm:text-xs">
+          {label}
+        </p>
         <p
           className={cn(
-            "mt-1 text-2xl font-semibold tabular-nums",
+            "mt-1 text-lg font-semibold tabular-nums sm:text-2xl",
             tone === "gain" && "text-gain",
             tone === "loss" && "text-loss",
           )}

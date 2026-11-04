@@ -1,0 +1,372 @@
+"use client";
+
+/**
+ * Grouped settings editor. Keeps its own state (no <form action>), so React's automatic
+ * form reset can never revert a field after saving — the cause of "proportional won't
+ * switch to fixed". Values are validated with the same schema as the server, field by
+ * field, before anything is sent. Visitors get the same layout, read-only.
+ */
+import { cn } from "cn";
+import { Lock, RotateCcw } from "lucide-react";
+import { useMemo, useState, useTransition } from "react";
+
+import { saveSettingsAction, type ActionResult } from "@/app/actions";
+import { FormMessage } from "@/components/forms";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { DEFAULT_RISK_CONFIG, RiskConfigSchema } from "@/lib/copy/config";
+import { DEFAULT_SCORING_CONFIG, ScoringConfigSchema } from "@/lib/scoring/config";
+
+import {
+  fromDisplay,
+  RISK_GROUPS,
+  SCORING_GROUPS,
+  toDisplay,
+  UNIT_SUFFIX,
+  type Ctx,
+  type Field,
+  type Group,
+} from "./fields";
+
+type Values = Record<string, unknown>;
+type Draft = Record<string, string | boolean | number>;
+
+const SPEC = {
+  risk: { groups: RISK_GROUPS, schema: RiskConfigSchema, defaults: DEFAULT_RISK_CONFIG },
+  scoring: {
+    groups: SCORING_GROUPS,
+    schema: ScoringConfigSchema,
+    defaults: DEFAULT_SCORING_CONFIG,
+  },
+} as const;
+
+const allFields = (groups: Group[]) => groups.flatMap((g) => g.fields);
+
+/** Stored values → what the inputs show. */
+function toDraft(groups: Group[], values: Values): Draft {
+  const d: Draft = {};
+  for (const f of allFields(groups)) {
+    const v = values[f.name];
+    if (f.kind === "number") d[f.name] = String(toDisplay(f.unit, Number(v)));
+    else if (f.kind === "boolean") d[f.name] = Boolean(v);
+    else d[f.name] = v as string | number;
+  }
+  return d;
+}
+
+/** What the inputs show → stored values (fields not on screen keep their saved value). */
+function fromDraft(groups: Group[], draft: Draft, base: Values): Values {
+  const out: Values = { ...base };
+  for (const f of allFields(groups)) {
+    const v = draft[f.name];
+    if (f.kind === "number") {
+      const s = String(v).trim();
+      out[f.name] = s === "" ? Number.NaN : fromDisplay(f.unit, Number(s));
+    } else out[f.name] = v;
+  }
+  return out;
+}
+
+export function SettingsEditor({
+  kind,
+  values,
+  admin,
+  ctx,
+}: {
+  kind: "risk" | "scoring";
+  values: Values;
+  admin: boolean;
+  ctx: Ctx;
+}) {
+  const { groups, schema, defaults } = SPEC[kind];
+  const [saved, setSaved] = useState<Values>(values);
+  const [draft, setDraft] = useState<Draft>(() => toDraft(groups, values));
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [state, setState] = useState<ActionResult | null>(null);
+  const [pending, start] = useTransition();
+
+  const current = useMemo(() => fromDraft(groups, draft, saved), [groups, draft, saved]);
+  const dirty = useMemo(
+    () =>
+      allFields(groups).some(
+        (f) => JSON.stringify(current[f.name]) !== JSON.stringify(saved[f.name]),
+      ),
+    [groups, current, saved],
+  );
+
+  const set = (name: string, v: string | boolean | number) => {
+    setDraft((d) => ({ ...d, [name]: v }));
+    setErrors((e) => {
+      if (!e[name]) return e;
+      const rest = { ...e };
+      delete rest[name];
+      return rest;
+    });
+    setState(null);
+  };
+
+  const save = () => {
+    const parsed = schema.safeParse(current);
+    if (!parsed.success) {
+      const errs: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        const key = String(issue.path[0] ?? "");
+        const field = allFields(groups).find((f) => f.name === key);
+        errs[key] = Number.isNaN(current[key])
+          ? "Enter a number"
+          : humanIssue(issue.message, field);
+      }
+      setErrors(errs);
+      setState({ ok: false, message: "Fix the highlighted fields." });
+      return;
+    }
+    start(async () => {
+      const res = await saveSettingsAction(kind, parsed.data);
+      setState(res);
+      if (res.ok) {
+        setSaved(parsed.data as Values);
+        setDraft(toDraft(groups, parsed.data as Values));
+      }
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      {!admin && (
+        <p className="bg-muted text-muted-foreground flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
+          <Lock className="size-4 shrink-0" aria-hidden /> View only. Unlock with the admin password
+          above to change anything.
+        </p>
+      )}
+      {groups.map((g) => (
+        <section key={g.id} className="rounded-xl border" aria-labelledby={`${kind}-${g.id}`}>
+          <header className="border-b px-4 py-3">
+            <h3 id={`${kind}-${g.id}`} className="font-semibold">
+              {g.title}
+            </h3>
+            <p className="text-muted-foreground mt-0.5 text-sm">{g.description}</p>
+          </header>
+          <div className="divide-y">
+            {g.fields
+              .filter((f) => !f.showIf || f.showIf(current))
+              .map((f) => (
+                <FieldRow
+                  key={f.name}
+                  id={`${kind}-${f.name}`}
+                  field={f}
+                  draft={draft}
+                  current={current}
+                  ctx={ctx}
+                  admin={admin}
+                  error={errors[f.name]}
+                  onChange={set}
+                />
+              ))}
+          </div>
+        </section>
+      ))}
+      {admin && (
+        <div className="bg-card/95 sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 -mx-1 flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2.5 shadow-sm backdrop-blur sm:bottom-3">
+          <Button onClick={save} disabled={pending || !dirty}>
+            {pending ? "Saving…" : "Save changes"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={pending}
+            onClick={() => {
+              setDraft(toDraft(groups, defaults as Values));
+              setErrors({});
+              setState(null);
+            }}
+          >
+            <RotateCcw aria-hidden /> Defaults
+          </Button>
+          {dirty && !state && (
+            <span className="text-muted-foreground text-sm">Unsaved changes</span>
+          )}
+          <FormMessage state={state} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function humanIssue(message: string, field: Field | undefined): string {
+  if (!field || field.kind !== "number") return message;
+  const unit = UNIT_SUFFIX[field.unit];
+  const show = (x: number) => (unit === "$" ? `$${x}` : `${x}${unit ? ` ${unit}` : ""}`);
+  if (field.min !== undefined && field.max !== undefined)
+    return `Use ${show(field.min)} to ${show(field.max)}`;
+  if (field.min !== undefined) return `Use at least ${show(field.min)}`;
+  if (field.max !== undefined) return `Use at most ${show(field.max)}`;
+  return message;
+}
+
+function FieldRow({
+  id,
+  field: f,
+  draft,
+  current,
+  ctx,
+  admin,
+  error,
+  onChange,
+}: {
+  id: string;
+  field: Field;
+  draft: Draft;
+  current: Values;
+  ctx: Ctx;
+  admin: boolean;
+  error?: string;
+  onChange: (name: string, v: string | boolean | number) => void;
+}) {
+  const example = f.kind !== "boolean" && f.example ? f.example(current, ctx) : null;
+
+  if (f.kind === "boolean") {
+    const on = Boolean(draft[f.name]);
+    return (
+      <div className="flex items-start justify-between gap-4 px-4 py-3">
+        <div className="min-w-0">
+          <Label htmlFor={id} className="font-medium">
+            {f.label}
+          </Label>
+          <p className="text-muted-foreground mt-1 text-sm leading-relaxed">{f.help}</p>
+        </div>
+        {admin ? (
+          <Switch id={id} checked={on} onCheckedChange={(v) => onChange(f.name, v)} />
+        ) : (
+          <span
+            className={cn(
+              "shrink-0 text-sm font-medium",
+              on ? "text-yes" : "text-muted-foreground",
+            )}
+          >
+            {on ? "On" : "Off"}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  if (f.kind === "choice") {
+    const value = draft[f.name];
+    const selected = f.options.find((o) => o.value === value);
+    return (
+      <div className="space-y-2 px-4 py-3">
+        <div>
+          <p className="font-medium" id={`${id}-label`}>
+            {f.label}
+          </p>
+          {f.help && <p className="text-muted-foreground mt-1 text-sm leading-relaxed">{f.help}</p>}
+        </div>
+        {admin ? (
+          <div
+            role="radiogroup"
+            aria-labelledby={`${id}-label`}
+            className={cn(
+              "grid gap-2",
+              // Options with descriptions stack on phones; short ones (15s/30s/1m) stay in a row.
+              !f.options.some((o) => o.help)
+                ? "grid-cols-3"
+                : f.options.length === 2
+                  ? "sm:grid-cols-2"
+                  : "sm:grid-cols-3",
+            )}
+          >
+            {f.options.map((o) => {
+              const active = o.value === value;
+              return (
+                <button
+                  key={String(o.value)}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => onChange(f.name, o.value)}
+                  className={cn(
+                    "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                    active
+                      ? "border-primary bg-primary/5 ring-primary ring-1"
+                      : "hover:bg-muted/50",
+                  )}
+                >
+                  <span className="font-medium">{o.label}</span>
+                  {o.help && (
+                    <span className="text-muted-foreground mt-0.5 block text-xs leading-snug">
+                      {o.help}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm">
+            <span className="font-medium">{selected?.label ?? String(value)}</span>
+            {selected?.help && <span className="text-muted-foreground"> · {selected.help}</span>}
+          </p>
+        )}
+        {example && <p className="bg-muted/60 rounded-md px-2.5 py-1.5 text-xs">{example}</p>}
+      </div>
+    );
+  }
+
+  const unit = UNIT_SUFFIX[f.unit];
+  const prefix = unit === "$";
+  return (
+    <div className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_11rem] sm:items-start sm:gap-6">
+      <div className="min-w-0">
+        <Label htmlFor={id} className="font-medium">
+          {f.label}
+        </Label>
+        <p className="text-muted-foreground mt-1 text-sm leading-relaxed">{f.help}</p>
+        {example && <p className="bg-muted/60 mt-2 rounded-md px-2.5 py-1.5 text-xs">{example}</p>}
+      </div>
+      <div>
+        {admin ? (
+          <div className="relative">
+            {prefix && (
+              <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm">
+                $
+              </span>
+            )}
+            <Input
+              id={id}
+              inputMode="decimal"
+              type="number"
+              step={f.step ?? "any"}
+              min={f.min}
+              max={f.max}
+              value={String(draft[f.name] ?? "")}
+              onChange={(e) => onChange(f.name, e.currentTarget.value)}
+              aria-invalid={!!error}
+              aria-describedby={error ? `${id}-err` : undefined}
+              className={cn(
+                "text-right tabular-nums",
+                prefix ? "pl-7" : "",
+                unit && !prefix ? "pr-12" : "",
+              )}
+            />
+            {unit && !prefix && (
+              <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm">
+                {unit}
+              </span>
+            )}
+          </div>
+        ) : (
+          <p className="text-right text-sm font-medium tabular-nums sm:pt-1">
+            {prefix ? `$${draft[f.name]}` : `${draft[f.name]}${unit ? ` ${unit}` : ""}`}
+          </p>
+        )}
+        {error && (
+          <p id={`${id}-err`} className="text-no mt-1 text-xs sm:text-right">
+            {error}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}

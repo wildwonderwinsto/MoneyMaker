@@ -34,6 +34,10 @@ export const ScoringConfigSchema = z.object({
   /** Added to the delayed mid price to approximate crossing the spread (price points). */
   copySlippage: z.number().min(0).max(0.1).default(0.01),
   minCopyAdjRoi: z.number().default(0),
+  /** Fewer replayed copies than this = not enough evidence; the copy check can't pass. */
+  minCopyReplays: z.number().int().min(1).default(25),
+  /** Replay only leader buys at least this big (the copy engine ignores smaller ones). */
+  minReplayLeaderUsd: z.number().min(0).default(25),
   maxTradesPerDay: z.number().default(200),
   maxBothSidesRatio: z.number().min(0).max(1).default(0.3),
   minMedianHoldHours: z.number().min(0).default(2),

@@ -130,7 +130,12 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
     ),
     atLeast(
       "copy_roi",
-      `Still profitable when copied ${Math.round(cfg.copyDelaySeconds / 60)} min late`,
+      `Still profitable when copied ${Math.round(cfg.copyDelaySeconds / 60)} min late` +
+        (m.nCopyReplays >= cfg.minCopyReplays
+          ? ` (${m.nCopyReplays} trades replayed)`
+          : m.nCopyReplays > 0
+            ? ` (only ${m.nCopyReplays} trades to replay; needs ${cfg.minCopyReplays})`
+            : ""),
       m.copyAdjRoi,
       cfg.minCopyAdjRoi + Number.EPSILON,
     ),

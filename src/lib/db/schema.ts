@@ -231,13 +231,49 @@ export const cursors = pgTable("cursors", {
   updatedAt: createdAt(),
 });
 
+/** Traders the admin said "no" to: hidden from the Top traders list until restored. */
+export const hiddenTraders = pgTable("hidden_traders", {
+  wallet: text().primaryKey(),
+  note: text(),
+  createdAt: createdAt(),
+});
+
 export type SignalDecision = "copied" | "skipped" | "closed";
+
+/**
+ * Machine-readable reason behind a decision, so the UI can explain it precisely.
+ * `details` carries the numbers (prices, limits, sizes) used to make the call.
+ */
+export type ReasonCode =
+  | "bought"
+  | "sold"
+  | "stale"
+  | "no_market"
+  | "market_closed"
+  | "ending_soon"
+  | "price_too_high"
+  | "price_too_low"
+  | "daily_loss"
+  | "no_sellers"
+  | "no_buyers"
+  | "price_moved"
+  | "no_liquidity"
+  | "below_exchange_min"
+  | "no_cash"
+  | "leader_too_small"
+  | "market_cap"
+  | "trader_cap"
+  | "below_min_order"
+  | "no_position"
+  | "sells_off"
+  | "sell_size_unknown"
+  | "other";
 
 /** Every leader trade we observed, with our decision and the reason. */
 export const signals = pgTable(
   "signals",
   {
-    /** Same id scheme as trader_trades.id. */
+    /** Same id scheme as trader_trades.id (see polymarket/data.ts tradeId). */
     id: text().primaryKey(),
     wallet: text().notNull(),
     detectedAt: createdAt(),
@@ -254,9 +290,20 @@ export const signals = pgTable(
     image: text(),
     decision: text().$type<SignalDecision>().notNull(),
     reason: text().notNull(),
+    reasonCode: text().$type<ReasonCode>(),
+    details: jsonb().$type<Record<string, number | string | boolean | null>>(),
+    /**
+     * A leader order that filled in several pieces is decided once; every piece shares
+     * the id of the first one here.
+     */
+    groupId: text(),
+    /** How the engine first saw it: "stream" (real-time feed) or "poll" (Data API). */
+    source: text(),
+    /** Times a skipped signal was re-checked (e.g. after the price moved away). */
+    retries: integer().notNull().default(0),
     accountId: integer(),
   },
-  (t) => [index().on(t.detectedAt), index().on(t.wallet)],
+  (t) => [index().on(t.detectedAt), index().on(t.wallet), index().on(t.decision, t.reasonCode)],
 );
 
 // ---------------------------------------------------------------------------
@@ -273,6 +320,8 @@ export const paperAccounts = pgTable("paper_accounts", {
 });
 
 export type PaperPositionStatus = "open" | "closed" | "settled";
+/** copy = mirrors a leader; hedge = opposite outcome bought to limit a copy's loss. */
+export type PaperPositionKind = "copy" | "hedge";
 
 export const paperPositions = pgTable(
   "paper_positions",
@@ -295,15 +344,19 @@ export const paperPositions = pgTable(
     realizedPnl: money().notNull().default(0),
     currentPrice: money(10, 6),
     status: text().$type<PaperPositionStatus>().notNull().default("open"),
+    kind: text().$type<PaperPositionKind>().notNull().default("copy"),
+    /** For hedges: the copy position this one protects. */
+    hedgeOf: integer(),
     openedAt: createdAt(),
     closedAt: tsz(),
     updatedAt: createdAt(),
   },
   (t) => [
-    uniqueIndex()
-      .on(t.accountId, t.tokenId, t.sourceWallet)
+    uniqueIndex("paper_positions_open_unique")
+      .on(t.accountId, t.tokenId, t.sourceWallet, t.kind)
       .where(sql`${t.status} = 'open'`),
     index().on(t.accountId, t.status),
+    index().on(t.hedgeOf),
   ],
 );
 
@@ -325,9 +378,11 @@ export const paperFills = pgTable(
     notional: money().notNull(),
     /** Fill price vs. the leader's price, in basis points (positive = worse for us). */
     slippageBps: doublePrecision(),
+    /** Profit or loss locked in by this fill (sells and settlements); null for buys. */
+    realizedPnl: money(),
     ts: createdAt(),
   },
-  (t) => [index().on(t.accountId, t.ts)],
+  (t) => [index().on(t.accountId, t.ts), index().on(t.signalId)],
 );
 
 export const equitySnapshots = pgTable(

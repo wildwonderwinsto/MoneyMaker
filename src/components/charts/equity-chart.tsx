@@ -1,0 +1,413 @@
+"use client";
+
+/**
+ * Paper equity over time with every buy and sell marked on the line.
+ * - Real time axis (points are spaced by when they happened, not evenly).
+ * - Markers: ▲ buy (series-3), ▼ sell or settlement (series-2) on top of the equity line
+ *   (series-1). Palette validated for color-blind separation in light and dark; shape is
+ *   a second cue so identity never relies on color alone.
+ * - Crosshair tooltip lists the trades at that moment. A range filter sits above; a
+ *   readable table (newest first, with change and trades per period) sits below.
+ */
+import { cn } from "cn";
+import { useMemo, useState } from "react";
+import {
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  type TooltipContentProps,
+} from "recharts";
+
+import { cents, num, usd } from "@/lib/format";
+
+export interface EquityPoint {
+  t: string;
+  equity: number;
+}
+
+export interface FillMarker {
+  id: number;
+  ts: string;
+  side: string;
+  kind: string;
+  notional: number;
+  shares: number;
+  avgPrice: number;
+  realizedPnl: number | null;
+  title: string | null;
+  outcome: string | null;
+}
+
+interface Row {
+  ts: number;
+  equity: number;
+  buy?: number;
+  sell?: number;
+  fills?: FillMarker[];
+}
+
+const RANGES = [
+  { key: "1d", label: "1D", ms: 86_400_000 },
+  { key: "1w", label: "1W", ms: 7 * 86_400_000 },
+  { key: "1m", label: "1M", ms: 30 * 86_400_000 },
+  { key: "all", label: "All", ms: Infinity },
+] as const;
+
+const isBuy = (f: FillMarker) => f.side === "BUY";
+const fillLabel = (f: FillMarker) =>
+  f.kind === "settlement"
+    ? f.side === "WIN"
+      ? "Won"
+      : "Lost"
+    : f.side === "BUY"
+      ? "Bought"
+      : "Sold";
+
+/** Equity at time `ts`, linearly interpolated between snapshots. Pure (exported for tests). */
+export function equityAt(curve: Array<{ ts: number; equity: number }>, ts: number): number {
+  if (curve.length === 0) return 0;
+  if (ts <= curve[0].ts) return curve[0].equity;
+  for (let i = 1; i < curve.length; i++) {
+    const a = curve[i - 1];
+    const b = curve[i];
+    if (ts <= b.ts) {
+      const w = b.ts === a.ts ? 1 : (ts - a.ts) / (b.ts - a.ts);
+      return a.equity + w * (b.equity - a.equity);
+    }
+  }
+  return curve.at(-1)!.equity;
+}
+
+function buildRows(curve: EquityPoint[], fills: FillMarker[]): Row[] {
+  const base = curve
+    .map((p) => ({ ts: Date.parse(p.t), equity: p.equity }))
+    .filter((p) => Number.isFinite(p.ts))
+    .sort((a, b) => a.ts - b.ts);
+  const rows: Row[] = base.map((p) => ({ ...p }));
+  // One marker row per minute and direction, holding every fill in it.
+  const buckets = new Map<string, FillMarker[]>();
+  for (const f of fills) {
+    const ts = Date.parse(f.ts);
+    if (!Number.isFinite(ts)) continue;
+    const key = `${Math.floor(ts / 60_000)}|${isBuy(f) ? "b" : "s"}`;
+    buckets.set(key, [...(buckets.get(key) ?? []), f]);
+  }
+  for (const [key, list] of buckets) {
+    const ts = Date.parse(list[0].ts);
+    const y = equityAt(base, ts);
+    rows.push({ ts, equity: y, fills: list, ...(key.endsWith("b") ? { buy: y } : { sell: y }) });
+  }
+  return rows.sort((a, b) => a.ts - b.ts);
+}
+
+const fmtTime = (ts: number, spanMs: number) => {
+  const d = new Date(ts);
+  return spanMs <= 2 * 86_400_000
+    ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
+const fmtFull = (ts: number) =>
+  new Date(ts).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+function Tip({ active, payload }: TooltipContentProps) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload as Row | undefined;
+  if (!row) return null;
+  return (
+    <div className="bg-popover text-popover-foreground max-w-72 rounded-lg border px-3 py-2 text-xs shadow-md">
+      <p className="text-muted-foreground">{fmtFull(row.ts)}</p>
+      <p className="mt-0.5 font-medium tabular-nums">Equity {usd(row.equity)}</p>
+      {row.fills?.slice(0, 5).map((f) => (
+        <p key={f.id} className="mt-1.5 leading-snug">
+          <span className="font-semibold">{fillLabel(f)}</span>{" "}
+          <span className="text-muted-foreground">
+            {num(f.shares, 1)} {f.outcome ?? ""} @ {cents(f.avgPrice)} · {usd(f.notional)}
+          </span>
+          {f.realizedPnl !== null && (
+            <span className="font-medium tabular-nums">
+              {" "}
+              ({usd(f.realizedPnl, { sign: true })})
+            </span>
+          )}
+          <br />
+          <span className="text-muted-foreground line-clamp-1">{f.title}</span>
+        </p>
+      ))}
+      {(row.fills?.length ?? 0) > 5 && (
+        <p className="text-muted-foreground mt-1">+{row.fills!.length - 5} more</p>
+      )}
+    </div>
+  );
+}
+
+type DotProps = { cx?: number; cy?: number; value?: number | null };
+const Up = ({ cx, cy, value }: DotProps) =>
+  value == null || cx == null || cy == null ? null : (
+    <path
+      d={`M${cx},${cy - 6} L${cx + 6},${cy + 4.5} L${cx - 6},${cy + 4.5} Z`}
+      fill="var(--series-3)"
+      stroke="var(--card)"
+      strokeWidth={2}
+      strokeLinejoin="round"
+    />
+  );
+const Down = ({ cx, cy, value }: DotProps) =>
+  value == null || cx == null || cy == null ? null : (
+    <path
+      d={`M${cx},${cy + 6} L${cx + 6},${cy - 4.5} L${cx - 6},${cy - 4.5} Z`}
+      fill="var(--series-2)"
+      stroke="var(--card)"
+      strokeWidth={2}
+      strokeLinejoin="round"
+    />
+  );
+
+export function EquityChart({
+  curve,
+  fills,
+  baseline,
+  height = 280,
+}: {
+  curve: EquityPoint[];
+  fills: FillMarker[];
+  baseline?: number;
+  height?: number;
+}) {
+  const [range, setRange] = useState<(typeof RANGES)[number]["key"]>("all");
+  const all = useMemo(() => buildRows(curve, fills), [curve, fills]);
+  const rows = useMemo(() => {
+    const r = RANGES.find((x) => x.key === range)!;
+    if (!Number.isFinite(r.ms) || all.length === 0) return all;
+    const end = all.at(-1)!.ts;
+    const cut = all.filter((x) => x.ts >= end - r.ms);
+    return cut.length >= 2 ? cut : all.slice(-2);
+  }, [all, range]);
+  const span = rows.length > 1 ? rows.at(-1)!.ts - rows[0].ts : 0;
+  const buys = rows.reduce((a, r) => a + (r.buy !== undefined ? r.fills!.length : 0), 0);
+  const sells = rows.reduce((a, r) => a + (r.sell !== undefined ? r.fills!.length : 0), 0);
+
+  return (
+    <figure className="w-full">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <figcaption className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-0.5 w-4 rounded"
+              style={{ background: "var(--series-1)" }}
+            />
+            Equity
+          </span>
+          <span className="flex items-center gap-1.5">
+            <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden>
+              <path d="M0,-5 L5,4 L-5,4 Z" fill="var(--series-3)" />
+            </svg>
+            Buy ({buys})
+          </span>
+          <span className="flex items-center gap-1.5">
+            <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden>
+              <path d="M0,5 L5,-4 L-5,-4 Z" fill="var(--series-2)" />
+            </svg>
+            Sell / settled ({sells})
+          </span>
+        </figcaption>
+        <div
+          className="bg-muted flex gap-0.5 rounded-md p-0.5"
+          role="group"
+          aria-label="Time range"
+        >
+          {RANGES.map((r) => (
+            <button
+              key={r.key}
+              type="button"
+              onClick={() => setRange(r.key)}
+              aria-pressed={range === r.key}
+              className={cn(
+                "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                range === r.key
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ height }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={rows} margin={{ top: 10, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke="var(--border)" />
+            <XAxis
+              dataKey="ts"
+              type="number"
+              scale="time"
+              domain={["dataMin", "dataMax"]}
+              tickFormatter={(v: number) => fmtTime(v, span)}
+              tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              minTickGap={40}
+            />
+            <YAxis
+              tickFormatter={(v: number) => usd(v, { compact: true })}
+              tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              width={60}
+              domain={["auto", "auto"]}
+            />
+            <Tooltip
+              cursor={{ stroke: "var(--muted-foreground)", strokeWidth: 1, strokeDasharray: "3 3" }}
+              content={(props) => <Tip {...props} />}
+            />
+            {baseline !== undefined && (
+              <ReferenceLine
+                y={baseline}
+                stroke="var(--muted-foreground)"
+                strokeDasharray="4 4"
+                strokeWidth={1}
+                label={{
+                  value: "Start",
+                  position: "insideTopLeft",
+                  fill: "var(--muted-foreground)",
+                  fontSize: 11,
+                }}
+              />
+            )}
+            <Line
+              type="monotone"
+              dataKey="equity"
+              name="Equity"
+              stroke="var(--series-1)"
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 5, stroke: "var(--card)", strokeWidth: 2 }}
+              isAnimationActive={false}
+            />
+            <Line
+              dataKey="buy"
+              name="Buy"
+              stroke="none"
+              dot={<Up />}
+              activeDot={false}
+              isAnimationActive={false}
+              legendType="none"
+            />
+            <Line
+              dataKey="sell"
+              name="Sell"
+              stroke="none"
+              dot={<Down />}
+              activeDot={false}
+              isAnimationActive={false}
+              legendType="none"
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <EquityTable rows={all} />
+    </figure>
+  );
+}
+
+/** Newest first: equity at each snapshot, the change since the one before, and trades. */
+function EquityTable({ rows }: { rows: Row[] }) {
+  const table = useMemo(() => {
+    const out: Array<{
+      ts: number;
+      equity: number;
+      change: number | null;
+      buys: number;
+      sells: number;
+      realized: number;
+    }> = [];
+    let prev: number | null = null;
+    let buys = 0;
+    let sells = 0;
+    let realized = 0;
+    for (const r of rows) {
+      if (r.fills) {
+        for (const f of r.fills) {
+          if (isBuy(f)) buys++;
+          else sells++;
+          realized += f.realizedPnl ?? 0;
+        }
+        continue;
+      }
+      out.push({
+        ts: r.ts,
+        equity: r.equity,
+        change: prev === null ? null : r.equity - prev,
+        buys,
+        sells,
+        realized,
+      });
+      prev = r.equity;
+      buys = 0;
+      sells = 0;
+      realized = 0;
+    }
+    return out.reverse();
+  }, [rows]);
+  if (table.length === 0) return null;
+  return (
+    <details className="mt-3 text-xs">
+      <summary className="text-muted-foreground hover:text-foreground cursor-pointer">
+        Show data table ({table.length} snapshots)
+      </summary>
+      <p className="text-muted-foreground mt-2">
+        Equity = cash + open positions at market price. Each row is one snapshot; “Change” is since
+        the row below it, and “Trades” counts what happened in between.
+      </p>
+      <div className="mt-2 max-h-72 overflow-auto rounded-md border">
+        <table className="w-full text-left tabular-nums">
+          <thead className="bg-muted/80 sticky top-0 backdrop-blur">
+            <tr>
+              <th className="px-2.5 py-1.5 font-medium">When</th>
+              <th className="px-2.5 py-1.5 text-right font-medium">Equity</th>
+              <th className="px-2.5 py-1.5 text-right font-medium">Change</th>
+              <th className="px-2.5 py-1.5 text-right font-medium">Trades</th>
+            </tr>
+          </thead>
+          <tbody>
+            {table.map((r) => (
+              <tr key={r.ts} className="border-t">
+                <td className="px-2.5 py-1.5 whitespace-nowrap">{fmtFull(r.ts)}</td>
+                <td className="px-2.5 py-1.5 text-right">{usd(r.equity)}</td>
+                <td
+                  className={cn(
+                    "px-2.5 py-1.5 text-right",
+                    r.change !== null && r.change > 0.005 && "text-gain",
+                    r.change !== null && r.change < -0.005 && "text-loss",
+                  )}
+                >
+                  {r.change === null ? "—" : usd(r.change, { sign: true })}
+                </td>
+                <td className="text-muted-foreground px-2.5 py-1.5 text-right whitespace-nowrap">
+                  {r.buys + r.sells === 0
+                    ? "—"
+                    : [
+                        r.buys && `${r.buys} buy${r.buys > 1 ? "s" : ""}`,
+                        r.sells && `${r.sells} sell${r.sells > 1 ? "s" : ""}`,
+                      ]
+                        .filter(Boolean)
+                        .join(", ")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}

@@ -172,7 +172,7 @@ describe("runTick", () => {
   it("refuses to run concurrently", async () => {
     expect(await acquireLease(db, "tick", 60_000)).toBe(true);
     const s = await runTick(db);
-    expect(s.skipped).toMatch(/still running/);
+    expect(s.skipped).toMatch(/in progress/);
     await releaseLease(db, "tick");
   });
 });

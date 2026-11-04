@@ -5,17 +5,19 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { EmptyState, PageHeader } from "@/components/common";
+import { isAdmin } from "@/lib/admin";
 import { TraderCard } from "@/components/trader-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/format";
 import { getJobRuns, getTierCounts, getTraderList, type TierFilter } from "@/lib/queries";
 
 const CATEGORIES = ["all", "politics", "sports", "crypto", "economics", "tech", "culture"];
-const TIERS: Array<{ value: TierFilter; label: string }> = [
+const TIERS: Array<{ value: TierFilter; label: string; adminOnly?: boolean }> = [
   { value: "verified", label: "Verified" },
   { value: "watchlist", label: "Watchlist" },
   { value: "followed", label: "Following" },
   { value: "all", label: "Everyone" },
+  { value: "hidden", label: "Hidden", adminOnly: true },
 ];
 
 export default function TradersPage({ searchParams }: PageProps<"/">) {
@@ -43,10 +45,12 @@ function href(params: { tier: string; category: string }) {
 async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["searchParams"] }) {
   await connection();
   const sp = await searchParams;
-  const tier = (TIERS.find((t) => t.value === sp.tier)?.value ?? "verified") as TierFilter;
+  const admin = await isAdmin();
+  const tiers = TIERS.filter((t) => admin || !t.adminOnly);
+  const tier = (tiers.find((t) => t.value === sp.tier)?.value ?? "verified") as TierFilter;
   const category = CATEGORIES.includes(String(sp.category)) ? String(sp.category) : "all";
 
-  const [list, counts, runs] = await Promise.all([
+  const [list, { tiers: counts, hidden }, runs] = await Promise.all([
     getTraderList({ tier, category: category === "all" ? undefined : category }),
     getTierCounts(),
     getJobRuns(20),
@@ -57,7 +61,11 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-1 overflow-x-auto" role="tablist" aria-label="Category">
+        <div
+          className="-mx-3 flex w-[calc(100%+1.5rem)] gap-1 overflow-x-auto px-3 pb-1 sm:mx-0 sm:w-auto sm:px-0 sm:pb-0"
+          role="tablist"
+          aria-label="Category"
+        >
           {CATEGORIES.map((c) => (
             <Link
               key={c}
@@ -65,7 +73,7 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
               role="tab"
               aria-selected={c === category}
               className={cn(
-                "rounded-full px-3 py-1.5 text-sm font-medium capitalize transition-colors",
+                "shrink-0 rounded-full px-3 py-1.5 text-sm font-medium capitalize transition-colors",
                 c === category
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -75,15 +83,19 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
             </Link>
           ))}
         </div>
-        <div className="bg-muted flex gap-1 rounded-lg p-1" role="tablist" aria-label="Tier">
-          {TIERS.map((t) => (
+        <div
+          className="bg-muted flex w-full gap-1 overflow-x-auto rounded-lg p-1 sm:w-auto"
+          role="tablist"
+          aria-label="Tier"
+        >
+          {tiers.map((t) => (
             <Link
               key={t.value}
               href={href({ tier: t.value, category })}
               role="tab"
               aria-selected={t.value === tier}
               className={cn(
-                "rounded-md px-3 py-1 text-sm font-medium transition-colors",
+                "shrink-0 rounded-md px-3 py-1 text-sm font-medium whitespace-nowrap transition-colors",
                 t.value === tier
                   ? "bg-card text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
@@ -92,6 +104,7 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
               {t.label}
               {t.value === "verified" && ` (${verifiedCount})`}
               {t.value === "watchlist" && ` (${counts.watchlist ?? 0})`}
+              {t.value === "hidden" && ` (${hidden})`}
             </Link>
           ))}
         </div>
@@ -108,12 +121,14 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
         <EmptyState title="No traders here yet" icon={SearchX}>
           {tier === "verified"
             ? "Nobody has passed every check yet. That's the filter doing its job. Look at the Watchlist, or wait for the next daily scoring run."
-            : "Run the daily job (npm run job -- daily) to discover and score traders."}
+            : tier === "hidden"
+              ? "No hidden traders. Press “No” on a trader to hide them from this list."
+              : "Run the daily job (npm run job -- daily) to discover and score traders."}
         </EmptyState>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {list.map((t) => (
-            <TraderCard key={t.wallet} t={t} />
+            <TraderCard key={t.wallet} t={t} admin={admin} />
           ))}
         </div>
       )}

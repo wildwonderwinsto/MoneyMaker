@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Sparkline } from "@/components/charts/sparkline";
 import { Avatar, Signed, TierBadge } from "@/components/common";
 import { FollowButton } from "@/components/follow-button";
+import { HideButton } from "@/components/hide-button";
 import { Card } from "@/components/ui/card";
 import { pct, traderName, usd } from "@/lib/format";
 import type { TraderListItem } from "@/lib/queries";
@@ -12,10 +13,11 @@ function cumulative(monthly: Array<{ pnl: number }> | undefined): number[] {
   return (monthly ?? []).map((m) => (sum += m.pnl));
 }
 
-export function TraderCard({ t }: { t: TraderListItem }) {
+export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) {
   const metrics = t.metrics as {
     monthlyPnl?: Array<{ month: string; pnl: number }>;
     resolvedWinRate?: number | null;
+    nCopyReplays?: number;
   };
   const curve = cumulative(metrics.monthlyPnl);
   const name = traderName(t);
@@ -69,6 +71,12 @@ export function TraderCard({ t }: { t: TraderListItem }) {
             <dt className="text-muted-foreground text-xs">If copied 2 min late</dt>
             <dd className="font-medium">
               <Signed value={t.copyAdjRoi}>{pct(t.copyAdjRoi, 1, { sign: true })}</Signed>
+              {typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0 && (
+                <span className="text-muted-foreground text-xs font-normal">
+                  {" "}
+                  · {metrics.nCopyReplays} trades
+                </span>
+              )}
             </dd>
           </div>
         </dl>
@@ -85,14 +93,25 @@ export function TraderCard({ t }: { t: TraderListItem }) {
           <Sparkline values={curve} label={`Cumulative profit trend for ${name}`} />
         </div>
       </Link>
-      <div className="flex items-center justify-between border-t px-4 py-2.5">
+      <div className="flex items-center justify-between gap-2 border-t px-4 py-2.5">
         <Link
           href={`/traders/${t.wallet}`}
           className="text-muted-foreground hover:text-foreground text-sm"
         >
           Why this score →
         </Link>
-        <FollowButton wallet={t.wallet} following={!!t.following} />
+        {admin ? (
+          <div className="flex items-center gap-1">
+            <HideButton wallet={t.wallet} hidden={!!t.hidden} />
+            {!t.hidden && <FollowButton wallet={t.wallet} following={!!t.following} />}
+          </div>
+        ) : (
+          t.following && (
+            <span className="bg-yes/10 text-yes rounded-full px-2.5 py-1 text-xs font-semibold">
+              Following
+            </span>
+          )
+        )}
       </div>
     </Card>
   );

@@ -12,6 +12,7 @@ const toInfo = (m: MarketRow): MarketInfo => ({
   conditionId: m.conditionId,
   question: m.question,
   slug: m.slug,
+  eventSlug: m.eventSlug,
   image: m.image,
   endDate: m.endDate,
   closed: m.closed,
@@ -29,7 +30,7 @@ export async function getMarketInfo(
   conditionIds: string[],
   maxAgeMs = 10 * 60_000,
 ): Promise<Map<string, MarketInfo>> {
-  const ids = [...new Set(conditionIds)];
+  const ids = [...new Set(conditionIds.filter(Boolean))];
   const out = new Map<string, MarketInfo>();
   if (ids.length === 0) return out;
 
@@ -72,7 +73,9 @@ export async function getMarketInfo(
       target: markets.conditionId,
       set: {
         question: sql`excluded.question`,
-        image: sql`excluded.image`,
+        slug: sql`coalesce(excluded.slug, ${markets.slug})`,
+        eventSlug: sql`coalesce(excluded.event_slug, ${markets.eventSlug})`,
+        image: sql`coalesce(excluded.image, ${markets.image})`,
         endDate: sql`excluded.end_date`,
         closed: sql`excluded.closed`,
         outcomes: sql`excluded.outcomes`,

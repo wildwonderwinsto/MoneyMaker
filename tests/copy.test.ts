@@ -65,11 +65,11 @@ describe("sizeBuy", () => {
   };
 
   it("mirrors the leader's conviction as a fraction of our equity", () => {
-    expect(sizeBuy(base, cfg)).toEqual({ usd: 50 }); // 5% of their book → 5% of ours
+    expect(sizeBuy(base, cfg)).toMatchObject({ usd: 50 }); // 5% of their book → 5% of ours
   });
 
   it("caps at the per-market limit", () => {
-    expect(sizeBuy({ ...base, leaderUsd: 5000 }, cfg)).toEqual({ usd: 100 });
+    expect(sizeBuy({ ...base, leaderUsd: 5000 }, cfg)).toMatchObject({ usd: 100 });
   });
 
   it("ignores the leader's dust trades with a clear reason", () => {
@@ -80,7 +80,7 @@ describe("sizeBuy", () => {
 
   it("applies the minimum copy size to a whale's meaningful but tiny-fraction trade", () => {
     // $100 of a $1M book = 0.01% → $0.10 on our $1000, floored to $5.
-    expect(sizeBuy({ ...base, leaderUsd: 100, leaderPortfolioUsd: 1_000_000 }, cfg)).toEqual({
+    expect(sizeBuy({ ...base, leaderUsd: 100, leaderPortfolioUsd: 1_000_000 }, cfg)).toMatchObject({
       usd: 5,
     });
   });
@@ -92,7 +92,7 @@ describe("sizeBuy", () => {
 
   it("respects exposure already taken", () => {
     const r = sizeBuy({ ...base, marketExposure: 100 }, cfg);
-    expect(r).toEqual({ usd: 0, reason: "Per-market limit reached" });
+    expect(r).toMatchObject({ usd: 0, reason: "Per-market limit reached", code: "market_cap" });
   });
 });
 
@@ -180,6 +180,10 @@ describe("decideSell", () => {
 
   it("skips when we never copied the position", () => {
     const d = decideSell({ trade, ourShares: 0, leaderSoldFraction: 1, book, cfg });
-    expect(d).toEqual({ action: "skip", reason: "No copied position to close" });
+    expect(d).toMatchObject({
+      action: "skip",
+      reason: "No copied position to close",
+      code: "no_position",
+    });
   });
 });
