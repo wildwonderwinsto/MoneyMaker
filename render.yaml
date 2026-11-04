@@ -10,7 +10,8 @@ services:
     region: oregon
     # Migrations run during the build so the schema is ready before the new version starts.
     buildCommand: npm ci && npm run db:migrate && npm run build
-    startCommand: npm start
+    # Heap cap applies only to the running site (512 MB instance), not to the build.
+    startCommand: NODE_OPTIONS=--max-old-space-size=384 npm start
     healthCheckPath: /api/health
     autoDeployTrigger: checksPass
     envVars:
@@ -20,5 +21,3 @@ services:
         sync: false
       - key: CRON_SECRET # random secret; copy it into the cron-job.org request header
         generateValue: true
-      - key: NODE_OPTIONS # stay well inside the 512 MB free instance
-        value: --max-old-space-size=384
