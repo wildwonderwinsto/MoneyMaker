@@ -29,6 +29,35 @@ describe("backfillTrader", () => {
     expect(calls.map((c) => c.status).sort()).toEqual(["CLOSED", "OPEN"]);
     expect(calls.every((c) => c.sortBy === "TIMESTAMP")).toBe(true);
   });
+
+  it("drops stored positions that are no longer in the latest fetch", async () => {
+    await db.insert(traders).values({ wallet: "0xstale" }).onConflictDoNothing();
+    await db.insert(traderPositions).values([
+      { wallet: "0xstale", conditionId: "c-old", tokenId: "t-old", status: "CLOSED" },
+      { wallet: "0xother", conditionId: "c-x", tokenId: "t-x", status: "CLOSED" },
+    ]);
+    const fresh = {
+      proxy_wallet: "0xstale",
+      token_id: "t-new",
+      condition_id: "c-new",
+      current_size: 0,
+      avg_price: 0.5,
+      total_size: 10,
+      realized_pnl: 1,
+      status: "CLOSED",
+    } as data.Position;
+    vi.mocked(data.getPositions).mockImplementation(async ({ status }) => ({
+      data: status === "CLOSED" ? [fresh] : [],
+      pagination: { has_more: false, next_cursor: null },
+    }));
+    vi.mocked(data.getUserPnl).mockResolvedValue([]);
+    await backfillTrader(db, "0xstale", { maxPositionsPerStatus: 10 });
+    const rows = await db
+      .select({ w: traderPositions.wallet, t: traderPositions.tokenId })
+      .from(traderPositions);
+    expect(rows.filter((r) => r.w === "0xstale").map((r) => r.t)).toEqual(["t-new"]);
+    expect(rows.some((r) => r.w === "0xother")).toBe(true); // other wallets untouched
+  });
 });
 
 let db: Db;

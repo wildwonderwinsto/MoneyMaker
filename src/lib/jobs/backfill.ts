@@ -6,7 +6,7 @@
  * status OPEN/REDEEMABLE (current_price 0) rather than CLOSED, so BOTH lists are
  * fetched — using CLOSED alone would hide most losses.
  */
-import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { markets, traderPnlDaily, traderPositions, traders, traderTrades } from "@/lib/db/schema";
@@ -92,6 +92,17 @@ export async function backfillTrader(
         },
       });
   }
+
+  // Keep exactly the latest fetch: rows that fell out of the window (or came from an
+  // older, differently sorted fetch) would otherwise linger and skew the metrics.
+  const keep = rows.map((r) => r.tokenId);
+  await db
+    .delete(traderPositions)
+    .where(
+      keep.length
+        ? and(eq(traderPositions.wallet, wallet), notInArray(traderPositions.tokenId, keep))
+        : eq(traderPositions.wallet, wallet),
+    );
 
   // Daily cumulative PnL (economic = realized + unrealized + income − fees).
   const byDay = new Map<string, number>();
