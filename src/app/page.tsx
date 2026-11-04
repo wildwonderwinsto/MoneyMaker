@@ -1,69 +1,132 @@
-import Image from "next/image";
+import { cn } from "cn";
+import { SearchX } from "lucide-react";
+import Link from "next/link";
+import { connection } from "next/server";
+import { Suspense } from "react";
 
-export default function Home() {
+import { EmptyState, PageHeader } from "@/components/common";
+import { TraderCard } from "@/components/trader-card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { timeAgo } from "@/lib/format";
+import { getJobRuns, getTierCounts, getTraderList, type TierFilter } from "@/lib/queries";
+
+const CATEGORIES = ["all", "politics", "sports", "crypto", "economics", "tech", "culture"];
+const TIERS: Array<{ value: TierFilter; label: string }> = [
+  { value: "verified", label: "Verified" },
+  { value: "watchlist", label: "Watchlist" },
+  { value: "followed", label: "Following" },
+  { value: "all", label: "Everyone" },
+];
+
+export default function TradersPage({ searchParams }: PageProps<"/">) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex w-full max-w-3xl flex-1 flex-col items-center justify-between bg-white px-16 py-32 sm:items-start dark:bg-black">
-        <Image
-          className="h-5 w-[100px] dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl leading-10 font-semibold tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <>
+      <PageHeader
+        title="Top traders"
+        description="Polymarket traders ranked by consistency, not luck. Each one is tested against 16 checks: skill beyond what prices predicted, many separate wins (no one-hit wonders), steady months, and still profitable when copied a couple of minutes late."
+      />
+      <Suspense fallback={<GridSkeleton />}>
+        <TraderGrid searchParams={searchParams} />
+      </Suspense>
+    </>
+  );
+}
+
+function href(params: { tier: string; category: string }) {
+  const sp = new URLSearchParams();
+  if (params.tier !== "verified") sp.set("tier", params.tier);
+  if (params.category !== "all") sp.set("category", params.category);
+  const q = sp.toString();
+  return q ? `/?${q}` : "/";
+}
+
+async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["searchParams"] }) {
+  await connection();
+  const sp = await searchParams;
+  const tier = (TIERS.find((t) => t.value === sp.tier)?.value ?? "verified") as TierFilter;
+  const category = CATEGORIES.includes(String(sp.category)) ? String(sp.category) : "all";
+
+  const [list, counts, runs] = await Promise.all([
+    getTraderList({ tier, category: category === "all" ? undefined : category }),
+    getTierCounts(),
+    getJobRuns(20),
+  ]);
+  const lastScore = runs.find((r) => (r.job === "daily" || r.job === "score") && r.status === "ok");
+  const verifiedCount = (counts.elite ?? 0) + (counts.verified ?? 0);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-1 overflow-x-auto" role="tablist" aria-label="Category">
+          {CATEGORIES.map((c) => (
+            <Link
+              key={c}
+              href={href({ tier, category: c })}
+              role="tab"
+              aria-selected={c === category}
+              className={cn(
+                "rounded-full px-3 py-1.5 text-sm font-medium capitalize transition-colors",
+                c === category
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              {c}
+            </Link>
+          ))}
+        </div>
+        <div className="bg-muted flex gap-1 rounded-lg p-1" role="tablist" aria-label="Tier">
+          {TIERS.map((t) => (
+            <Link
+              key={t.value}
+              href={href({ tier: t.value, category })}
+              role="tab"
+              aria-selected={t.value === tier}
+              className={cn(
+                "rounded-md px-3 py-1 text-sm font-medium transition-colors",
+                t.value === tier
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              {t.label}
+              {t.value === "verified" && ` (${verifiedCount})`}
+              {t.value === "watchlist" && ` (${counts.watchlist ?? 0})`}
+            </Link>
+          ))}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="bg-foreground text-background flex h-12 w-full items-center justify-center gap-2 rounded-full px-5 transition-colors hover:bg-[#383838] md:w-[158px] dark:hover:bg-[#ccc]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="h-[14px] w-4 dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] md:w-[158px] dark:border-white/[.145] dark:hover:bg-[#1a1a1a]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </div>
+
+      <p className="text-muted-foreground text-xs">
+        {lastScore
+          ? `Scores updated ${timeAgo(lastScore.finishedAt ?? lastScore.startedAt)} · `
+          : "Not scored yet · "}
+        {Object.values(counts).reduce((a, b) => a + (b ?? 0), 0)} traders analysed
+      </p>
+
+      {list.length === 0 ? (
+        <EmptyState title="No traders here yet" icon={SearchX}>
+          {tier === "verified"
+            ? "Nobody has passed every check yet. That's the filter doing its job. Look at the Watchlist, or wait for the next daily scoring run."
+            : "Run the daily job (npm run job -- daily) to discover and score traders."}
+        </EmptyState>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {list.map((t) => (
+            <TraderCard key={t.wallet} t={t} />
+          ))}
         </div>
-      </main>
+      )}
+    </div>
+  );
+}
+
+function GridSkeleton() {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      {Array.from({ length: 6 }, (_, i) => (
+        <Skeleton key={i} className="h-64 rounded-xl" />
+      ))}
     </div>
   );
 }
