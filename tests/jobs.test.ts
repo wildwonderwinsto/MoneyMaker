@@ -1,11 +1,35 @@
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
 import { markets, traderPnlDaily, traderPositions, traders, traderTrades } from "@/lib/db/schema";
-import { cleanupStorage, prunePositions } from "@/lib/jobs/backfill";
+import { backfillTrader, cleanupStorage, prunePositions } from "@/lib/jobs/backfill";
+import * as data from "@/lib/polymarket/data";
 
 import { createTestDb } from "./helpers/db";
+
+vi.mock("@/lib/polymarket/data", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/polymarket/data")>()),
+  getPositions: vi.fn(),
+  getUserPnl: vi.fn(),
+}));
+
+describe("backfillTrader", () => {
+  it("requests positions newest-first so the cap can't cherry-pick winners", async () => {
+    // Regression: the API defaults to largest-profit-first; capping that list kept only
+    // each trader's best bets and inflated ROI ~8x for an active wallet.
+    vi.mocked(data.getPositions).mockResolvedValue({
+      data: [],
+      pagination: { has_more: false, next_cursor: null },
+    });
+    vi.mocked(data.getUserPnl).mockResolvedValue([]);
+    await db.insert(traders).values({ wallet: "0xsort" }).onConflictDoNothing();
+    await backfillTrader(db, "0xsort", { maxPositionsPerStatus: 10 });
+    const calls = vi.mocked(data.getPositions).mock.calls.map((c) => c[0]);
+    expect(calls.map((c) => c.status).sort()).toEqual(["CLOSED", "OPEN"]);
+    expect(calls.every((c) => c.sortBy === "TIMESTAMP")).toBe(true);
+  });
+});
 
 let db: Db;
 let close: () => Promise<void>;

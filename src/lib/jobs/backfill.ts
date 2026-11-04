@@ -52,9 +52,11 @@ export async function backfillTrader(
   wallet: string,
   opts: BackfillOptions,
 ): Promise<{ positions: number; pnlPoints: number }> {
+  // IMPORTANT: the API's default order is largest realized PnL first, so capping that list
+  // would keep only a trader's best bets. Newest-first makes the cap outcome-neutral.
   const fetchAll = (status: "OPEN" | "CLOSED") =>
     collect(
-      paginate((cursor) => getPositions({ user: wallet, status, cursor }), {
+      paginate((cursor) => getPositions({ user: wallet, status, cursor, sortBy: "TIMESTAMP" }), {
         maxItems: opts.maxPositionsPerStatus,
       }),
     );
