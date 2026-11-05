@@ -666,9 +666,27 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
     .limit(200);
   if (rows.length === 0) return;
 
+  // A leader who already sold what they bought: buying it now would leave us holding a
+  // position they exited, and no later sell would ever close it.
+  const sells = await db
+    .select({ wallet: signals.wallet, tokenId: signals.tokenId, ts: signals.leaderTs })
+    .from(signals)
+    .where(
+      and(
+        eq(signals.accountId, ctx.accountId),
+        eq(signals.side, "SELL"),
+        gte(signals.leaderTs, since),
+      ),
+    );
+  const soldAfter = (r: (typeof rows)[number]) =>
+    sells.some(
+      (s) =>
+        s.wallet === r.wallet && s.tokenId === r.tokenId && s.ts.getTime() > r.leaderTs.getTime(),
+    );
+
   const groups = new Map<string, typeof rows>();
   for (const r of rows) {
-    if (!ctx.weights.has(r.wallet)) continue;
+    if (!ctx.weights.has(r.wallet) || soldAfter(r)) continue;
     const key = r.groupId ?? r.id;
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }

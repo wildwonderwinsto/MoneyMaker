@@ -209,6 +209,23 @@ describe("real-time copying", () => {
     expect(copied.reason).toMatch(/Copied on re-check/);
     expect(await cash()).toBeCloseTo(cashBefore - 20, 6);
   });
+
+  it("doesn't buy on re-check once the leader has sold", async () => {
+    // The NO side, so the YES copy the hedging tests use stays untouched.
+    books[NO] = book(NO, [[0.8, 1000]], [[0.49, 1000]]); // swept
+    const leg = { tokenId: NO, outcome: "No", size: 200, usdc: 100 };
+    const buy = streamTrade({ ...leg, id: "0xs3:222:BUY:200", ts: t0 + 70 });
+    await runStreamBatch(db, [buy], (t0 + 71) * 1000);
+    vi.mocked(data.getPositions).mockResolvedValue(page([])); // leader fully exited
+    const sell = streamTrade({ ...leg, id: "0xs4:222:SELL:200", side: "SELL", ts: t0 + 80 });
+    await runStreamBatch(db, [sell], (t0 + 81) * 1000);
+
+    books[NO] = book(NO, [[0.51, 1000]], [[0.49, 1000]]); // price is back
+    const s = await runTick(db, (t0 + 90) * 1000);
+    expect(s.retried).toBe(0);
+    const [sig] = await db.select().from(signals).where(eq(signals.id, buy.id));
+    expect(sig).toMatchObject({ decision: "skipped", reasonCode: "price_moved" });
+  });
 });
 
 describe("hedging", () => {
