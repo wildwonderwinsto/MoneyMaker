@@ -58,6 +58,31 @@ describe("backfillTrader", () => {
     expect(rows.filter((r) => r.w === "0xstale").map((r) => r.t)).toEqual(["t-new"]);
     expect(rows.some((r) => r.w === "0xother")).toBe(true); // other wallets untouched
   });
+
+  it("stores trading PnL, not rebates and rewards a copier can't earn", async () => {
+    vi.mocked(data.getPositions).mockResolvedValue({
+      data: [],
+      pagination: { has_more: false, next_cursor: null },
+    });
+    // A market maker: losing on trades, profitable only thanks to rebates.
+    vi.mocked(data.getUserPnl).mockResolvedValue([
+      {
+        timestamp: Date.UTC(2026, 9, 1) / 1000,
+        realized_pnl: -50,
+        unrealized_pnl: 10,
+        position_pnl: -40,
+        economic_pnl: 60,
+      },
+    ]);
+    await db.insert(traders).values({ wallet: "0xmaker" }).onConflictDoNothing();
+    await backfillTrader(db, "0xmaker", { maxPositionsPerStatus: 10 });
+    const [row] = await db
+      .select()
+      .from(traderPnlDaily)
+      .where(eq(traderPnlDaily.wallet, "0xmaker"));
+    expect(row.pnl).toBe(-40);
+    await db.delete(traderPnlDaily).where(eq(traderPnlDaily.wallet, "0xmaker")); // isolation
+  });
 });
 
 let db: Db;

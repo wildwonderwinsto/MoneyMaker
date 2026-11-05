@@ -111,10 +111,11 @@ export async function backfillTrader(
         : eq(traderPositions.wallet, wallet),
     );
 
-  // Daily cumulative PnL (economic = realized + unrealized + income − fees).
+  // Daily cumulative trading PnL (realized + unrealized, after fees). Rebates and rewards
+  // are left out: market makers earn them, a copier doesn't, so they'd fake consistency.
   const byDay = new Map<string, number>();
   for (const pt of pnl) {
-    const value = pt.economic_pnl ?? pt.realized_pnl;
+    const value = pt.position_pnl ?? pt.economic_pnl ?? pt.realized_pnl;
     if (value === null || value === undefined) continue;
     byDay.set(new Date(pt.timestamp * 1000).toISOString().slice(0, 10), value);
   }

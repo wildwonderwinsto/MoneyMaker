@@ -263,7 +263,13 @@ export const PnlPoint = z.object({
   timestamp: z.number(),
   realized_pnl: num,
   unrealized_pnl: num,
-  /** Realized + unrealized + income − fees: the closest thing to an equity curve. */
+  /**
+   * Realized + unrealized, after the trader's own fees. Excludes wallet income (maker/taker
+   * rebates, liquidity rewards, yield), which a copier can't earn. Verified Nov 2026:
+   * economic_pnl = position_pnl + wallet_income.
+   */
+  position_pnl: num,
+  /** position_pnl + wallet income (rebates, rewards, yield). */
   economic_pnl: num,
 });
 export type PnlPoint = z.infer<typeof PnlPoint>;
