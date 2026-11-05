@@ -73,9 +73,21 @@ export async function backfillTrader(
     getUserPnl({ user: wallet, interval: "all", fidelity: "1d" }),
   ]);
 
+  // Both lists come newest-first by last event. A list that hit the cap only reaches back
+  // to its oldest row, while the other may go back years (e.g. unclaimed losers with no
+  // matching winners), which skews win rates. Keep both to the window complete for both.
+  const cutoff = Math.max(
+    0,
+    ...[closed, open]
+      .filter((list) => list.length >= opts.maxPositionsPerStatus)
+      .map((list) => Math.min(...list.map((p) => p.last_event_at ?? Infinity))),
+  );
+
   // De-duplicate by token (a position can move between lists between requests).
   const byToken = new Map<string, typeof traderPositions.$inferInsert>();
-  for (const p of [...closed, ...open]) byToken.set(p.token_id, positionRow(p));
+  for (const p of [...closed, ...open]) {
+    if ((p.last_event_at ?? Infinity) >= cutoff) byToken.set(p.token_id, positionRow(p));
+  }
   const rows = [...byToken.values()];
 
   for (const part of chunk(rows, 400)) {
@@ -123,7 +135,18 @@ export async function backfillTrader(
   const pnlRows = [...byDay].map(([day, value]) => ({ wallet, day, pnl: value }));
   for (const part of chunk(pnlRows, 1000)) await db.insert(traderPnlDaily).values(part);
 
-  await db.update(traders).set({ lastBackfillAt: new Date() }).where(eq(traders.wallet, wallet));
+  // Last real trade: the last day the cumulative trade count went up.
+  const points = [...pnl].sort((a, b) => a.timestamp - b.timestamp);
+  let lastTrade: number | null = null;
+  for (let i = 1; i < points.length; i++) {
+    if ((points[i].trade_count ?? 0) > (points[i - 1].trade_count ?? 0)) {
+      lastTrade = points[i].timestamp;
+    }
+  }
+  await db
+    .update(traders)
+    .set({ lastBackfillAt: new Date(), lastTradeAt: toDate(lastTrade) })
+    .where(eq(traders.wallet, wallet));
   return { positions: rows.length, pnlPoints: pnlRows.length };
 }
 

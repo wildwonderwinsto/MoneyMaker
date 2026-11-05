@@ -105,7 +105,14 @@ export function asOf(input: MetricsInput, at: number): MetricsInput {
     ...input,
     now: at,
     copyReplays: null,
-    positions: input.positions.filter((p) => (p.endAt ?? p.lastActivityAt ?? Infinity) < at),
+    // Today's last-trade time would leak the future; fall back to positions.
+    activity: { ...input.activity, lastTradeAt: null },
+    // Known by `at` once the trader's last event on it (sell, claim, settlement) came
+    // before `at`. Market end dates are unreliable (placeholders, or before entry).
+    positions: input.positions
+      .filter((p) => (p.lastActivityAt ?? p.endAt ?? Infinity) < at)
+      // Sold before `at`, but the market settled later: its outcome wasn't known yet.
+      .map((p) => (p.won !== null && (p.resolvedAt ?? -Infinity) >= at ? { ...p, won: null } : p)),
     pnlSeries: input.pnlSeries.filter((pt) => pt.ts < at),
   };
 }
@@ -179,7 +186,7 @@ function simulatedPicks(
       wallet: t.wallet,
       pnl: t.positions
         .filter((p) => {
-          const at = p.endAt ?? p.lastActivityAt ?? Infinity;
+          const at = p.lastActivityAt ?? p.endAt ?? Infinity;
           return p.closed && at >= start - 30 * DAY && at < start;
         })
         .reduce((a, p) => a + p.realizedPnl, 0),

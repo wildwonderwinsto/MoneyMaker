@@ -49,6 +49,8 @@ export const traders = pgTable("traders", {
   leaderboardCategory: text(),
   firstSeenAt: createdAt(),
   lastBackfillAt: tsz(),
+  /** Day of the last real trade (trade count went up); claims and settlements don't count. */
+  lastTradeAt: tsz(),
   updatedAt: createdAt(),
 });
 

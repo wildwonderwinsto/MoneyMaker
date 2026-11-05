@@ -9,6 +9,7 @@ import { inArray, isNotNull, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import {
+  markets,
   traderPnlDaily,
   traderPositions,
   traders,
@@ -123,12 +124,30 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
         wallet: p.wallet,
         positions: [],
         pnlSeries: [],
-        activity: { tradeCount: p.tradeCount, joinDate: toEpoch(p.joinedAt) },
+        activity: {
+          tradeCount: p.tradeCount,
+          joinDate: toEpoch(p.joinedAt),
+          lastTradeAt: toEpoch(p.lastTradeAt),
+        },
         copyReplays: null,
         now,
       });
     }
-    for (const r of positions) inputs.get(r.wallet)?.positions.push(toPositionRecord(r));
+    // When each market actually settled (the backtest must not know outcomes early).
+    const settled = new Map<string, number | null>();
+    for (const ids of chunk([...new Set(positions.map((r) => r.conditionId))], 1000)) {
+      const rows = await db
+        .select({ id: markets.conditionId, at: markets.resolvedAt })
+        .from(markets)
+        .where(inArray(markets.conditionId, ids));
+      for (const m of rows) settled.set(m.id, toEpoch(m.at));
+    }
+    for (const r of positions) {
+      inputs.get(r.wallet)?.positions.push({
+        ...toPositionRecord(r),
+        resolvedAt: settled.get(r.conditionId) ?? null,
+      });
+    }
     for (const r of pnl) {
       inputs
         .get(r.wallet)

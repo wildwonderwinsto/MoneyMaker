@@ -25,8 +25,10 @@ export interface PositionRecord {
   /** Epoch seconds. */
   firstEntryAt: number | null;
   lastActivityAt: number | null;
-  /** Market end date (epoch seconds), used by the backtest to avoid look-ahead. */
+  /** Market end date (epoch seconds). Unreliable: often a placeholder or before entry. */
   endAt?: number | null;
+  /** When the market actually settled (epoch seconds), if known. */
+  resolvedAt?: number | null;
 }
 
 export interface PnlSeriesPoint {
@@ -41,6 +43,8 @@ export interface ActivityProfile {
   tradeCount: number | null;
   /** Epoch seconds. */
   joinDate: number | null;
+  /** Last real trade (epoch seconds), from the trade count; null = use positions. */
+  lastTradeAt?: number | null;
 }
 
 /** A leader BUY replayed as if we entered `copyDelaySeconds` later. */
@@ -335,11 +339,14 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     .filter((p) => p.firstEntryAt && p.lastActivityAt && p.lastActivityAt >= p.firstEntryAt)
     .map((p) => (p.lastActivityAt! - p.firstEntryAt!) / 3600);
 
-  const lastTradeAt = positions.reduce<number | null>(
-    (acc, p) =>
-      p.lastActivityAt && (acc === null || p.lastActivityAt > acc) ? p.lastActivityAt : acc,
-    null,
-  );
+  // Position activity also counts claims and settlements, so prefer the real last trade.
+  const lastTradeAt =
+    activity.lastTradeAt ??
+    positions.reduce<number | null>(
+      (acc, p) =>
+        p.lastActivityAt && (acc === null || p.lastActivityAt > acc) ? p.lastActivityAt : acc,
+      null,
+    );
 
   const costByCategory = new Map<string, number>();
   for (const p of positions) {

@@ -69,6 +69,55 @@ describe("backfillTrader", () => {
     expect(rows.some((r) => r.w === "0xother")).toBe(true); // other wallets untouched
   });
 
+  it("keeps both position lists to the window complete for both when one hits the cap", async () => {
+    const pos = (token: string, lastEvent: number, status: string) =>
+      ({
+        proxy_wallet: "0xcap",
+        token_id: token,
+        condition_id: `c-${token}`,
+        current_size: 0,
+        avg_price: 0.5,
+        total_size: 10,
+        realized_pnl: 1,
+        status,
+        last_event_at: lastEvent,
+      }) as data.Position;
+    // CLOSED hits the cap of 3 and only reaches back to t=100; OPEN goes back to t=10.
+    vi.mocked(data.getPositions).mockImplementation(async ({ status }) => ({
+      data:
+        status === "CLOSED"
+          ? [pos("w1", 300, "CLOSED"), pos("w2", 200, "CLOSED"), pos("w3", 100, "CLOSED")]
+          : [pos("l1", 250, "REDEEMABLE"), pos("l2", 10, "REDEEMABLE")],
+      pagination: { has_more: false, next_cursor: null },
+    }));
+    vi.mocked(data.getUserPnl).mockResolvedValue([]);
+    await db.insert(traders).values({ wallet: "0xcap" }).onConflictDoNothing();
+    await backfillTrader(db, "0xcap", { maxPositionsPerStatus: 3 });
+    const rows = await db
+      .select({ t: traderPositions.tokenId })
+      .from(traderPositions)
+      .where(eq(traderPositions.wallet, "0xcap"));
+    expect(rows.map((r) => r.t).sort()).toEqual(["l1", "w1", "w2", "w3"]); // l2 is too old
+  });
+
+  it("records the last real trade from the trade count, not claims", async () => {
+    vi.mocked(data.getPositions).mockResolvedValue({
+      data: [],
+      pagination: { has_more: false, next_cursor: null },
+    });
+    const day = (d: number) => Date.UTC(2026, 9, d) / 1000;
+    vi.mocked(data.getUserPnl).mockResolvedValue([
+      { timestamp: day(1), trade_count: 10, position_pnl: 0 },
+      { timestamp: day(2), trade_count: 12, position_pnl: 5 },
+      { timestamp: day(3), trade_count: 12, position_pnl: 9 }, // only a claim / settlement
+    ]);
+    await db.insert(traders).values({ wallet: "0xlast" }).onConflictDoNothing();
+    await backfillTrader(db, "0xlast", { maxPositionsPerStatus: 10 });
+    const [t] = await db.select().from(traders).where(eq(traders.wallet, "0xlast"));
+    expect(t.lastTradeAt?.getTime()).toBe(day(2) * 1000);
+    await db.delete(traderPnlDaily).where(eq(traderPnlDaily.wallet, "0xlast")); // isolation
+  });
+
   it("stores trading PnL, not rebates and rewards a copier can't earn", async () => {
     vi.mocked(data.getPositions).mockResolvedValue({
       data: [],

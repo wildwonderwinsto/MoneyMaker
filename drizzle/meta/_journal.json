@@ -50,6 +50,13 @@
       "when": 1793849815497,
       "tag": "0006_monthly_selections",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793852610853,
+      "tag": "0007_trader_last_trade",
+      "breakpoints": true
     }
   ]
 }

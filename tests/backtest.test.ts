@@ -62,6 +62,47 @@ describe("asOf (no look-ahead)", () => {
     expect(past.positions.every((p) => (p.endAt ?? p.lastActivityAt!) < cut)).toBe(true);
     expect(past.pnlSeries.every((pt) => pt.ts < cut)).toBe(true);
   });
+
+  it("goes by when the trader's position ended, not the market's listed end date", () => {
+    const at = 1_000_000;
+    const p = {
+      conditionId: "c",
+      tokenId: "t",
+      eventId: null,
+      category: null,
+      avgPrice: 0.5,
+      sharesBought: 10,
+      realizedPnl: 5,
+      unrealizedPnl: 0,
+      closed: true,
+      won: true,
+      firstEntryAt: at + 100,
+      lastActivityAt: at + 200,
+      endAt: at - 1, // listed end date before the trade even happened
+    };
+    const input = {
+      wallet: "0x1",
+      positions: [
+        p,
+        {
+          ...p,
+          tokenId: "sold",
+          firstEntryAt: at - 500,
+          lastActivityAt: at - 100,
+          resolvedAt: at + 50,
+        },
+      ],
+      pnlSeries: [],
+      activity: { tradeCount: null, joinDate: null, lastTradeAt: at + 999 },
+      copyReplays: null,
+      now: at + 1000,
+    };
+    const past = asOf(input, at);
+    // The future trade is excluded; the one sold before `at` stays, but its market only
+    // settled afterwards, so its outcome is unknown at `at`.
+    expect(past.positions.map((x) => [x.tokenId, x.won])).toEqual([["sold", null]]);
+    expect(past.activity.lastTradeAt).toBeNull();
+  });
 });
 
 describe("runBacktest", () => {
@@ -266,6 +307,22 @@ describe("copy-adjusted ROI sample size", () => {
     expect(sample[0]).toBe(0);
     expect(sample.at(-1)).toBeGreaterThan(275); // reaches the oldest trades too
     expect(evenSample([1, 2, 3], 150)).toEqual([1, 2, 3]);
+  });
+
+  it("judges activity by the last real trade when it is known", () => {
+    const base = {
+      wallet: "0x1",
+      positions: [],
+      pnlSeries: [],
+      copyReplays: null,
+      now: 1_800_000_000,
+    };
+    const last = 1_800_000_000 - 20 * 86_400;
+    const m = computeMetrics(
+      { ...base, activity: { tradeCount: null, joinDate: null, lastTradeAt: last } },
+      cfg,
+    );
+    expect(m.daysSinceTrade).toBeCloseTo(20);
   });
 
   it("fetches enough trades to cover the whole replay window", () => {

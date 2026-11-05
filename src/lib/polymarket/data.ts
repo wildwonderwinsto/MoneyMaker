@@ -271,6 +271,8 @@ export const PnlPoint = z.object({
   position_pnl: num,
   /** position_pnl + wallet income (rebates, rewards, yield). */
   economic_pnl: num,
+  /** Lifetime fills up to this point (cumulative). */
+  trade_count: num,
 });
 export type PnlPoint = z.infer<typeof PnlPoint>;
 
