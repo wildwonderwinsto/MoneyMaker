@@ -51,7 +51,9 @@ export function SiteHeader() {
   return (
     <>
       <header className="bg-card/90 sticky top-0 z-40 border-b backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-6 sm:pt-3 sm:pb-0">
+        {/* Phones: one row (tabs live in the bottom bar). Tablets: tabs on a second row.
+            Desktop (lg): logo, tabs and controls share one row, all vertically centred. */}
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-2 px-4 py-2.5 sm:gap-x-3 sm:px-6 sm:pt-3 sm:pb-0 lg:py-0">
           <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
             <Logo />
             <span className="text-lg">MoneyMaker</span>
@@ -59,17 +61,18 @@ export function SiteHeader() {
           <span className="bg-primary/10 text-primary hidden rounded-full px-2.5 py-0.5 text-xs font-semibold min-[400px]:inline">
             Paper
           </span>
-          <div className="ml-auto flex items-center gap-2">
+          {/* -mr-2: the toggle's icon lines up with the page edge, not its invisible box. */}
+          <div className="-mr-2 ml-auto flex items-center gap-2 lg:order-last">
             <Suspense fallback={null}>
               <AccessChip />
             </Suspense>
             <ThemeToggle />
           </div>
-        </div>
-        <div className="mx-auto max-w-7xl px-2 sm:px-4">
-          <Suspense fallback={<NavList />}>
-            <NavLinks />
-          </Suspense>
+          <div className="-mx-2 hidden basis-full sm:block lg:mx-0 lg:ml-3 lg:basis-auto">
+            <Suspense fallback={<NavList />}>
+              <NavLinks />
+            </Suspense>
+          </div>
         </div>
       </header>
       <Suspense fallback={<MobileNav />}>
