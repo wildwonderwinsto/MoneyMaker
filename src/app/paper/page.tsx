@@ -1,4 +1,3 @@
-import { cn } from "cn";
 import { ChevronDown, ChevronRight, LineChart as LineChartIcon, Shield } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -42,7 +41,7 @@ async function PaperContent() {
     (a, x) => a + x.shares * (x.currentPrice ?? x.avgPrice) - x.costBasis,
     0,
   );
-  const realized = p.closed.reduce((a, x) => a + x.realizedPnl, 0);
+
   const curve = [
     ...p.equityCurve,
     { t: new Date().toISOString(), equity: Math.round(p.equity * 100) / 100 },
@@ -69,7 +68,7 @@ async function PaperContent() {
           label="Unrealized P&L"
           value={usd(unrealized, { sign: true })}
           tone={toneOf(unrealized)}
-          hint={`Realized ${usd(realized, { sign: true })}`}
+          hint={`Realized ${usd(p.realized, { sign: true })}`}
         />
         <StatTile
           label="Win rate"
@@ -82,8 +81,8 @@ async function PaperContent() {
         <CardHeader className="px-3 sm:px-6">
           <CardTitle>Equity</CardTitle>
           <CardDescription>
-            Cash + open positions at market prices. ▲ marks a buy, ▼ a sell or settlement: hover or
-            tap one for the trade.
+            Cash + open positions at market prices. B marks a buy, S a sell or settlement: hover or
+            tap one for the trade and what it made or lost.
           </CardDescription>
         </CardHeader>
         <CardContent className="px-3 sm:px-6">
@@ -146,52 +145,19 @@ async function PaperContent() {
 
         <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
           <CardHeader className="px-3 sm:px-6">
-            <CardTitle>Recent fills</CardTitle>
-            <CardDescription>Simulated against the live order book</CardDescription>
+            <CardTitle>Finished trades</CardTitle>
+            <CardDescription>
+              Each buy paired with how it ended (sold or settled) and what it made or lost. Open
+              trades are listed under Open positions.
+            </CardDescription>
           </CardHeader>
           <CardContent className="px-3 sm:px-6">
-            {p.fills.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No fills yet.</p>
+            {p.closed.length === 0 ? (
+              <p className="text-muted-foreground text-sm">No finished trades yet.</p>
             ) : (
               <ul className="divide-y text-sm">
-                {p.fills.map(({ fill: f, title, outcome }) => (
-                  <li key={f.id}>
-                    <Link
-                      href={f.positionId ? `/paper/positions/${f.positionId}` : "/paper"}
-                      className="hover:bg-muted/50 -mx-2 flex items-center gap-3 rounded-md px-2 py-2"
-                    >
-                      <span
-                        className={cn(
-                          "w-11 shrink-0 text-xs font-semibold",
-                          f.side === "BUY" || f.side === "WIN"
-                            ? "text-yes"
-                            : f.side === "SPLIT"
-                              ? "text-muted-foreground"
-                              : "text-no",
-                        )}
-                      >
-                        {f.side}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="line-clamp-1">
-                          {title} <span className="text-muted-foreground">· {outcome}</span>
-                        </span>
-                        <span className="text-muted-foreground text-xs tabular-nums">
-                          {num(f.shares, 1)} @ {cents(f.avgPrice)} · {timeAgo(f.ts)}
-                        </span>
-                      </span>
-                      <span className="text-right tabular-nums">
-                        {usd(f.notional)}
-                        {f.realizedPnl !== null && (
-                          <span className="block text-xs">
-                            <Signed value={f.realizedPnl}>
-                              {usd(f.realizedPnl, { sign: true })}
-                            </Signed>
-                          </span>
-                        )}
-                      </span>
-                    </Link>
-                  </li>
+                {p.closed.map((t) => (
+                  <FinishedTrade key={t.id} t={t} names={names} />
                 ))}
               </ul>
             )}
@@ -250,6 +216,13 @@ function OpenPositions({
                       from {traderName({ name: names.get(x.sourceWallet), wallet: x.sourceWallet })}
                     </span>
                   )}
+                  {x.realizedPnl !== 0 && (
+                    <span>
+                      sold part:{" "}
+                      <Signed value={x.realizedPnl}>{usd(x.realizedPnl, { sign: true })}</Signed>{" "}
+                      locked in
+                    </span>
+                  )}
                 </span>
               </span>
               <span className="text-muted-foreground hidden text-right text-sm tabular-nums md:block">
@@ -275,6 +248,66 @@ function OpenPositions({
         );
       })}
     </ul>
+  );
+}
+
+/** How a finished trade ended, from its exit fills. */
+function exitLabel(t: PaperOverview["closed"][number]) {
+  const settled =
+    t.settlement === "WIN"
+      ? "settled: won"
+      : t.settlement === "LOSS"
+        ? "settled: lost"
+        : t.settlement === "SPLIT"
+          ? "settled 50/50"
+          : null;
+  if (!settled) return "Sold";
+  return t.soldShares > 0
+    ? `Sold part, rest ${settled}`
+    : settled[0].toUpperCase() + settled.slice(1);
+}
+
+function FinishedTrade({
+  t,
+  names,
+}: {
+  t: PaperOverview["closed"][number];
+  names: Map<string, string | null>;
+}) {
+  const avg = (usdAmt: number, shares: number) => (shares > 0 ? usdAmt / shares : null);
+  return (
+    <li>
+      <Link
+        href={`/paper/positions/${t.id}`}
+        className="hover:bg-muted/50 -mx-2 flex items-center gap-3 rounded-md px-2 py-2"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-1">
+            {t.title} <span className="text-muted-foreground">· {t.outcome}</span>
+          </span>
+          <span className="block text-xs tabular-nums">
+            <span className="text-yes font-semibold">Bought</span> {num(t.boughtShares, 1)} @{" "}
+            {cents(avg(t.boughtUsd, t.boughtShares))} for {usd(t.boughtUsd)}
+            <span className="text-muted-foreground"> → </span>
+            <span className="font-semibold">{exitLabel(t)}</span> @{" "}
+            {cents(avg(t.exitUsd, t.exitShares))} for {usd(t.exitUsd)}
+          </span>
+          <span className="text-muted-foreground block text-xs">
+            {t.kind === "hedge"
+              ? "hedge"
+              : `from ${traderName({ name: names.get(t.sourceWallet), wallet: t.sourceWallet })}`}{" "}
+            · closed {timeAgo(t.closedAt)}
+          </span>
+        </span>
+        <span className="text-right tabular-nums">
+          <Signed value={t.realizedPnl}>{usd(t.realizedPnl, { sign: true })}</Signed>
+          <span className="text-muted-foreground block text-xs">
+            {t.boughtUsd > 0 ? pct(t.realizedPnl / t.boughtUsd, 1, { sign: true }) : "—"}
+          </span>
+        </span>
+        <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden />
+      </Link>
+    </li>
   );
 }
 

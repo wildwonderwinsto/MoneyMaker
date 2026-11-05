@@ -1,6 +1,20 @@
 import "server-only";
 
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 
 import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
 import { readEngineStatus } from "@/lib/copy/status";
@@ -216,20 +230,26 @@ export async function getPaperOverview() {
   const state = await loadAccountState(db, account.id);
   const since = new Date(Date.now() - 90 * 86_400_000);
 
-  const [closed, fills, equity, byTrader, allPositions, markers] = await Promise.all([
+  // Per finished position: what we bought and how we got out (sells + settlement).
+  const fillSum = (expr: string, where: string) =>
+    sql<number>`coalesce((select sum(${sql.raw(expr)}) from paper_fills f where f.position_id = ${paperPositions.id} and ${sql.raw(where)}), 0)::float8`;
+  const [closed, equity, byTrader, allPositions, markers, totals] = await Promise.all([
     db
-      .select()
+      .select({
+        ...getTableColumns(paperPositions),
+        boughtShares: fillSum("f.shares", "f.side = 'BUY'"),
+        boughtUsd: fillSum("f.notional", "f.side = 'BUY'"),
+        exitShares: fillSum("f.shares", "f.side <> 'BUY'"),
+        exitUsd: fillSum("f.notional", "f.side <> 'BUY'"),
+        soldShares: fillSum("f.shares", "f.side = 'SELL'"),
+        settlement: sql<
+          string | null
+        >`(select f.side from paper_fills f where f.position_id = ${paperPositions.id} and f.kind = 'settlement' order by f.ts desc limit 1)`,
+      })
       .from(paperPositions)
       .where(and(eq(paperPositions.accountId, account.id), ne(paperPositions.status, "open")))
       .orderBy(desc(paperPositions.closedAt))
       .limit(100),
-    db
-      .select({ fill: paperFills, title: paperPositions.title, outcome: paperPositions.outcome })
-      .from(paperFills)
-      .leftJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
-      .where(eq(paperFills.accountId, account.id))
-      .orderBy(desc(paperFills.ts))
-      .limit(50),
     db
       .select()
       .from(equitySnapshots)
@@ -290,10 +310,19 @@ export async function getPaperOverview() {
       .where(and(eq(paperFills.accountId, account.id), gte(paperFills.ts, since)))
       .orderBy(asc(paperFills.ts))
       .limit(2000),
+    // Account-wide totals (the lists above are capped): realized includes partial sells
+    // of positions that are still open.
+    db
+      .select({
+        realized: sql<number>`coalesce(sum(${paperPositions.realizedPnl}), 0)::float8`,
+        finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open')::int`,
+        wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.realizedPnl} > 0)::int`,
+      })
+      .from(paperPositions)
+      .where(eq(paperPositions.accountId, account.id)),
   ]);
 
-  const finished = closed.filter((p) => p.status === "settled" || p.status === "closed");
-  const wins = finished.filter((p) => p.realizedPnl > 0).length;
+  const { realized, finished, wins } = totals[0];
   return {
     account: state.account,
     cash: state.cash,
@@ -302,10 +331,10 @@ export async function getPaperOverview() {
     totalReturn: state.equity / state.account.startingBalance - 1,
     open: state.open,
     closed,
-    fills,
     equityCurve: equity.map((e) => ({ t: e.ts.toISOString(), equity: e.equity })),
-    winRate: finished.length ? wins / finished.length : null,
-    finishedCount: finished.length,
+    realized,
+    winRate: finished ? wins / finished : null,
+    finishedCount: finished,
     byTrader: summarizeByTrader(byTrader, allPositions),
     markers,
   };
@@ -508,3 +537,16 @@ export async function getEngineStatus() {
   };
 }
 export type EngineStatusView = Awaited<ReturnType<typeof getEngineStatus>>;
+
+/**
+ * A cheap fingerprint of what the Live page shows: the newest signal and the engine's last
+ * check / real-time batch. The page polls it and re-renders only when it changes.
+ */
+export async function getLiveVersion(): Promise<string> {
+  const db = getDb();
+  const [[latest], status] = await Promise.all([
+    db.select({ at: sql<string | null>`max(${signals.detectedAt})::text` }).from(signals),
+    readEngineStatus(db),
+  ]);
+  return [latest?.at, status.lastTickAt, status.lastStreamBatchAt].join("|");
+}

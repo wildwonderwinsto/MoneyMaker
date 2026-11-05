@@ -57,3 +57,43 @@ export function groupSignals<T extends GroupableSignal>(rows: T[], windowMs = 15
   }
   return groups;
 }
+
+const HOUR = 3_600_000;
+
+/** Feed sections by age (time zone independent, so server and browser agree). */
+export function sectionsByAge<T extends GroupableSignal>(
+  groups: SignalGroup<T>[],
+  now = Date.now(),
+): Array<[label: string, groups: SignalGroup<T>[]]> {
+  const sections: Array<[string, SignalGroup<T>[]]> = [
+    ["Last hour", []],
+    ["Last 24 hours", []],
+    ["Older", []],
+  ];
+  for (const g of groups) {
+    const age = now - g.head.leaderTs.getTime();
+    sections[age < HOUR ? 0 : age < 24 * HOUR ? 1 : 2][1].push(g);
+  }
+  return sections.filter(([, list]) => list.length > 0);
+}
+
+/** Last 24 hours of the feed: counts per decision and the most common skip reasons. */
+export function summarize<T extends GroupableSignal>(groups: SignalGroup<T>[], now = Date.now()) {
+  const recent = groups.filter((g) => now - g.head.leaderTs.getTime() < 24 * HOUR);
+  const count = (d: string) => recent.filter((g) => g.head.decision === d).length;
+  const reasons = new Map<string, { label: string; n: number }>();
+  for (const g of recent) {
+    if (g.head.decision !== "skipped") continue;
+    const key = g.head.reasonCode ?? codeFromReason(g.head.reason);
+    const r = reasons.get(key) ?? { label: g.head.reason, n: 0 };
+    r.n++;
+    reasons.set(key, r);
+  }
+  return {
+    total: recent.length,
+    copied: count("copied"),
+    closed: count("closed"),
+    skipped: count("skipped"),
+    topSkipReasons: [...reasons.values()].sort((a, b) => b.n - a.n).slice(0, 3),
+  };
+}

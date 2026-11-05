@@ -3,9 +3,9 @@
 /**
  * Paper equity over time with every buy and sell marked on the line.
  * - Real time axis (points are spaced by when they happened, not evenly).
- * - Markers: ▲ buy (series-3), ▼ sell or settlement (series-2) on top of the equity line
- *   (series-1). Palette validated for color-blind separation in light and dark; shape is
- *   a second cue so identity never relies on color alone.
+ * - Markers: "B" badge for a buy (series-3), "S" badge for a sell or settlement (neutral
+ *   gray, so a sale never reads as a loss) on the equity line (series-1). The letter is a
+ *   second cue so identity never relies on color alone.
  * - Crosshair tooltip lists the trades at that moment. A range filter and zoom controls sit
  *   above (wheel / pinch / drag also zoom and pan, see ./zoom); a readable table (newest
  *   first, with change and trades per period) sits below.
@@ -155,27 +155,73 @@ function Tip({ active, payload }: TooltipContentProps) {
   );
 }
 
-type DotProps = { cx?: number; cy?: number; value?: number | null };
-const Up = ({ cx, cy, value }: DotProps) =>
-  value == null || cx == null || cy == null ? null : (
-    <path
-      d={`M${cx},${cy - 6} L${cx + 6},${cy + 4.5} L${cx - 6},${cy + 4.5} Z`}
-      fill="var(--series-3)"
-      stroke="var(--card)"
-      strokeWidth={2}
-      strokeLinejoin="round"
-    />
+type DotProps = { cx?: number; cy?: number; value?: number | null; payload?: Row };
+
+/**
+ * Trade marker: a lettered badge ("B" buy, "S" sell / settlement). A sale isn't a loss,
+ * so sells use a neutral color, not one that reads as red; the result is in the tooltip.
+ * Hovered (`active`), the badge grows and gets an outline instead of a separate dot.
+ */
+const Badge = ({
+  cx,
+  cy,
+  value,
+  letter,
+  fill,
+  active,
+}: DotProps & {
+  letter: string;
+  fill: string;
+  active?: boolean;
+}) => {
+  if (value == null || cx == null || cy == null) return null;
+  const r = active ? 9 : 7;
+  return (
+    <g pointerEvents="none">
+      <rect
+        x={cx - r}
+        y={cy - r}
+        width={r * 2}
+        height={r * 2}
+        rx={r * 0.45}
+        fill={fill}
+        stroke={active ? "var(--foreground)" : "var(--card)"}
+        strokeWidth={active ? 2 : 1.5}
+      />
+      <text
+        x={cx}
+        y={cy}
+        dy="0.35em"
+        textAnchor="middle"
+        fontSize={active ? 11 : 9}
+        fontWeight={700}
+        fill="#fff"
+      >
+        {letter}
+      </text>
+    </g>
   );
-const Down = ({ cx, cy, value }: DotProps) =>
-  value == null || cx == null || cy == null ? null : (
-    <path
-      d={`M${cx},${cy + 6} L${cx + 6},${cy - 4.5} L${cx - 6},${cy - 4.5} Z`}
-      fill="var(--series-2)"
-      stroke="var(--card)"
-      strokeWidth={2}
-      strokeLinejoin="round"
-    />
+};
+const BUY_FILL = "var(--series-3)";
+const SELL_FILL = "var(--muted-foreground)";
+const Buy = (p: DotProps) => <Badge {...p} letter="B" fill={BUY_FILL} />;
+const Sell = (p: DotProps) => <Badge {...p} letter="S" fill={SELL_FILL} />;
+const BuyActive = (p: DotProps) => <Badge {...p} letter="B" fill={BUY_FILL} active />;
+const SellActive = (p: DotProps) => <Badge {...p} letter="S" fill={SELL_FILL} active />;
+/** The equity line's hover dot, hidden on trade rows so it never covers the badge. */
+const EquityDot = ({ cx, cy, payload }: DotProps) =>
+  cx == null || cy == null || payload?.fills ? null : (
+    <circle cx={cx} cy={cy} r={5} fill="var(--series-1)" stroke="var(--card)" strokeWidth={2} />
   );
+
+const LegendBadge = ({ letter, fill }: { letter: string; fill: string }) => (
+  <svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden>
+    <rect x={-6} y={-6} width={12} height={12} rx={2.7} fill={fill} />
+    <text dy="0.35em" textAnchor="middle" fontSize={9} fontWeight={700} fill="#fff">
+      {letter}
+    </text>
+  </svg>
+);
 
 export function EquityChart({
   curve,
@@ -234,15 +280,11 @@ export function EquityChart({
             Equity
           </span>
           <span className="flex items-center gap-1.5">
-            <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden>
-              <path d="M0,-5 L5,4 L-5,4 Z" fill="var(--series-3)" />
-            </svg>
+            <LegendBadge letter="B" fill={BUY_FILL} />
             Buy ({buys})
           </span>
           <span className="flex items-center gap-1.5">
-            <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden>
-              <path d="M0,5 L5,-4 L-5,-4 Z" fill="var(--series-2)" />
-            </svg>
+            <LegendBadge letter="S" fill={SELL_FILL} />
             Sell / settled ({sells})
           </span>
         </figcaption>
@@ -324,15 +366,15 @@ export function EquityChart({
               stroke="var(--series-1)"
               strokeWidth={2}
               dot={false}
-              activeDot={{ r: 5, stroke: "var(--card)", strokeWidth: 2 }}
+              activeDot={<EquityDot />}
               isAnimationActive={false}
             />
             <Line
               dataKey="buy"
               name="Buy"
               stroke="none"
-              dot={<Up />}
-              activeDot={false}
+              dot={<Buy />}
+              activeDot={<BuyActive />}
               isAnimationActive={false}
               legendType="none"
             />
@@ -340,8 +382,8 @@ export function EquityChart({
               dataKey="sell"
               name="Sell"
               stroke="none"
-              dot={<Down />}
-              activeDot={false}
+              dot={<Sell />}
+              activeDot={<SellActive />}
               isAnimationActive={false}
               legendType="none"
             />

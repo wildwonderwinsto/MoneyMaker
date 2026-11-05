@@ -5,15 +5,15 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
-import { AutoRefresh } from "@/components/auto-refresh";
 import { EmptyState, MarketThumb, PageHeader } from "@/components/common";
 import { HoverExplain } from "@/components/hover-explain";
+import { LiveSync } from "@/components/live-sync";
 import { NextTick } from "@/components/next-tick";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { explain } from "@/lib/explain";
 import { cents, num, polymarketMarketUrl, timeAgo, traderName, usd } from "@/lib/format";
-import { groupSignals, type SignalGroup } from "@/lib/live";
+import { groupSignals, sectionsByAge, summarize, type SignalGroup } from "@/lib/live";
 import { getEngineStatus, getSignals, type EngineStatusView, type SignalRow } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Live" };
@@ -52,15 +52,24 @@ async function LiveContent({ searchParams }: { searchParams: PageProps<"/live">[
   const sp = await searchParams;
   const filter: Filter = FILTERS.some((f) => f.value === sp.show) ? (sp.show as Filter) : "all";
   const [all, status] = await Promise.all([getSignals(200), getEngineStatus()]);
-  const rows = filter === "all" ? all : all.filter((r) => r.signal.decision === filter);
-  const groups = groupSignals(rows.map((r) => ({ ...r.signal, row: r })));
+  const allGroups = groupSignals(all.map((r) => ({ ...r.signal, row: r })));
+  const groups = filter === "all" ? allGroups : allGroups.filter((g) => g.head.decision === filter);
+  const counts = Object.fromEntries(
+    FILTERS.map((f) => [
+      f.value,
+      f.value === "all"
+        ? allGroups.length
+        : allGroups.filter((g) => g.head.decision === f.value).length,
+    ]),
+  ) as Record<Filter, number>;
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3 lg:gap-6">
-      <AutoRefresh seconds={status.loop ? Math.min(15, status.intervalSeconds) : 20} />
-      <div className="space-y-4 lg:order-last">
+    <div className="grid items-start gap-4 lg:grid-cols-3 lg:gap-6">
+      <LiveSync />
+      <div className="space-y-4 lg:sticky lg:top-20 lg:order-last">
         <EngineCard status={status} />
-        <Card className="hidden border-dashed lg:flex">
+        <SummaryCard summary={summarize(allGroups)} />
+        <Card className="hidden gap-3 border-dashed py-4 lg:flex">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Lock className="size-4" aria-hidden /> Real-money trading
@@ -97,6 +106,9 @@ async function LiveContent({ searchParams }: { searchParams: PageProps<"/live">[
               )}
             >
               {f.label}
+              <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
+                {counts[f.value]}
+              </span>
             </Link>
           ))}
         </div>
@@ -118,7 +130,16 @@ async function LiveContent({ searchParams }: { searchParams: PageProps<"/live">[
             )}
           </EmptyState>
         ) : (
-          groups.map((g) => <SignalCard key={g.key} group={g} />)
+          sectionsByAge(groups).map(([label, list]) => (
+            <section key={label} className="space-y-3" aria-label={label}>
+              <h2 className="text-muted-foreground px-1 pt-2 text-xs font-medium tracking-wide uppercase">
+                {label} <span className="tabular-nums">· {list.length}</span>
+              </h2>
+              {list.map((g) => (
+                <SignalCard key={g.key} group={g} />
+              ))}
+            </section>
+          ))
         )}
       </div>
     </div>
@@ -142,7 +163,11 @@ function EngineCard({ status }: { status: EngineStatusView }) {
         </p>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-muted-foreground">Next check</span>
-          <NextTick at={status.nextTickAt} intervalSeconds={status.intervalSeconds} />
+          <NextTick
+            at={status.nextTickAt}
+            from={status.lastTickAt?.toISOString() ?? null}
+            intervalSeconds={status.intervalSeconds}
+          />
         </p>
         <p className="flex items-start gap-2">
           <Zap
@@ -184,6 +209,47 @@ function EngineCard({ status }: { status: EngineStatusView }) {
 }
 
 type Row = SignalRow["signal"] & { row: SignalRow };
+
+/** What happened in the last 24 hours, and the most common reasons trades were skipped. */
+function SummaryCard({ summary }: { summary: ReturnType<typeof summarize> }) {
+  const { total, copied, closed, skipped, topSkipReasons: top } = summary;
+  const stats = [
+    { label: "Trades", value: total, href: "/live" },
+    { label: "Copied", value: copied, href: "/live?show=copied" },
+    { label: "Sold", value: closed, href: "/live?show=closed" },
+    { label: "Skipped", value: skipped, href: "/live?show=skipped" },
+  ];
+  return (
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4 sm:px-6">
+        <CardTitle className="text-base">Last 24 hours</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 px-4 text-sm sm:px-6">
+        <div className="grid grid-cols-4 gap-2 text-center">
+          {stats.map((s) => (
+            <Link key={s.label} href={s.href} className="hover:bg-muted/50 rounded-md py-1">
+              <span className="block text-lg font-semibold tabular-nums">{s.value}</span>
+              <span className="text-muted-foreground block text-xs">{s.label}</span>
+            </Link>
+          ))}
+        </div>
+        {top.length > 0 && (
+          <div>
+            <p className="text-muted-foreground mb-1 text-xs">Most common skip reasons</p>
+            <ul className="space-y-1">
+              {top.map((r) => (
+                <li key={r.label} className="flex items-baseline justify-between gap-2">
+                  <span className="line-clamp-1">{r.label}</span>
+                  <span className="text-muted-foreground shrink-0 tabular-nums">{r.n}×</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function Outcome({ row }: { row: SignalRow }) {
   const { signal: s, outcome } = row;
