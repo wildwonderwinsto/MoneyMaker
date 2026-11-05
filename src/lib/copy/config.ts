@@ -83,4 +83,3 @@ export const RiskConfigSchema = z.object({
 
 export type RiskConfig = z.infer<typeof RiskConfigSchema>;
 export const DEFAULT_RISK_CONFIG: RiskConfig = RiskConfigSchema.parse({});
-export const TICK_INTERVALS = [15, 30, 60] as const;

@@ -132,20 +132,12 @@ export function resolvedPayouts(
 // Events & categories
 // ---------------------------------------------------------------------------
 
-const GammaEvent = z.object({
-  id: z.string(),
-  slug: z.string().nullish(),
-  title: z.string().nullish(),
-  image: z.string().nullish(),
-  tags: z.array(z.object({ slug: z.string().nullish(), label: z.string().nullish() })).nullish(),
-});
-export type GammaEvent = z.infer<typeof GammaEvent>;
-
-export async function getEvent(id: string): Promise<GammaEvent> {
-  return fetchJson(buildUrl(GAMMA_API, `/events/${encodeURIComponent(id)}`), {
-    schema: GammaEvent,
-    limiter: gammaLimiter,
-  });
+export interface GammaEvent {
+  id: string;
+  slug?: string | null;
+  title?: string | null;
+  image?: string | null;
+  tags?: Array<{ slug?: string | null; label?: string | null }> | null;
 }
 
 /** Top-level categories in priority order (first tag match wins). */
@@ -169,29 +161,6 @@ export function categoryFromTags(tags: GammaEvent["tags"]): string | null {
     if (candidates.some((c) => slugs.has(c))) return category;
   }
   return null;
-}
-
-// ---------------------------------------------------------------------------
-// Public profile
-// ---------------------------------------------------------------------------
-
-const PublicProfile = z.object({
-  proxyWallet: z.string().nullish(),
-  name: z.string().nullish(),
-  pseudonym: z.string().nullish(),
-  bio: z.string().nullish(),
-  profileImage: z.string().nullish(),
-  xUsername: z.string().nullish(),
-  verifiedBadge: z.boolean().nullish(),
-  createdAt: z.string().nullish(),
-});
-export type PublicProfile = z.infer<typeof PublicProfile>;
-
-export async function getPublicProfile(address: string): Promise<PublicProfile> {
-  return fetchJson(buildUrl(GAMMA_API, "/public-profile", { address }), {
-    schema: PublicProfile,
-    limiter: gammaLimiter,
-  });
 }
 
 /** Open markets with the most trading volume in the last 24 hours. */

@@ -73,8 +73,8 @@ const fillLabel = (f: FillMarker) =>
       ? "Bought"
       : "Sold";
 
-/** Equity at time `ts`, linearly interpolated between snapshots. Pure (exported for tests). */
-export function equityAt(curve: Array<{ ts: number; equity: number }>, ts: number): number {
+/** Equity at time `ts`, linearly interpolated between snapshots. */
+function equityAt(curve: Array<{ ts: number; equity: number }>, ts: number): number {
   if (curve.length === 0) return 0;
   if (ts <= curve[0].ts) return curve[0].equity;
   for (let i = 1; i < curve.length; i++) {
