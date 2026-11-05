@@ -7,6 +7,7 @@ import { Suspense } from "react";
 
 import { EmptyState, MarketThumb, PageHeader } from "@/components/common";
 import { HoverExplain } from "@/components/hover-explain";
+import { FilterButton, LiveFeed } from "@/components/live-feed";
 import { LiveSync } from "@/components/live-sync";
 import { NextTick } from "@/components/next-tick";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,9 +25,8 @@ const FILTERS = [
   { value: "closed", label: "Sold" },
   { value: "skipped", label: "Skipped" },
 ] as const;
-type Filter = (typeof FILTERS)[number]["value"];
 
-export default function LivePage({ searchParams }: PageProps<"/live">) {
+export default function LivePage() {
   return (
     <>
       <PageHeader
@@ -34,7 +34,7 @@ export default function LivePage({ searchParams }: PageProps<"/live">) {
         description="Every trade made by the traders you follow, what the copy engine did about it, and how it turned out. Hover or tap a reason for the full explanation."
       />
       <Suspense fallback={<Skeleton className="h-[500px] rounded-xl" />}>
-        <LiveContent searchParams={searchParams} />
+        <LiveContent />
       </Suspense>
     </>
   );
@@ -47,28 +47,18 @@ const DECISION_STYLE = {
 } as const;
 const DECISION_LABEL = { copied: "Copied", closed: "Sold", skipped: "Skipped" } as const;
 
-async function LiveContent({ searchParams }: { searchParams: PageProps<"/live">["searchParams"] }) {
+// The ?show= filter is applied in the browser (LiveFeed), so switching tabs needs no server trip.
+async function LiveContent() {
   await connection();
-  const sp = await searchParams;
-  const filter: Filter = FILTERS.some((f) => f.value === sp.show) ? (sp.show as Filter) : "all";
   const [all, status] = await Promise.all([getSignals(200), getEngineStatus()]);
-  const allGroups = groupSignals(all.map((r) => ({ ...r.signal, row: r })));
-  const groups = filter === "all" ? allGroups : allGroups.filter((g) => g.head.decision === filter);
-  const counts = Object.fromEntries(
-    FILTERS.map((f) => [
-      f.value,
-      f.value === "all"
-        ? allGroups.length
-        : allGroups.filter((g) => g.head.decision === f.value).length,
-    ]),
-  ) as Record<Filter, number>;
+  const groups = groupSignals(all.map((r) => ({ ...r.signal, row: r })));
 
   return (
     <div className="grid items-start gap-4 lg:grid-cols-3 lg:gap-6">
       <LiveSync />
       <div className="space-y-4 lg:sticky lg:top-20 lg:order-last">
         <EngineCard status={status} />
-        <SummaryCard summary={summarize(allGroups)} />
+        <SummaryCard summary={summarize(groups)} />
         <Card className="hidden gap-3 border-dashed py-4 lg:flex">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -87,60 +77,34 @@ async function LiveContent({ searchParams }: { searchParams: PageProps<"/live">[
       </div>
 
       <div className="space-y-3 lg:col-span-2">
-        <div
-          className="bg-muted flex w-full gap-1 rounded-lg p-1 sm:w-fit"
-          role="tablist"
-          aria-label="Show"
-        >
-          {FILTERS.map((f) => (
-            <Link
-              key={f.value}
-              href={f.value === "all" ? "/live" : `/live?show=${f.value}`}
-              role="tab"
-              aria-selected={f.value === filter}
-              className={cn(
-                "flex-1 rounded-md px-3 py-1.5 text-center text-sm font-medium transition-colors sm:flex-none",
-                f.value === filter
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
+        <LiveFeed
+          filters={FILTERS}
+          items={sectionsByAge(groups).flatMap(([section, list]) =>
+            list.map((g) => ({
+              key: g.key,
+              decision: g.head.decision,
+              section,
+              node: <SignalCard group={g} />,
+            })),
+          )}
+          empty={
+            <EmptyState title="No signals yet" icon={Radio}>
+              {status.following === 0 ? (
+                <>
+                  Follow a few traders on the{" "}
+                  <Link href="/" className="underline">
+                    Traders
+                  </Link>{" "}
+                  page. Their new trades will show up here.
+                </>
+              ) : groups.length > 0 ? (
+                "Nothing in this filter yet."
+              ) : (
+                "Waiting for the traders you follow to place their next trade."
               )}
-            >
-              {f.label}
-              <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
-                {counts[f.value]}
-              </span>
-            </Link>
-          ))}
-        </div>
-
-        {groups.length === 0 ? (
-          <EmptyState title="No signals yet" icon={Radio}>
-            {status.following === 0 ? (
-              <>
-                Follow a few traders on the{" "}
-                <Link href="/" className="underline">
-                  Traders
-                </Link>{" "}
-                page. Their new trades will show up here.
-              </>
-            ) : filter !== "all" ? (
-              "Nothing in this filter yet."
-            ) : (
-              "Waiting for the traders you follow to place their next trade."
-            )}
-          </EmptyState>
-        ) : (
-          sectionsByAge(groups).map(([label, list]) => (
-            <section key={label} className="space-y-3" aria-label={label}>
-              <h2 className="text-muted-foreground px-1 pt-2 text-xs font-medium tracking-wide uppercase">
-                {label} <span className="tabular-nums">· {list.length}</span>
-              </h2>
-              {list.map((g) => (
-                <SignalCard key={g.key} group={g} />
-              ))}
-            </section>
-          ))
-        )}
+            </EmptyState>
+          }
+        />
       </div>
     </div>
   );
@@ -214,10 +178,10 @@ type Row = SignalRow["signal"] & { row: SignalRow };
 function SummaryCard({ summary }: { summary: ReturnType<typeof summarize> }) {
   const { total, copied, closed, skipped, topSkipReasons: top } = summary;
   const stats = [
-    { label: "Trades", value: total, href: "/live" },
-    { label: "Copied", value: copied, href: "/live?show=copied" },
-    { label: "Sold", value: closed, href: "/live?show=closed" },
-    { label: "Skipped", value: skipped, href: "/live?show=skipped" },
+    { label: "Trades", count: total, value: "all" },
+    { label: "Copied", count: copied, value: "copied" },
+    { label: "Sold", count: closed, value: "closed" },
+    { label: "Skipped", count: skipped, value: "skipped" },
   ];
   return (
     <Card className="gap-3 py-4">
@@ -227,10 +191,14 @@ function SummaryCard({ summary }: { summary: ReturnType<typeof summarize> }) {
       <CardContent className="space-y-3 px-4 text-sm sm:px-6">
         <div className="grid grid-cols-4 gap-2 text-center">
           {stats.map((s) => (
-            <Link key={s.label} href={s.href} className="hover:bg-muted/50 rounded-md py-1">
-              <span className="block text-lg font-semibold tabular-nums">{s.value}</span>
+            <FilterButton
+              key={s.label}
+              value={s.value}
+              className="hover:bg-muted/50 rounded-md py-1"
+            >
+              <span className="block text-lg font-semibold tabular-nums">{s.count}</span>
               <span className="text-muted-foreground block text-xs">{s.label}</span>
-            </Link>
+            </FilterButton>
           ))}
         </div>
         {top.length > 0 && (

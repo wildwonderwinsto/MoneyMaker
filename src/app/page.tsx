@@ -1,10 +1,9 @@
-import { cn } from "cn";
 import { SearchX } from "lucide-react";
-import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { EmptyState, PageHeader } from "@/components/common";
+import { NavTab, PendingArea, PendingNavProvider } from "@/components/pending-nav";
 import { isAdmin } from "@/lib/admin";
 import { TraderCard } from "@/components/trader-card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -59,80 +58,78 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
   const verifiedCount = (counts.elite ?? 0) + (counts.verified ?? 0);
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div
-          className="-mx-3 flex w-[calc(100%+1.5rem)] gap-1 overflow-x-auto px-3 pb-1 sm:mx-0 sm:w-auto sm:px-0 sm:pb-0"
-          role="tablist"
-          aria-label="Category"
-        >
-          {CATEGORIES.map((c) => (
-            <Link
-              key={c}
-              href={href({ tier, category: c })}
-              role="tab"
-              aria-selected={c === category}
-              className={cn(
-                "shrink-0 rounded-full px-3 py-1.5 text-sm font-medium capitalize transition-colors",
-                c === category
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              {c}
-            </Link>
-          ))}
+    <PendingNavProvider>
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div
+            className="-mx-3 flex w-[calc(100%+1.5rem)] gap-1 overflow-x-auto px-3 pb-1 sm:mx-0 sm:w-auto sm:px-0 sm:pb-0"
+            role="tablist"
+            aria-label="Category"
+          >
+            {CATEGORIES.map((c) => (
+              <NavTab
+                key={c}
+                group="category"
+                href={href({ tier, category: c })}
+                selected={c === category}
+                className="shrink-0 rounded-full px-3 py-1.5 text-sm font-medium capitalize transition-colors"
+                activeClassName="bg-foreground text-background"
+                inactiveClassName="text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {c}
+              </NavTab>
+            ))}
+          </div>
+          <div
+            className="bg-muted flex w-full gap-1 overflow-x-auto rounded-lg p-1 sm:w-auto"
+            role="tablist"
+            aria-label="Tier"
+          >
+            {tiers.map((t) => (
+              <NavTab
+                key={t.value}
+                group="tier"
+                href={href({ tier: t.value, category })}
+                selected={t.value === tier}
+                className="shrink-0 rounded-md px-3 py-1 text-sm font-medium whitespace-nowrap transition-colors"
+                activeClassName="bg-card text-foreground shadow-sm"
+                inactiveClassName="text-muted-foreground hover:text-foreground"
+              >
+                {t.label}
+                {t.value === "verified" && ` (${verifiedCount})`}
+                {t.value === "watchlist" && ` (${counts.watchlist ?? 0})`}
+                {t.value === "hidden" && ` (${hidden})`}
+              </NavTab>
+            ))}
+          </div>
         </div>
-        <div
-          className="bg-muted flex w-full gap-1 overflow-x-auto rounded-lg p-1 sm:w-auto"
-          role="tablist"
-          aria-label="Tier"
-        >
-          {tiers.map((t) => (
-            <Link
-              key={t.value}
-              href={href({ tier: t.value, category })}
-              role="tab"
-              aria-selected={t.value === tier}
-              className={cn(
-                "shrink-0 rounded-md px-3 py-1 text-sm font-medium whitespace-nowrap transition-colors",
-                t.value === tier
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {t.label}
-              {t.value === "verified" && ` (${verifiedCount})`}
-              {t.value === "watchlist" && ` (${counts.watchlist ?? 0})`}
-              {t.value === "hidden" && ` (${hidden})`}
-            </Link>
-          ))}
-        </div>
+
+        <p className="text-muted-foreground text-xs">
+          {lastScore
+            ? `Scores updated ${timeAgo(lastScore.finishedAt ?? lastScore.startedAt)} · `
+            : "Not scored yet · "}
+          {Object.values(counts).reduce((a, b) => a + (b ?? 0), 0)} traders analysed
+        </p>
+
+        <PendingArea>
+          {list.length === 0 ? (
+            <EmptyState title="No traders here yet" icon={SearchX}>
+              {tier === "verified"
+                ? "Nobody has passed every check yet. That's the filter doing its job. Look at the Watchlist, or wait for the next daily scoring run."
+                : tier === "hidden"
+                  ? "No hidden traders. Press “No” on a trader to hide them from this list."
+                  : "Run the daily job (npm run job -- daily) to discover and score traders."}
+            </EmptyState>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {list.map((t) => (
+                <TraderCard key={t.wallet} t={t} admin={admin} />
+              ))}
+            </div>
+          )}
+        </PendingArea>
       </div>
-
-      <p className="text-muted-foreground text-xs">
-        {lastScore
-          ? `Scores updated ${timeAgo(lastScore.finishedAt ?? lastScore.startedAt)} · `
-          : "Not scored yet · "}
-        {Object.values(counts).reduce((a, b) => a + (b ?? 0), 0)} traders analysed
-      </p>
-
-      {list.length === 0 ? (
-        <EmptyState title="No traders here yet" icon={SearchX}>
-          {tier === "verified"
-            ? "Nobody has passed every check yet. That's the filter doing its job. Look at the Watchlist, or wait for the next daily scoring run."
-            : tier === "hidden"
-              ? "No hidden traders. Press “No” on a trader to hide them from this list."
-              : "Run the daily job (npm run job -- daily) to discover and score traders."}
-        </EmptyState>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {list.map((t) => (
-            <TraderCard key={t.wallet} t={t} admin={admin} />
-          ))}
-        </div>
-      )}
-    </div>
+    </PendingNavProvider>
   );
 }
 
