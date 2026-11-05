@@ -9,6 +9,7 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { EquityChart } from "@/components/charts/equity-chart";
 import { EmptyState, MarketThumb, PageHeader, Signed, StatTile } from "@/components/common";
 import { ResetPaperForm } from "@/components/forms";
+import { LockedAction } from "@/components/locked-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isAdmin } from "@/lib/admin";
@@ -194,19 +195,21 @@ async function PaperContent() {
         </Card>
       </div>
 
-      {admin && (
-        <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
-          <CardHeader className="px-3 sm:px-6">
-            <CardTitle>Account</CardTitle>
-            <CardDescription>
-              Start over with a fresh balance, for example after changing risk rules.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="px-3 sm:px-6">
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-3 sm:px-6">
+          <CardTitle>Account</CardTitle>
+          <CardDescription>
+            Start over with a fresh balance, for example after changing risk rules.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-3 sm:px-6">
+          {admin ? (
             <ResetPaperForm current={p.account.startingBalance} />
-          </CardContent>
-        </Card>
-      )}
+          ) : (
+            <LockedAction label="Reset account" />
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { notifyEngine } from "@/lib/copy/runner";
 import { executeHedge } from "@/lib/copy/tick";
 import { getDb } from "@/lib/db/client";
 import { cursors, follows, hiddenTraders } from "@/lib/db/schema";
+import { env } from "@/lib/env";
 import { allowAttempt, clearAttempts } from "@/lib/rate-limit";
 import { ScoringConfigSchema } from "@/lib/scoring/config";
 import { getRiskConfig, writeSetting } from "@/lib/settings";
@@ -48,6 +49,12 @@ async function clientIp(): Promise<string> {
 }
 
 export async function unlockAction(_prev: ActionResult | null, form: FormData) {
+  if (!env().ADMIN_PASSWORD) {
+    return {
+      ok: false,
+      message: "Changes are locked: ADMIN_PASSWORD isn't set on the server.",
+    } satisfies ActionResult;
+  }
   const ip = await clientIp();
   if (!allowAttempt(`unlock:${ip}`)) {
     return {

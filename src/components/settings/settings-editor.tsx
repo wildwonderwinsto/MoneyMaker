@@ -12,6 +12,7 @@ import { useMemo, useState, useTransition } from "react";
 
 import { saveSettingsAction, type ActionResult } from "@/app/actions";
 import { FormMessage } from "@/components/forms";
+import { LockedAction } from "@/components/locked-action";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -135,10 +136,12 @@ export function SettingsEditor({
   return (
     <div className="space-y-4">
       {!admin && (
-        <p className="bg-muted text-muted-foreground flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
-          <Lock className="size-4 shrink-0" aria-hidden /> View only. Unlock with the admin password
-          above to change anything.
-        </p>
+        <div className="bg-muted text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg px-3 py-2 text-sm">
+          <span className="flex flex-1 items-center gap-2">
+            <Lock className="size-4 shrink-0" aria-hidden /> View only. Unlock to change anything.
+          </span>
+          <LockedAction label="Unlock to edit" variant="default" />
+        </div>
       )}
       {groups.map((g) => (
         <section key={g.id} className="rounded-xl border" aria-labelledby={`${kind}-${g.id}`}>

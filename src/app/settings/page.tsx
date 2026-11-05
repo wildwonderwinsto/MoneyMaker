@@ -8,6 +8,7 @@ import { Avatar, PageHeader, TierBadge } from "@/components/common";
 import { AddFollowForm, UnlockForm } from "@/components/forms";
 import { FollowRowControls, LockButton } from "@/components/settings-forms";
 import { SettingsEditor } from "@/components/settings/settings-editor";
+import { LockedAction } from "@/components/locked-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isAdmin } from "@/lib/admin";
@@ -121,7 +122,7 @@ async function SettingsContent() {
               ))}
             </ul>
           )}
-          {admin && <AddFollowForm />}
+          {admin ? <AddFollowForm /> : <LockedAction label="Add or change traders" />}
         </CardContent>
       </Card>
 

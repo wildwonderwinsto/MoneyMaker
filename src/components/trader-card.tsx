@@ -2,8 +2,9 @@ import Link from "next/link";
 
 import { Sparkline } from "@/components/charts/sparkline";
 import { Avatar, Signed, TierBadge } from "@/components/common";
-import { FollowButton, FollowLocked } from "@/components/follow-button";
+import { FollowButton } from "@/components/follow-button";
 import { HideButton } from "@/components/hide-button";
+import { LockedAction } from "@/components/locked-action";
 import { Card } from "@/components/ui/card";
 import { pct, traderName, usd } from "@/lib/format";
 import type { TraderListItem } from "@/lib/queries";
@@ -110,7 +111,7 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
             Following
           </span>
         ) : (
-          <FollowLocked />
+          <LockedAction label="Follow" />
         )}
       </div>
     </Card>

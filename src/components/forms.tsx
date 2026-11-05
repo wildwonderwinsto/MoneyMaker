@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "cn";
-import { useActionState } from "react";
+import { useActionState, useId } from "react";
 
 import { addFollowAction, resetPaperAction, unlockAction, type ActionResult } from "@/app/actions";
 import { Button } from "@/components/ui/button";
@@ -72,11 +72,12 @@ export function AddFollowForm() {
 
 export function UnlockForm() {
   const [state, action, pending] = useActionState(unlockAction, null);
+  const id = useId();
   return (
     <form action={action} className="flex flex-wrap items-end gap-2">
       <div className="space-y-1">
-        <Label htmlFor="password">Admin password</Label>
-        <Input id="password" name="password" type="password" className="w-56" required />
+        <Label htmlFor={id}>Admin password</Label>
+        <Input id={id} name="password" type="password" className="w-56" required />
       </div>
       <Button type="submit" disabled={pending}>
         Unlock

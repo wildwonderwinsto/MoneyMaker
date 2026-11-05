@@ -9,6 +9,7 @@ import { Suspense } from "react";
 import { Avatar, MarketThumb, Signed, StatTile } from "@/components/common";
 import { HedgeButton } from "@/components/hedge-buttons";
 import { HoverExplain } from "@/components/hover-explain";
+import { LockedAction } from "@/components/locked-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isAdmin } from "@/lib/admin";
@@ -319,16 +320,18 @@ function QuoteCard({
               base={q.unhedgedIfOppositeWins}
             />
           </div>
-          {admin && (
-            <div className="mt-auto">
+          <div className="mt-auto">
+            {admin ? (
               <HedgeButton
                 positionId={positionId}
                 mode={q.mode}
                 label={`${title} for ${usd(q.cost)}`}
                 confirmText={`Buy ${num(q.shares, 1)} ${other} shares for about ${usd(q.cost)} (paper)? The final price comes from the order book at that moment.`}
               />
-            </div>
-          )}
+            ) : (
+              <LockedAction label={`${title} for ${usd(q.cost)}`} className="w-full" />
+            )}
+          </div>
         </>
       ) : (
         <p className="text-muted-foreground text-sm">Not possible right now: {q.reason}.</p>
@@ -411,11 +414,6 @@ async function HedgePanel({
                 admin={admin}
               />
             </div>
-            {!admin && (
-              <p className="text-muted-foreground mt-3 text-xs">
-                View only: unlock in Settings to hedge.
-              </p>
-            )}
           </>
         )}
       </CardContent>

@@ -1,7 +1,6 @@
 "use client";
 
-import { Check, Lock, Plus } from "lucide-react";
-import Link from "next/link";
+import { Check, Plus } from "lucide-react";
 import { useOptimistic, useState, useTransition } from "react";
 
 import { setFollowAction } from "@/app/actions";
@@ -48,17 +47,5 @@ export function FollowButton({
       <TooltipTrigger asChild>{button}</TooltipTrigger>
       <TooltipContent side="bottom">{error}</TooltipContent>
     </Tooltip>
-  );
-}
-
-/** Shown to visitors instead of the Follow button, so it is clear how to get it back. */
-export function FollowLocked({ size = "sm" }: { size?: "sm" | "default" }) {
-  return (
-    <Button asChild size={size} variant="outline">
-      <Link href="/settings#access" title="Unlock with the admin password to follow traders">
-        <Lock aria-hidden />
-        Unlock to follow
-      </Link>
-    </Button>
   );
 }
