@@ -278,6 +278,8 @@ export type ReasonCode =
   | "no_position"
   | "sells_off"
   | "sell_size_unknown"
+  | "buy_limit"
+  | "sell_floor"
   | "other";
 
 /** Every leader trade we observed, with our decision and the reason. */

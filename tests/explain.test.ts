@@ -39,6 +39,8 @@ describe("explain", () => {
     expect(codeFromReason("Leader trade too small ($7.71)")).toBe("leader_too_small");
     expect(codeFromReason("Copied on re-check: Bought 1 @ 2¢ ($3)")).toBe("bought");
     expect(codeFromReason("something new")).toBe("other");
+    expect(codeFromReason("Already copied 2 buys into this position")).toBe("buy_limit");
+    expect(codeFromReason("Best bid 1.0¢ is below your sell floor")).toBe("sell_floor");
     expect(explain({ reason: "Daily loss limit hit (10.5%)" }).body[0]).toContain("10.5%");
   });
 });

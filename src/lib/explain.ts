@@ -46,6 +46,8 @@ export function codeFromReason(reason: string): ReasonCode {
     [/^No copied position/, "no_position"],
     [/^Copying sells is turned off/, "sells_off"],
     [/sell size is unknown/, "sell_size_unknown"],
+    [/^Already copied \d+ buys? into this position/, "buy_limit"],
+    [/below your sell floor/, "sell_floor"],
   ];
   return rules.find(([re]) => re.test(reason))?.[1] ?? "other";
 }
@@ -233,6 +235,30 @@ export function explain(opts: {
         body: ["Copying sells is turned off, so positions are held until the market settles."],
         setting: "Copy the trader's sells",
       };
+    case "buy_limit": {
+      const max = num(d, "maxBuysPerPosition");
+      return {
+        title: "Skipped: buy limit for this position",
+        body: [
+          `The trader added to a position you already copied ${num(d, "positionBuys") ?? "several"} time${num(d, "positionBuys") === 1 ? "" : "s"}${max !== null ? `, and your limit is ${max}` : ""}. Quick repeated adds can pile a lot into one market before anyone can react, so the engine held off.`,
+          "Their sells are still copied, so you exit with them.",
+        ],
+        setting: "Most buys into one position",
+      };
+    }
+    case "sell_floor": {
+      const bid = num(d, "bestBid");
+      const paid = num(d, "leaderPrice");
+      const floor = num(d, "limitPrice");
+      return {
+        title: "Held: buyers too far below the trader's price",
+        body: [
+          `The trader sold at ${paid !== null ? c(paid) : "a price"}, but the best buyer left was offering only ${bid !== null ? c(bid) : "much less"}${floor !== null ? `, under your floor of ${c(floor)}` : ""}. Usually their own sell just used up the buyers.`,
+          "The position stays open. It's sold with the trader's next sell if buyers come back, or settles when the market ends.",
+        ],
+        setting: "Lowest sell price vs. the trader",
+      };
+    }
     case "no_buyers":
       return {
         title: "Couldn't sell",

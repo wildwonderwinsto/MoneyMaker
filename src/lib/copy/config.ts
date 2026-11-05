@@ -38,8 +38,18 @@ export const RiskConfigSchema = z.object({
   maxTraderExposurePct: z.number().min(0).max(1).default(0.3),
   /** Stop opening new positions after losing this fraction of equity today (UTC). */
   maxDailyLossPct: z.number().min(0).max(1).default(0.1),
+  /**
+   * Most copied buys into one open position (0 = no limit). Stops a burst of quick adds
+   * from one trader stacking up a single market faster than you can react.
+   */
+  maxBuysPerPosition: z.number().int().min(0).max(50).default(0),
   /** Mirror leader sells proportionally. */
   copySells: z.boolean().default(true),
+  /**
+   * Never sell for less than this fraction below the trader's sell price (0 = off: take
+   * whatever buyers offer). Whatever can't be sold above the floor stays open.
+   */
+  sellFloorPct: z.number().min(0).max(1).default(0),
   /** Extra flat fee on simulated fills, in bps, on top of each market's Polymarket taker fee. */
   takerFeeBps: z.number().min(0).max(1000).default(0),
 

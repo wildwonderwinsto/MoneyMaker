@@ -49,7 +49,7 @@ export async function releaseLease(db: Db, name: string, owner?: string): Promis
 }
 
 /** Rows from a raw `execute` result (postgres-js returns an array, PGlite `{ rows }`). */
-function resultRows(result: unknown): unknown[] {
+export function resultRows(result: unknown): unknown[] {
   if (Array.isArray(result)) return result;
   return (result as { rows?: unknown[] }).rows ?? [];
 }

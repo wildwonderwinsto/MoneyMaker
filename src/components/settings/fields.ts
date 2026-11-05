@@ -257,6 +257,20 @@ export const RISK_GROUPS: Group[] = [
         min: 0,
         step: 0.5,
       },
+      {
+        kind: "number",
+        name: "maxBuysPerPosition",
+        label: "Most buys into one position",
+        help: "Copy at most this many of a trader's buys into the same position; later adds are skipped. Stops a burst of quick adds from stacking up one market. 0 = no limit.",
+        unit: "number",
+        min: 0,
+        max: 50,
+        step: 1,
+        example: (v) =>
+          n(v, "maxBuysPerPosition") > 0
+            ? `A trader buying the same outcome 4 times gets copied ${Math.min(4, n(v, "maxBuysPerPosition"))} time${Math.min(4, n(v, "maxBuysPerPosition")) === 1 ? "" : "s"}.`
+            : "Off: every qualifying add is copied (other limits still apply).",
+      },
     ],
   },
   {
@@ -330,6 +344,21 @@ export const RISK_GROUPS: Group[] = [
         name: "copySells",
         label: "Copy the trader's sells",
         help: "When the trader sells part of a position, sell the same share of yours. Off = hold until the market settles.",
+      },
+      {
+        kind: "number",
+        name: "sellFloorPct",
+        label: "Lowest sell price vs. the trader",
+        help: "When copying a sell, don't sell for more than this much below the trader's price. A big sell often wipes out the buyers, leaving only much lower bids. Shares that can't sell above the floor stay open. 0 = always sell at whatever buyers offer.",
+        unit: "pct",
+        min: 0,
+        max: 100,
+        step: 5,
+        showIf: (v) => v.copySells !== false,
+        example: (v) =>
+          n(v, "sellFloorPct") > 0
+            ? `If the trader sells at 40¢, you sell only to buyers paying at least ${c(0.4 * (1 - n(v, "sellFloorPct")))}.`
+            : "Off: sells always go through at the best bids available.",
       },
     ],
   },

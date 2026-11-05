@@ -189,6 +189,17 @@ describe("decideBuy", () => {
     );
     expect(reason({ ...ctx, book: null })).toMatch(/No sellers/);
   });
+
+  it("caps copied buys per position only when the limit is on", () => {
+    expect(decideBuy({ ...ctx, positionBuys: 5 }).action).toBe("buy");
+    const capped = { ...cfg, maxBuysPerPosition: 2 };
+    expect(decideBuy({ ...ctx, cfg: capped, positionBuys: 1 }).action).toBe("buy");
+    expect(decideBuy({ ...ctx, cfg: capped, positionBuys: 2 })).toMatchObject({
+      action: "skip",
+      code: "buy_limit",
+      details: { positionBuys: 2, maxBuysPerPosition: 2 },
+    });
+  });
 });
 
 describe("decideSell", () => {
@@ -217,6 +228,48 @@ describe("decideSell", () => {
     // 100 @ 0.49: fee = 100 × 0.04 × 0.49 × 0.51
     if (d.action === "sell") expect(d.fill.fee).toBeCloseTo(100 * 0.04 * 0.49 * 0.51, 6);
     expect(d.action).toBe("sell");
+  });
+
+  // The Ronaldo case (2026-11-05): leader sold at 5¢ after their own sell emptied the bids.
+  const swept: OrderBook = {
+    ...book,
+    bids: [
+      { price: 0.03, size: 5 },
+      { price: 0.02, size: 10 },
+      { price: 0.01, size: 1000 },
+    ],
+  };
+  const exit = { ...trade, price: 0.05 };
+
+  it("sells into any bid when the sell floor is off", () => {
+    const d = decideSell({ trade: exit, ourShares: 100, leaderSoldFraction: 1, book: swept, cfg });
+    expect(d.action).toBe("sell");
+    if (d.action === "sell") expect(d.fill.shares).toBeCloseTo(100);
+  });
+
+  it("with a sell floor, sells only above it and holds the rest", () => {
+    const floor = { ...cfg, sellFloorPct: 0.5 }; // 5¢ × 0.5 = 2.5¢
+    const d = decideSell({
+      trade: exit,
+      ourShares: 100,
+      leaderSoldFraction: 1,
+      book: swept,
+      cfg: floor,
+    });
+    expect(d.action).toBe("sell");
+    if (d.action === "sell") {
+      expect(d.fill.shares).toBeCloseTo(5); // only the 3¢ bid clears the floor
+      expect(d.fill.partial).toBe(true);
+      expect(d.details.limitPrice).toBeCloseTo(0.025);
+    }
+    const none = decideSell({
+      trade: exit,
+      ourShares: 100,
+      leaderSoldFraction: 1,
+      book: { ...swept, bids: swept.bids.slice(1) },
+      cfg: floor,
+    });
+    expect(none).toMatchObject({ action: "skip", code: "sell_floor" });
   });
 
   it("skips when we never copied the position", () => {

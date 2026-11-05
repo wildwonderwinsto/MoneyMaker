@@ -43,6 +43,19 @@ export function num(x: number | null | undefined, digits = 0) {
   });
 }
 
+/** Bytes in binary units, e.g. 52_428_800 → "50.0 MB". */
+export function bytes(x: number | null | undefined) {
+  if (x === null || x === undefined || !Number.isFinite(x)) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = Math.max(0, x);
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${i === 0 ? Math.round(v) : v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
 export function shortAddress(wallet: string) {
   return `${wallet.slice(0, 6)}…${wallet.slice(-4)}`;
 }

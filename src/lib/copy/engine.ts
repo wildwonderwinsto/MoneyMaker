@@ -70,6 +70,8 @@ export interface BuyContext {
   traderExposure: number;
   /** Today's loss as a fraction of start-of-day equity (positive = losing). */
   dailyLossPct: number;
+  /** Copied buys already in our open position for this trader and outcome (0 = none). */
+  positionBuys?: number;
   cfg: RiskConfig;
 }
 
@@ -124,6 +126,14 @@ export function decideBuy(ctx: BuyContext): Decision {
       dailyLossPct: ctx.dailyLossPct,
       maxDailyLossPct: cfg.maxDailyLossPct,
     });
+  }
+  const buys = ctx.positionBuys ?? 0;
+  if (cfg.maxBuysPerPosition > 0 && buys >= cfg.maxBuysPerPosition) {
+    return skip(
+      `Already copied ${buys} buy${buys === 1 ? "" : "s"} into this position`,
+      "buy_limit",
+      { positionBuys: buys, maxBuysPerPosition: cfg.maxBuysPerPosition },
+    );
   }
   if (!book || book.asks.length === 0) {
     return skip("No sellers in the order book", "no_sellers", { leaderPrice: trade.price });
@@ -219,9 +229,20 @@ export function decideSell(ctx: SellContext): Decision {
   const fraction = ctx.leaderSoldFraction >= 0.98 ? 1 : Math.max(0, ctx.leaderSoldFraction);
   if (fraction <= 0) return skip("Leader's sell size is unknown", "sell_size_unknown");
   const shares = ctx.ourShares * fraction;
-  // Exits take whatever the book offers: getting out matters more than the price.
-  const fill = simulateSell(book.bids, shares, 0, cfg.takerFeeBps, ctx.feeRate ?? 0);
-  if (fill.shares <= 0) return skip("No buyers in the order book", "no_buyers");
+  // By default exits take whatever the book offers: getting out matters more than the
+  // price. With a floor, shares that would sell too far below the trader's price are held.
+  const floor = cfg.sellFloorPct > 0 ? ctx.trade.price * (1 - cfg.sellFloorPct) : 0;
+  const fill = simulateSell(book.bids, shares, floor, cfg.takerFeeBps, ctx.feeRate ?? 0);
+  if (fill.shares <= 0) {
+    return floor > 0
+      ? skip(`Best bid ${cents(book.bids[0].price)} is below your sell floor`, "sell_floor", {
+          bestBid: book.bids[0].price,
+          leaderPrice: ctx.trade.price,
+          limitPrice: floor,
+          sellFloorPct: cfg.sellFloorPct,
+        })
+      : skip("No buyers in the order book", "no_buyers");
+  }
   return {
     action: "sell",
     fill,
@@ -231,6 +252,7 @@ export function decideSell(ctx: SellContext): Decision {
       leaderSoldPct: fraction,
       fillPrice: fill.avgPrice,
       fills: ctx.trade.ids?.length ?? 1,
+      ...(floor > 0 && { limitPrice: floor, partial: fill.partial }),
     },
   };
 }

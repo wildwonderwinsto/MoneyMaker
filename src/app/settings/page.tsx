@@ -8,6 +8,7 @@ import { Avatar, PageHeader, TierBadge } from "@/components/common";
 import { AddFollowForm, UnlockForm } from "@/components/forms";
 import { FollowRowControls, LockButton } from "@/components/settings-forms";
 import { SettingsEditor } from "@/components/settings/settings-editor";
+import { StorageCard } from "@/components/storage-card";
 import { LockedAction } from "@/components/locked-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,7 +17,7 @@ import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
 import { getDb } from "@/lib/db/client";
 import { env } from "@/lib/env";
 import { timeAgo, traderName } from "@/lib/format";
-import { getFollowList, getJobRuns, getSettings } from "@/lib/queries";
+import { getFollowList, getJobRuns, getSettings, getStorageStats } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -37,12 +38,13 @@ export default function SettingsPage() {
 async function SettingsContent() {
   await connection();
   const db = getDb();
-  const [admin, settings, followList, runs, account] = await Promise.all([
+  const [admin, settings, followList, runs, account, storage] = await Promise.all([
     isAdmin(),
     getSettings(),
     getFollowList(),
     getJobRuns(8),
     ensureDefaultAccount(db),
+    getStorageStats().catch(() => null),
   ]);
   const { equity } = await loadAccountState(db, account.id);
   const passwordSet = Boolean(env().ADMIN_PASSWORD);
@@ -150,6 +152,8 @@ async function SettingsContent() {
           <SettingsEditor kind="scoring" values={settings.scoring} admin={admin} ctx={{ equity }} />
         </CardContent>
       </Card>
+
+      {storage && <StorageCard stats={storage} />}
 
       <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
         <CardHeader className="px-4 sm:px-6">

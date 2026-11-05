@@ -22,6 +22,7 @@ import {
   traderScores,
   type ScoreTier,
 } from "@/lib/db/schema";
+import { resultRows } from "@/lib/lease";
 import { getRiskConfig, getScoringConfig } from "@/lib/settings";
 
 export type TierFilter = ScoreTier | "all" | "followed" | "hidden";
@@ -417,6 +418,52 @@ export async function getBacktests(limit = 10) {
 export async function getJobRuns(limit = 10) {
   return getDb().select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(limit);
 }
+
+/** Supabase Free plan database size limit (projects go read-only above it). */
+export const STORAGE_LIMIT_BYTES = 500 * 1024 * 1024;
+
+/** Database size and the biggest tables, as Supabase counts it (pg_database_size). */
+export async function getStorageStats() {
+  const db = getDb();
+  const [total, tables] = await Promise.all([
+    db.execute(sql`select pg_database_size(current_database())::float8 as bytes`),
+    db.execute(sql`
+      select c.relname as name,
+             pg_total_relation_size(c.oid)::float8 as bytes,
+             pg_indexes_size(c.oid)::float8 as index_bytes,
+             greatest(coalesce(s.n_live_tup, 0), c.reltuples, 0)::float8 as rows
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      left join pg_stat_user_tables s on s.relid = c.oid
+      where n.nspname = 'public' and c.relkind = 'r'
+      order by pg_total_relation_size(c.oid) desc
+    `),
+  ]);
+  const [t] = resultRows(total) as Array<{ bytes: number }>;
+  const rows = (
+    resultRows(tables) as Array<{
+      name: string;
+      bytes: number;
+      index_bytes: number;
+      rows: number;
+    }>
+  ).map((r) => ({
+    name: r.name,
+    bytes: Number(r.bytes),
+    indexBytes: Number(r.index_bytes),
+    rows: Math.round(Number(r.rows)),
+  }));
+  const bytes = Number(t?.bytes ?? 0);
+  const tableBytes = rows.reduce((a, r) => a + r.bytes, 0);
+  return {
+    bytes,
+    limit: STORAGE_LIMIT_BYTES,
+    tables: rows,
+    /** System catalogs and other overhead outside our tables. */
+    otherBytes: Math.max(0, bytes - tableBytes),
+  };
+}
+export type StorageStats = Awaited<ReturnType<typeof getStorageStats>>;
 
 export async function getSettings() {
   const db = getDb();

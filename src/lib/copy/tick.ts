@@ -14,7 +14,7 @@
 import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
-import { cursors, follows, paperPositions, signals, traders } from "@/lib/db/schema";
+import { cursors, follows, paperFills, paperPositions, signals, traders } from "@/lib/db/schema";
 import { acquireLease, PROCESS_ID, releaseLease } from "@/lib/lease";
 import { getBook, getMidpoints, type OrderBook } from "@/lib/polymarket/clob";
 import {
@@ -352,6 +352,18 @@ const openCopy = (state: AccountState, wallet: string, tokenId: string) =>
 const openHedge = (state: AccountState, positionId: number) =>
   state.open.find((p) => p.kind === "hedge" && p.hedgeOf === positionId);
 
+/** Copied buys in our open position for this trade's trader and outcome (only when capped). */
+async function positionBuys(db: Db, state: AccountState, cfg: RiskConfig, t: LeaderTrade) {
+  if (cfg.maxBuysPerPosition <= 0) return 0;
+  const pos = openCopy(state, t.wallet, t.tokenId);
+  if (!pos) return 0;
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(paperFills)
+    .where(and(eq(paperFills.positionId, pos.id), eq(paperFills.side, "BUY")));
+  return row?.n ?? 0;
+}
+
 interface LeaderPosition {
   size: number;
   /** Epoch seconds of the last trade the Data API has applied to this position. */
@@ -465,6 +477,7 @@ async function processTrades(
         marketExposure: exp.market,
         traderExposure: exp.trader,
         dailyLossPct: lossFraction(startEquity, state.equity),
+        positionBuys: await positionBuys(db, state, cfg, t),
         cfg,
       });
     } else {
@@ -742,6 +755,7 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
       marketExposure: exp.market,
       traderExposure: exp.trader,
       dailyLossPct: lossFraction(startEquity, state.equity),
+      positionBuys: await positionBuys(db, state, cfg, t),
       cfg,
     });
     const ids = t.ids ?? [t.id];
