@@ -4,7 +4,18 @@
  * `toDisplay` / `fromDisplay` convert between the two.
  */
 export type Unit =
-  "number" | "usd" | "pct" | "cents" | "minutes" | "seconds" | "bps" | "hours" | "times";
+  | "number"
+  | "usd"
+  | "pct"
+  | "cents"
+  /** Stored in seconds, shown in minutes. */
+  | "minutes"
+  /** Stored and shown in minutes. */
+  | "min"
+  | "seconds"
+  | "bps"
+  | "hours"
+  | "times";
 type Values = Record<string, unknown>;
 
 export interface Ctx {
@@ -54,6 +65,7 @@ export const UNIT_SUFFIX: Record<Unit, string> = {
   pct: "%",
   cents: "¢",
   minutes: "min",
+  min: "min",
   seconds: "sec",
   bps: "%",
   hours: "h",
@@ -326,7 +338,7 @@ export const RISK_GROUPS: Group[] = [
         name: "minMinutesToEnd",
         label: "Skip markets ending within",
         help: "Prices jump around right before a market ends, with no time to react.",
-        unit: "minutes",
+        unit: "min",
         min: 0,
         step: 1,
       },

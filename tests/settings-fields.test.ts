@@ -28,6 +28,9 @@ describe("settings fields", () => {
     expect(fromDisplay("cents", 3)).toBe(0.03);
     expect(toDisplay("minutes", 600)).toBe(10);
     expect(fromDisplay("minutes", 2.5)).toBe(150);
+    // minMinutesToEnd is already stored in minutes (10 = 10 min, not 0.17).
+    expect(toDisplay("min", 10)).toBe(10);
+    expect(fromDisplay("min", 10)).toBe(10);
     expect(toDisplay("bps", 25)).toBe(0.25);
     expect(fromDisplay("bps", 0.25)).toBe(25);
   });

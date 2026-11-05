@@ -7,14 +7,13 @@
  * field, before anything is sent. Visitors get the same layout, read-only.
  */
 import { cn } from "cn";
-import { Lock, RotateCcw } from "lucide-react";
+import { Lock, Minus, Plus, RotateCcw } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 
 import { saveSettingsAction, type ActionResult } from "@/app/actions";
 import { FormMessage } from "@/components/forms";
 import { LockedAction } from "@/components/locked-action";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { DEFAULT_RISK_CONFIG, RiskConfigSchema } from "@/lib/copy/config";
@@ -197,6 +196,98 @@ export function SettingsEditor({
   );
 }
 
+/**
+ * Number field with − / + buttons and the unit in a fixed slot, so values line up from
+ * row to row. Native browser spinners are hidden (they overlapped the value).
+ */
+function NumberStepper({
+  id,
+  label,
+  value,
+  onChange,
+  step = 1,
+  min,
+  max,
+  unit,
+  invalid,
+  describedBy,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  step?: number;
+  min?: number;
+  max?: number;
+  unit: string;
+  invalid: boolean;
+  describedBy?: string;
+}) {
+  const n = Number(value);
+  const decimals = (String(step).split(".")[1] ?? "").length;
+  const nudge = (dir: 1 | -1) => {
+    const base = Number.isFinite(n) && value !== "" ? n : (min ?? 0);
+    let next = Math.round((base + dir * step) / step) * step;
+    if (min !== undefined) next = Math.max(min, next);
+    if (max !== undefined) next = Math.min(max, next);
+    onChange(String(Number(next.toFixed(decimals))));
+  };
+  const atMin = min !== undefined && Number.isFinite(n) && value !== "" && n <= min;
+  const atMax = max !== undefined && Number.isFinite(n) && value !== "" && n >= max;
+  const btn =
+    "text-muted-foreground hover:bg-muted hover:text-foreground flex w-9 shrink-0 items-center justify-center transition-colors disabled:pointer-events-none disabled:opacity-30";
+  return (
+    <div
+      aria-invalid={invalid}
+      className={cn(
+        "border-input dark:bg-input/30 flex h-9 w-full items-stretch overflow-hidden rounded-md border bg-transparent shadow-xs transition-[color,box-shadow]",
+        "focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]",
+        "aria-invalid:border-destructive aria-invalid:ring-destructive/20",
+      )}
+    >
+      <button
+        type="button"
+        tabIndex={-1}
+        className={cn(btn, "border-input border-r")}
+        onClick={() => nudge(-1)}
+        disabled={atMin}
+        aria-label={`Decrease ${label}`}
+      >
+        <Minus className="size-3.5" />
+      </button>
+      <input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        step={step}
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(e.currentTarget.value)}
+        aria-invalid={invalid}
+        aria-describedby={describedBy}
+        className="min-w-0 flex-1 [appearance:textfield] bg-transparent pr-1.5 pl-2 text-right text-base tabular-nums outline-none md:text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      <span
+        aria-hidden
+        className="text-muted-foreground flex w-9 shrink-0 items-center text-xs font-medium"
+      >
+        {unit}
+      </span>
+      <button
+        type="button"
+        tabIndex={-1}
+        className={cn(btn, "border-input border-l")}
+        onClick={() => nudge(1)}
+        disabled={atMax}
+        aria-label={`Increase ${label}`}
+      >
+        <Plus className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function humanIssue(message: string, field: Field | undefined): string {
   if (!field || field.kind !== "number") return message;
   const unit = UNIT_SUFFIX[field.unit];
@@ -330,35 +421,18 @@ function FieldRow({
       </div>
       <div>
         {admin ? (
-          <div className="relative">
-            {prefix && (
-              <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm">
-                $
-              </span>
-            )}
-            <Input
-              id={id}
-              inputMode="decimal"
-              type="number"
-              step={f.step ?? "any"}
-              min={f.min}
-              max={f.max}
-              value={String(draft[f.name] ?? "")}
-              onChange={(e) => onChange(f.name, e.currentTarget.value)}
-              aria-invalid={!!error}
-              aria-describedby={error ? `${id}-err` : undefined}
-              className={cn(
-                "text-right tabular-nums",
-                prefix ? "pl-7" : "",
-                unit && !prefix ? "pr-12" : "",
-              )}
-            />
-            {unit && !prefix && (
-              <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm">
-                {unit}
-              </span>
-            )}
-          </div>
+          <NumberStepper
+            id={id}
+            label={f.label}
+            value={String(draft[f.name] ?? "")}
+            onChange={(v) => onChange(f.name, v)}
+            step={f.step}
+            min={f.min}
+            max={f.max}
+            unit={prefix ? "USD" : unit}
+            invalid={!!error}
+            describedBy={error ? `${id}-err` : undefined}
+          />
         ) : (
           <p className="text-right text-sm font-medium tabular-nums sm:pt-1">
             {prefix ? `$${draft[f.name]}` : `${draft[f.name]}${unit ? ` ${unit}` : ""}`}
