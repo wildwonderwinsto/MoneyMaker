@@ -20,7 +20,7 @@ import {
 import { collect, getPositions, getUserPnl, paginate, type Position } from "@/lib/polymarket/data";
 import { getMarketsByConditionIds, resolvedPayouts, winnerIndex } from "@/lib/polymarket/gamma";
 
-import { chunk, toDate } from "./util";
+import { chunk, toDate, toEpoch } from "./util";
 
 export interface BackfillOptions {
   /** Max positions fetched per status per trader (bounds work and storage). */
@@ -28,6 +28,25 @@ export interface BackfillOptions {
 }
 
 export const DEFAULT_BACKFILL: BackfillOptions = { maxPositionsPerStatus: 1000 };
+
+/**
+ * A trader's usual stake: the median dollars put into one market over the last 90 days
+ * (all fetched positions if fewer than 5 recent ones). Only stakes the copy engine would
+ * copy count (≥ `minUsd`). Null with too little data. Pure (tested).
+ */
+export function typicalStake(
+  positions: Array<{ cost: number; firstEntryAt: number | null }>,
+  now: number,
+  minUsd = 25,
+): number | null {
+  const big = positions.filter((p) => p.cost >= minUsd);
+  const recent = big.filter((p) => (p.firstEntryAt ?? 0) >= now - 90 * 86_400);
+  const pool = recent.length >= 5 ? recent : big;
+  if (pool.length < 5) return null;
+  const sorted = pool.map((p) => p.cost).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
 
 function positionRow(p: Position): typeof traderPositions.$inferInsert {
   const sharesBought = p.total_size ?? p.current_size;
@@ -143,9 +162,13 @@ export async function backfillTrader(
       lastTrade = points[i].timestamp;
     }
   }
+  const stake = typicalStake(
+    rows.map((r) => ({ cost: r.totalCost ?? 0, firstEntryAt: toEpoch(r.firstEntryAt) })),
+    Date.now() / 1000,
+  );
   await db
     .update(traders)
-    .set({ lastBackfillAt: new Date(), lastTradeAt: toDate(lastTrade) })
+    .set({ lastBackfillAt: new Date(), lastTradeAt: toDate(lastTrade), typicalStakeUsd: stake })
     .where(eq(traders.wallet, wallet));
   return { positions: rows.length, pnlPoints: pnlRows.length };
 }

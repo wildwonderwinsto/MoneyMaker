@@ -63,7 +63,8 @@ export interface BuyContext {
   book: OrderBook | null;
   equity: number;
   cash: number;
-  leaderPortfolioUsd: number;
+  /** Leader's usual stake per market; null if not known yet. */
+  leaderTypicalUsd: number | null;
   weight: number;
   marketExposure: number;
   traderExposure: number;
@@ -151,7 +152,7 @@ export function decideBuy(ctx: BuyContext): Decision {
       equity: ctx.equity,
       cash: ctx.cash,
       leaderUsd: trade.usdc,
-      leaderPortfolioUsd: ctx.leaderPortfolioUsd,
+      leaderTypicalUsd: ctx.leaderTypicalUsd,
       weight: ctx.weight,
       marketExposure: ctx.marketExposure,
       traderExposure: ctx.traderExposure,

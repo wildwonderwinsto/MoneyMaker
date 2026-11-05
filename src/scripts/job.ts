@@ -103,9 +103,19 @@ async function main() {
     case "daily":
       await runJob(db, "daily", async (log) => {
         const discovered = await discoverCandidates(db, cfg, discoverOpts, log);
-        // Traders picked in recorded months are judged by the backtest: keep them fresh too.
+        // Traders picked in recorded months are judged by the backtest, and followed traders
+        // need a fresh usual stake for sizing: keep both backfilled too.
         const recorded = await recordedWallets(db, backtestOpts.months);
-        const wallets = [...new Set([...discovered.wallets, ...recorded])];
+        const followed = (await db.select({ wallet: follows.wallet }).from(follows)).map(
+          (f) => f.wallet,
+        );
+        if (followed.length) {
+          await db
+            .insert(traders)
+            .values(followed.map((wallet) => ({ wallet })))
+            .onConflictDoNothing();
+        }
+        const wallets = [...new Set([...discovered.wallets, ...recorded, ...followed])];
         const backfill = await backfillMany(db, wallets, log);
         const { rejected, ...score } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
         const selections = await recordMonthlySelections(db, backtestOpts.topK, log);

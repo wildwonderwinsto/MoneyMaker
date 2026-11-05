@@ -57,6 +57,13 @@
       "when": 1793852610853,
       "tag": "0007_trader_last_trade",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793854509206,
+      "tag": "0008_trader_typical_stake",
+      "breakpoints": true
     }
   ]
 }

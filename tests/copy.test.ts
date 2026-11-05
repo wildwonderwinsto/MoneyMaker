@@ -72,18 +72,31 @@ describe("sizeBuy", () => {
     equity: 1000,
     cash: 1000,
     leaderUsd: 500,
-    leaderPortfolioUsd: 10_000,
+    leaderTypicalUsd: 250,
     weight: 1,
     marketExposure: 0,
     traderExposure: 0,
   };
 
-  it("mirrors the leader's conviction as a fraction of our equity", () => {
-    expect(sizeBuy(base, cfg)).toMatchObject({ usd: 50 }); // 5% of their book → 5% of ours
+  it("matches their conviction: twice their usual stake → twice our usual stake", () => {
+    // Usual copy = 2% of $1000 = $20; this bet is 2× their usual → $40.
+    expect(sizeBuy(base, cfg)).toMatchObject({ usd: 40 });
+  });
+
+  it("uses the usual stake when theirs isn't known yet", () => {
+    expect(sizeBuy({ ...base, leaderTypicalUsd: null }, cfg)).toMatchObject({ usd: 20 });
+  });
+
+  it("caps conviction, so one huge bet can't take over the account", () => {
+    // 400× their usual counts as 3× → $60.
+    expect(sizeBuy({ ...base, leaderUsd: 100_000, leaderTypicalUsd: 250 }, cfg)).toMatchObject({
+      usd: 60,
+    });
   });
 
   it("caps at the per-market limit", () => {
-    expect(sizeBuy({ ...base, leaderUsd: 5000 }, cfg)).toMatchObject({ usd: 100 });
+    const big = { ...cfg, stakePct: 0.1 }; // 10% × 3 = 30% wanted, 10% allowed
+    expect(sizeBuy({ ...base, leaderUsd: 5000 }, big)).toMatchObject({ usd: 100 });
   });
 
   it("ignores the leader's dust trades with a clear reason", () => {
@@ -92,15 +105,15 @@ describe("sizeBuy", () => {
     expect("reason" in r && r.reason).toMatch(/too small/);
   });
 
-  it("applies the minimum copy size to a whale's meaningful but tiny-fraction trade", () => {
-    // $100 of a $1M book = 0.01% → $0.10 on our $1000, floored to $5.
-    expect(sizeBuy({ ...base, leaderUsd: 100, leaderPortfolioUsd: 1_000_000 }, cfg)).toMatchObject({
+  it("applies the minimum copy size to a small bet for them", () => {
+    // $25 vs a usual $10,000 = 0.0025× → $0.05, floored to $5.
+    expect(sizeBuy({ ...base, leaderUsd: 25, leaderTypicalUsd: 10_000 }, cfg)).toMatchObject({
       usd: 5,
     });
   });
 
   it("skips copies below the order minimum", () => {
-    const r = sizeBuy({ ...base, leaderPortfolioUsd: 1_000_000 }, { ...cfg, minCopyUsd: 0 });
+    const r = sizeBuy({ ...base, leaderTypicalUsd: 1_000_000 }, { ...cfg, minCopyUsd: 0 });
     expect("reason" in r && r.reason).toMatch(/below/);
   });
 
@@ -142,7 +155,7 @@ describe("decideBuy", () => {
     book,
     equity: 1000,
     cash: 1000,
-    leaderPortfolioUsd: 10_000,
+    leaderTypicalUsd: 250,
     weight: 1,
     marketExposure: 0,
     traderExposure: 0,
@@ -158,7 +171,7 @@ describe("decideBuy", () => {
     const d = decideBuy(ctx);
     expect(d.action).toBe("buy");
     if (d.action === "buy") {
-      expect(d.fill.notional).toBeCloseTo(50, 6);
+      expect(d.fill.notional).toBeCloseTo(40, 6); // 2× their usual stake → 2 × 2% of $1000
       expect(d.fill.avgPrice).toBeCloseTo(0.51, 6);
     }
   });

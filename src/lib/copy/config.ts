@@ -13,20 +13,25 @@ export const RiskConfigSchema = z.object({
   /** Ignore leader trades older than this (e.g. after downtime). */
   maxSignalAgeSeconds: z.number().int().min(30).default(600),
   /**
-   * proportional: our stake = equity × (leader stake ÷ leader portfolio) × multiplier × weight
+   * proportional ("match their conviction"): our stake = equity × stakePct × conviction ×
+   *   multiplier × weight, where conviction = leader stake ÷ their usual stake per market,
+   *   capped at `maxConviction` (1 when their usual stake isn't known yet).
+   *   (It used to divide by the leader's open-positions value, which leaves out their cash:
+   *   whales' copies all hit the $5 floor, small accounts' all hit the per-market cap.)
    * fixed: always `fixedUsd` × weight
    */
   sizingMode: z.enum(["proportional", "fixed"]).default("proportional"),
+  /** Share of equity copied into a bet the size of the leader's usual stake. */
+  stakePct: z.number().min(0).max(1).default(0.02),
+  /** A bet bigger than their usual counts as at most this many usual bets. */
+  maxConviction: z.number().min(1).max(20).default(3),
   proportionalMultiplier: z.number().min(0).max(10).default(1),
   fixedUsd: z.number().min(1).default(25),
   /** Smallest order worth placing. */
   minOrderUsd: z.number().min(0).default(1),
   /** Ignore leader trades smaller than this (dust / order-splitting noise). */
   minLeaderUsd: z.number().min(0).default(25),
-  /**
-   * Floor for proportional copies of meaningful trades. Whales commit tiny fractions of
-   * huge books, which would round to $0 on a small bankroll. Risk caps still apply.
-   */
+  /** Smallest proportional copy of a trade worth copying. Risk caps still apply. */
   minCopyUsd: z.number().min(0).default(5),
   /** Caps as fractions of current equity. */
   maxPositionPct: z.number().min(0).max(1).default(0.1),

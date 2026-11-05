@@ -14,12 +14,11 @@
 import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
-import { cursors, follows, paperPositions, signals } from "@/lib/db/schema";
+import { cursors, follows, paperPositions, signals, traders } from "@/lib/db/schema";
 import { acquireLease, PROCESS_ID, releaseLease } from "@/lib/lease";
 import { getBook, getMidpoints, type OrderBook } from "@/lib/polymarket/clob";
 import {
   getActivity,
-  getPortfolioValue,
   getPositions,
   legacyTradeId,
   tradeId,
@@ -120,7 +119,21 @@ interface EngineCtx {
   now: number;
   /** Enabled leaders → sizing weight. */
   weights: Map<string, number>;
+  /** Leaders → usual stake per market (conviction sizing); missing = not known yet. */
+  typicalStakes: Map<string, number>;
   stats: TickStats;
+}
+
+/** Leaders' usual stake per market, from the daily backfill. */
+async function loadTypicalStakes(db: Db, wallets: string[]): Promise<Map<string, number>> {
+  if (wallets.length === 0) return new Map();
+  const rows = await db
+    .select({ wallet: traders.wallet, stake: traders.typicalStakeUsd })
+    .from(traders)
+    .where(inArray(traders.wallet, wallets));
+  return new Map(
+    rows.filter((r) => r.stake !== null && r.stake > 0).map((r) => [r.wallet, r.stake!]),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +174,10 @@ export async function runTick(
       cfg,
       now,
       weights: new Map(leaders.map((l) => [l.wallet, l.weight])),
+      typicalStakes: await loadTypicalStakes(
+        db,
+        leaders.map((l) => l.wallet),
+      ),
       stats,
     };
 
@@ -227,6 +244,10 @@ export async function runStreamBatch(
       cfg,
       now: Math.floor(nowMs / 1000),
       weights: new Map(leaders.map((l) => [l.wallet, l.weight])),
+      typicalStakes: await loadTypicalStakes(
+        db,
+        leaders.map((l) => l.wallet),
+      ),
       stats,
     };
     const ours = trades.filter((t) => ctx.weights.has(t.wallet));
@@ -405,12 +426,10 @@ async function processTrades(
     );
   };
   const bookTokens = new Set<string>();
-  const portfolioWallets = new Set<string>();
   const sellConditions = new Map<string, Set<string>>();
   for (const t of merged) {
     if (t.side === "BUY" && buyMayCopy(t)) {
       bookTokens.add(t.tokenId);
-      if (cfg.sizingMode === "proportional") portfolioWallets.add(t.wallet);
     } else if (t.side === "SELL") {
       const pos = openCopy(state0, t.wallet, t.tokenId);
       if (!pos || !cfg.copySells) continue;
@@ -422,9 +441,8 @@ async function processTrades(
       sellConditions.set(t.wallet, set);
     }
   }
-  const [books, portfolios, leaderPositions] = await Promise.all([
+  const [books, leaderPositions] = await Promise.all([
     mapSettled([...bookTokens], (id) => getBook(id)),
-    mapSettled([...portfolioWallets], (w) => getPortfolioValue(w)),
     fetchLeaderPositions(sellConditions),
   ]);
 
@@ -442,7 +460,7 @@ async function processTrades(
         book: books.get(t.tokenId) ?? null,
         equity: state.equity,
         cash: state.cash,
-        leaderPortfolioUsd: portfolios.get(t.wallet) ?? 0,
+        leaderTypicalUsd: ctx.typicalStakes.get(t.wallet) ?? null,
         weight: ctx.weights.get(t.wallet) ?? 1,
         marketExposure: exp.market,
         traderExposure: exp.trader,
@@ -688,12 +706,7 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
     ),
     startOfDayEquity(db, ctx.accountId, ctx.now * 1000),
   ]);
-  const [books, portfolios] = await Promise.all([
-    mapSettled([...new Set(trades.map((t) => t.tokenId))], (id) => getBook(id)),
-    cfg.sizingMode === "proportional"
-      ? mapSettled([...new Set(trades.map((t) => t.wallet))], (w) => getPortfolioValue(w))
-      : Promise.resolve(new Map<string, number | null>()),
-  ]);
+  const books = await mapSettled([...new Set(trades.map((t) => t.tokenId))], (id) => getBook(id));
 
   let state = await loadAccountState(db, ctx.accountId);
   for (const t of trades) {
@@ -706,7 +719,7 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
       book: books.get(t.tokenId) ?? null,
       equity: state.equity,
       cash: state.cash,
-      leaderPortfolioUsd: portfolios.get(t.wallet) ?? 0,
+      leaderTypicalUsd: ctx.typicalStakes.get(t.wallet) ?? null,
       weight: ctx.weights.get(t.wallet) ?? 1,
       marketExposure: exp.market,
       traderExposure: exp.trader,

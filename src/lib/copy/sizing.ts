@@ -7,8 +7,8 @@ export interface SizingInput {
   cash: number;
   /** USDC the leader spent on this trade. */
   leaderUsd: number;
-  /** Leader's open-positions value (from /v2/value); 0 if unknown. */
-  leaderPortfolioUsd: number;
+  /** Leader's usual stake per market (traders.typicalStakeUsd); null if not known yet. */
+  leaderTypicalUsd: number | null;
   /** Follow weight for this leader. */
   weight: number;
   /** Our current cost basis in this market (all leaders) and with this leader. */
@@ -24,7 +24,7 @@ export type SizingResult =
 
 /** How many USDC to put into a copied buy, after every risk cap. */
 export function sizeBuy(input: SizingInput, cfg: RiskConfig): SizingResult {
-  const { equity, cash, leaderUsd, leaderPortfolioUsd, weight } = input;
+  const { equity, cash, leaderUsd, leaderTypicalUsd, weight } = input;
   if (equity <= 0 || cash <= 0) {
     return { usd: 0, reason: "No cash available", code: "no_cash", details: { cash, equity } };
   }
@@ -38,14 +38,17 @@ export function sizeBuy(input: SizingInput, cfg: RiskConfig): SizingResult {
   }
 
   let usd: number;
-  let leaderFraction: number | null = null;
+  let conviction: number | null = null;
   if (cfg.sizingMode === "fixed") {
     usd = cfg.fixedUsd * weight;
   } else {
-    // Fraction of the leader's book they just committed (their conviction).
-    const leaderBook = Math.max(leaderPortfolioUsd, leaderUsd);
-    leaderFraction = leaderBook > 0 ? leaderUsd / leaderBook : 0;
-    usd = Math.max(equity * leaderFraction * cfg.proportionalMultiplier, cfg.minCopyUsd) * weight;
+    // How big this bet is for them: 2 = twice their usual stake in a market.
+    conviction =
+      leaderTypicalUsd && leaderTypicalUsd > 0
+        ? Math.min(cfg.maxConviction, leaderUsd / leaderTypicalUsd)
+        : 1;
+    const stake = equity * cfg.stakePct * conviction * cfg.proportionalMultiplier;
+    usd = Math.max(stake, cfg.minCopyUsd) * weight;
   }
   const wanted = usd;
 
@@ -70,7 +73,8 @@ export function sizeBuy(input: SizingInput, cfg: RiskConfig): SizingResult {
     sizingMode: cfg.sizingMode,
     wantedUsd: wanted,
     usd,
-    leaderFraction,
+    conviction,
+    leaderTypicalUsd,
     weight,
     cappedBy: binding?.code ?? null,
   };

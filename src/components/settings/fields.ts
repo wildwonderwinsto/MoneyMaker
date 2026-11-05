@@ -141,7 +141,7 @@ export const RISK_GROUPS: Group[] = [
           {
             value: "proportional",
             label: "Match their conviction",
-            help: "Bet the same share of your money as the trader bets of theirs.",
+            help: "Bet more when they bet more than usual: a bet twice their usual size gets twice your usual stake.",
           },
           {
             value: "fixed",
@@ -152,7 +152,7 @@ export const RISK_GROUPS: Group[] = [
         example: (v, ctx) =>
           v.sizingMode === "fixed"
             ? `Every copy: ${money(n(v, "fixedUsd"))} (× the trader's weight).`
-            : `Example: a trader puts 5% of their portfolio into a trade → you put ${p(0.05 * n(v, "proportionalMultiplier"))} of your ${money(ctx.equity)} = ${money(Math.max(ctx.equity * 0.05 * n(v, "proportionalMultiplier"), n(v, "minCopyUsd")))}.`,
+            : `Example: a trader bets twice their usual amount → you put ${p(Math.min(2, n(v, "maxConviction")) * n(v, "stakePct") * n(v, "proportionalMultiplier"))} of your ${money(ctx.equity)} = ${money(Math.max(ctx.equity * Math.min(2, n(v, "maxConviction")) * n(v, "stakePct") * n(v, "proportionalMultiplier"), n(v, "minCopyUsd")))}.`,
       },
       {
         kind: "number",
@@ -166,9 +166,31 @@ export const RISK_GROUPS: Group[] = [
       },
       {
         kind: "number",
+        name: "stakePct",
+        label: "Usual bet",
+        help: "What you put in when a trader makes a bet of their usual size (their median per market over the last 90 days).",
+        unit: "pct",
+        min: 0,
+        max: 100,
+        step: 0.5,
+        showIf: (v) => v.sizingMode !== "fixed",
+      },
+      {
+        kind: "number",
+        name: "maxConviction",
+        label: "Biggest bet",
+        help: "A bet much bigger than their usual counts as at most this many usual bets, so one huge bet can't take over your account.",
+        unit: "times",
+        min: 1,
+        max: 20,
+        step: 0.5,
+        showIf: (v) => v.sizingMode !== "fixed",
+      },
+      {
+        kind: "number",
         name: "proportionalMultiplier",
         label: "Multiplier",
-        help: "1× bets exactly the trader's share. 0.5× bets half as much, 2× twice as much.",
+        help: "Scales every copy: 0.5× bets half as much, 2× twice as much.",
         unit: "times",
         min: 0,
         max: 10,
@@ -179,7 +201,7 @@ export const RISK_GROUPS: Group[] = [
         kind: "number",
         name: "minCopyUsd",
         label: "Smallest copy",
-        help: "Big traders often bet a tiny share of a huge portfolio, which would round to almost nothing for you. Their trades are copied with at least this much.",
+        help: "Copies of bets that are small for the trader still get at least this much.",
         unit: "usd",
         min: 0,
         step: 1,

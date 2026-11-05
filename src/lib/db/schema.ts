@@ -51,6 +51,8 @@ export const traders = pgTable("traders", {
   lastBackfillAt: tsz(),
   /** Day of the last real trade (trade count went up); claims and settlements don't count. */
   lastTradeAt: tsz(),
+  /** Median dollars they put into one market (recent positions); sizes copies by conviction. */
+  typicalStakeUsd: money(),
   updatedAt: createdAt(),
 });
 

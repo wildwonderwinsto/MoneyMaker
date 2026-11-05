@@ -12,7 +12,7 @@ import {
   traderScores,
   traderTrades,
 } from "@/lib/db/schema";
-import { backfillTrader, cleanupStorage, prunePositions } from "@/lib/jobs/backfill";
+import { backfillTrader, cleanupStorage, prunePositions, typicalStake } from "@/lib/jobs/backfill";
 import { loadRecordedPicks, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
 import * as data from "@/lib/polymarket/data";
 
@@ -151,6 +151,22 @@ beforeAll(async () => {
   ({ db, close } = await createTestDb());
 });
 afterAll(async () => close());
+
+describe("typicalStake", () => {
+  const now = 1_800_000_000;
+  const at = (daysAgo: number) => now - daysAgo * 86_400;
+  it("is the median recent stake, ignoring stakes too small to copy", () => {
+    const recent = [30, 40, 50, 60, 1000].map((cost) => ({ cost, firstEntryAt: at(10) }));
+    const dust = Array.from({ length: 20 }, () => ({ cost: 2, firstEntryAt: at(5) }));
+    const old = Array.from({ length: 20 }, () => ({ cost: 5000, firstEntryAt: at(200) }));
+    expect(typicalStake([...recent, ...dust, ...old], now)).toBe(50);
+  });
+  it("falls back to all positions, and to null with too little data", () => {
+    const old = [100, 200, 300, 400, 500].map((cost) => ({ cost, firstEntryAt: at(200) }));
+    expect(typicalStake(old, now)).toBe(300);
+    expect(typicalStake(old.slice(0, 4), now)).toBeNull();
+  });
+});
 
 describe("storage maintenance", () => {
   it("prunes rejected traders and removes orphan markets and old trades", async () => {

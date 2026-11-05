@@ -1,0 +1,1 @@
+ALTER TABLE "traders" ADD COLUMN "typical_stake_usd" numeric(18, 6);

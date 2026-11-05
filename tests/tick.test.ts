@@ -6,8 +6,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { runTick } from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
-import { follows, markets, paperAccounts, paperPositions, signals } from "@/lib/db/schema";
+import { follows, markets, paperAccounts, paperPositions, signals, traders } from "@/lib/db/schema";
+import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { acquireLease, releaseLease } from "@/lib/lease";
+import { writeSetting } from "@/lib/settings";
 import * as clob from "@/lib/polymarket/clob";
 import * as data from "@/lib/polymarket/data";
 import * as gamma from "@/lib/polymarket/gamma";
@@ -82,6 +84,8 @@ const page = <T>(items: T[]) => ({
 beforeAll(async () => {
   ({ db, close } = await createTestDb());
   await db.insert(follows).values({ wallet: LEADER });
+  // A usual-size bet copies 10% of $1000 = $100, exactly the per-market cap.
+  await writeSetting(db, "risk", { ...DEFAULT_RISK_CONFIG, stakePct: 0.1 });
 });
 afterAll(async () => close());
 
@@ -127,7 +131,7 @@ describe("runTick", () => {
     );
     const s = await runTick(db, (t0 + 30) * 1000);
     expect(s).toMatchObject({ newTrades: 2, copied: 1, ignored: 1, errors: [] });
-    // Leader put 100 of 1000 (10%) in → we put 10% of $1000 = $100 (= per-market cap).
+    // Their usual stake isn't known yet → a usual bet: 10% of $1000 = $100 (= per-market cap).
     expect(await cash()).toBeCloseTo(900, 6);
     const pos = await openPosition();
     expect(pos.shares).toBeCloseTo(100 + 49 / 0.52, 4);
@@ -204,6 +208,43 @@ describe("runTick", () => {
       .where(eq(paperPositions.conditionId, COND2));
     expect(pos.status).toBe("settled");
     expect(pos.realizedPnl).toBeCloseTo(10, 4);
+  });
+
+  it("sizes a copy by how big the bet is for this trader", async () => {
+    const COND3 = "0xsized";
+    // They usually put $1000 into a market; this $100 bet is 0.1× usual → 0.1 × 10% ≈ 1%.
+    await db
+      .insert(traders)
+      .values({ wallet: LEADER, typicalStakeUsd: 1000 })
+      .onConflictDoUpdate({ target: traders.wallet, set: { typicalStakeUsd: 1000 } });
+    vi.mocked(gamma.getMarketsByConditionIds).mockResolvedValue([
+      gamma.GammaMarket.parse({
+        id: "3",
+        question: "Sized?",
+        conditionId: COND3,
+        closed: false,
+        endDate: new Date((t0 + 7 * 86_400) * 1000).toISOString(),
+        outcomes: '["Yes","No"]',
+        outcomePrices: '["0.5","0.5"]',
+        clobTokenIds: '["555","666"]',
+      }),
+    ]);
+    vi.mocked(data.getActivity).mockResolvedValue(
+      page([
+        activity({
+          transaction_hash: "0xtx-sized",
+          condition_id: COND3,
+          token_id: "555",
+          timestamp: t0 + 200,
+        }),
+      ]),
+    );
+    const before = await cash();
+    const s = await runTick(db, (t0 + 230) * 1000);
+    expect(s.copied).toBe(1);
+    const spent = before - (await cash());
+    expect(spent).toBeGreaterThan(9);
+    expect(spent).toBeLessThan(12); // ~1% of equity, not the $100 a usual bet would get
   });
 
   it("refuses to run concurrently", async () => {
