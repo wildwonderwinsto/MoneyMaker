@@ -58,7 +58,9 @@ export function NextTick({
   const pct = overdue ? 100 : Math.min(100, Math.max(0, 100 - (leftMs / wait) * 100));
   return (
     <span className="inline-flex items-center gap-2">
-      <span className="w-24 tabular-nums">{overdue ? "checking now…" : `in ${left}s`}</span>
+      <span className="w-28 whitespace-nowrap tabular-nums">
+        {overdue ? "checking now…" : `in ${left}s`}
+      </span>
       <span
         className="bg-muted relative inline-block h-1.5 w-20 overflow-hidden rounded-full"
         role="progressbar"
