@@ -77,8 +77,8 @@ async function PaperContent() {
         />
       </div>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-3 sm:px-6">
           <CardTitle>Equity</CardTitle>
           <CardDescription>
             Cash + open positions at market prices. ▲ marks a buy, ▼ a sell or settlement: hover or
@@ -100,8 +100,8 @@ async function PaperContent() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-3 sm:px-6">
           <CardTitle>Open positions</CardTitle>
           <CardDescription>
             Tap a position to see its trades, the trader&apos;s moves and hedge options.
@@ -123,8 +123,8 @@ async function PaperContent() {
       </Card>
 
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
+        <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+          <CardHeader className="px-3 sm:px-6">
             <CardTitle>Results by trader</CardTitle>
             <CardDescription>
               How much money each trader has made (or lost) you. Open one to see every position.
@@ -143,8 +143,8 @@ async function PaperContent() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
+        <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+          <CardHeader className="px-3 sm:px-6">
             <CardTitle>Recent fills</CardTitle>
             <CardDescription>Simulated against the live order book</CardDescription>
           </CardHeader>
@@ -195,14 +195,14 @@ async function PaperContent() {
       </div>
 
       {admin && (
-        <Card>
-          <CardHeader>
+        <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+          <CardHeader className="px-3 sm:px-6">
             <CardTitle>Account</CardTitle>
             <CardDescription>
               Start over with a fresh balance, for example after changing risk rules.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-3 sm:px-6">
             <ResetPaperForm current={p.account.startingBalance} />
           </CardContent>
         </Card>

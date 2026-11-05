@@ -80,15 +80,15 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <Link href="/" className="text-muted-foreground hover:text-foreground text-sm">
         ← All traders
       </Link>
 
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-3 sm:gap-4">
         <Avatar wallet={trader.wallet} src={trader.profileImage} size={64} />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-2xl font-semibold tracking-tight">{name}</h1>
+          <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">{name}</h1>
           <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-2 text-sm">
             {score && <TierBadge tier={score.tier} />}
             <a
@@ -107,7 +107,9 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
         </div>
         {score && (
           <div className="text-right">
-            <p className="text-4xl font-semibold tabular-nums">{Math.round(score.score)}</p>
+            <p className="text-3xl font-semibold tabular-nums sm:text-4xl">
+              {Math.round(score.score)}
+            </p>
             <p className="text-muted-foreground text-xs">score / 100</p>
           </div>
         )}
@@ -131,7 +133,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
         <p className="text-muted-foreground">This trader hasn&apos;t been scored yet.</p>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
             <StatTile
               label="Realized P&L"
               value={usd(score.totalPnl, { compact: true, sign: true })}
@@ -170,16 +172,16 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
             />
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-5">
-            <Card className="lg:col-span-2">
-              <CardHeader>
+          <div className="grid gap-4 sm:gap-6 lg:grid-cols-5">
+            <Card className="gap-4 py-4 sm:gap-6 sm:py-6 lg:col-span-2">
+              <CardHeader className="px-4 sm:px-6">
                 <CardTitle>Why this score</CardTitle>
                 <CardDescription>
                   Passed {passed} of {score.checks.length} checks · updated{" "}
                   {timeAgo(score.computedAt)}
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="px-4 sm:px-6">
                 <ul className="space-y-2.5">
                   {score.checks.map((c) => (
                     <li key={c.code} className="flex items-start gap-2 text-sm">
@@ -201,49 +203,49 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               </CardContent>
             </Card>
 
-            <div className="space-y-6 lg:col-span-3">
-              <Card>
-                <CardHeader>
+            <div className="space-y-4 sm:space-y-6 lg:col-span-3">
+              <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+                <CardHeader className="px-4 sm:px-6">
                   <CardTitle>Cumulative profit</CardTitle>
                   <CardDescription>Realized + unrealized P&L, daily</CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="px-4 sm:px-6">
                   <LineChart
                     data={pnl.map((p) => ({ t: p.day, pnl: p.pnl }))}
                     series={[{ key: "pnl", label: "Cumulative P&L", color: "var(--series-1)" }]}
                   />
                 </CardContent>
               </Card>
-              <Card>
-                <CardHeader>
+              <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+                <CardHeader className="px-4 sm:px-6">
                   <CardTitle>Monthly profit & loss</CardTitle>
                   <CardDescription>Consistent winners have mostly blue bars</CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="px-4 sm:px-6">
                   <PnlBars data={metrics.monthlyPnl ?? []} />
                 </CardContent>
               </Card>
             </div>
           </div>
 
-          <Card>
-            <CardHeader>
+          <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+            <CardHeader className="px-4 sm:px-6">
               <CardTitle>Recent positions</CardTitle>
               <CardDescription>Latest 40 markets this trader was active in</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="px-4 sm:px-6">
               {positions.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
                   Position history is only kept for shortlisted traders.
                 </p>
               ) : (
-                <Table className="min-w-[640px]">
+                <Table className="sm:min-w-[640px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Market</TableHead>
                       <TableHead>Side</TableHead>
-                      <TableHead className="text-right">Avg price</TableHead>
-                      <TableHead className="text-right">Invested</TableHead>
+                      <TableHead className="hidden text-right sm:table-cell">Avg price</TableHead>
+                      <TableHead className="hidden text-right sm:table-cell">Invested</TableHead>
                       <TableHead className="text-right">P&L</TableHead>
                       <TableHead>Result</TableHead>
                     </TableRow>
@@ -253,7 +255,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
                       const total = (p.realizedPnl ?? 0) + (p.unrealizedPnl ?? 0);
                       return (
                         <TableRow key={p.id}>
-                          <TableCell className="max-w-[340px] truncate">
+                          <TableCell className="max-w-[340px] min-w-36 whitespace-normal sm:truncate">
                             {p.slug ? (
                               <a
                                 href={polymarketMarketUrl(p.slug)}
@@ -268,10 +270,10 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
                             )}
                           </TableCell>
                           <TableCell>{p.outcome ?? "—"}</TableCell>
-                          <TableCell className="text-right tabular-nums">
+                          <TableCell className="hidden text-right tabular-nums sm:table-cell">
                             {cents(p.avgPrice)}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">
+                          <TableCell className="hidden text-right tabular-nums sm:table-cell">
                             {usd(p.totalCost, { compact: true })}
                           </TableCell>
                           <TableCell className="text-right">

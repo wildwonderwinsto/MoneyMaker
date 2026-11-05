@@ -6,11 +6,12 @@
  * - Markers: ▲ buy (series-3), ▼ sell or settlement (series-2) on top of the equity line
  *   (series-1). Palette validated for color-blind separation in light and dark; shape is
  *   a second cue so identity never relies on color alone.
- * - Crosshair tooltip lists the trades at that moment. A range filter sits above; a
- *   readable table (newest first, with change and trades per period) sits below.
+ * - Crosshair tooltip lists the trades at that moment. A range filter and zoom controls sit
+ *   above (wheel / pinch / drag also zoom and pan, see ./zoom); a readable table (newest
+ *   first, with change and trades per period) sits below.
  */
 import { cn } from "cn";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -24,6 +25,8 @@ import {
 } from "recharts";
 
 import { cents, num, usd } from "@/lib/format";
+
+import { useChartZoom, ZoomControls, ZoomHint, zoomSurface } from "./zoom";
 
 export interface EquityPoint {
   t: string;
@@ -192,9 +195,30 @@ export function EquityChart({
     const cut = all.filter((x) => x.ts >= end - r.ms);
     return cut.length >= 2 ? cut : all.slice(-2);
   }, [all, range]);
-  const span = rows.length > 1 ? rows.at(-1)!.ts - rows[0].ts : 0;
-  const buys = rows.reduce((a, r) => a + (r.buy !== undefined ? r.fills!.length : 0), 0);
-  const sells = rows.reduce((a, r) => a + (r.sell !== undefined ? r.fills!.length : 0), 0);
+  const min = rows[0]?.ts ?? 0;
+  const max = rows.at(-1)?.ts ?? 0;
+  const plotRef = useRef<HTMLDivElement>(null);
+  const zoom = useChartZoom(plotRef, {
+    min,
+    max,
+    // Down to 1/200th of the range, but never under 5 minutes.
+    minSpan: Math.max((max - min) / 200, 5 * 60_000),
+    inset: { left: 60, right: 8 },
+  });
+  // Zoomed: the points inside the window plus the line's value at each edge, so the line
+  // runs edge to edge and the y-axis fits only what is visible.
+  const view = useMemo(() => {
+    if (!zoom.zoomed) return rows;
+    const inside = rows.filter((r) => r.ts > zoom.lo && r.ts < zoom.hi);
+    return [
+      { ts: zoom.lo, equity: equityAt(rows, zoom.lo) },
+      ...inside,
+      { ts: zoom.hi, equity: equityAt(rows, zoom.hi) },
+    ];
+  }, [rows, zoom.zoomed, zoom.lo, zoom.hi]);
+  const span = zoom.hi - zoom.lo;
+  const buys = view.reduce((a, r) => a + (r.buy !== undefined ? r.fills!.length : 0), 0);
+  const sells = view.reduce((a, r) => a + (r.sell !== undefined ? r.fills!.length : 0), 0);
 
   return (
     <figure className="w-full">
@@ -220,38 +244,45 @@ export function EquityChart({
             Sell / settled ({sells})
           </span>
         </figcaption>
-        <div
-          className="bg-muted flex gap-0.5 rounded-md p-0.5"
-          role="group"
-          aria-label="Time range"
-        >
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              type="button"
-              onClick={() => setRange(r.key)}
-              aria-pressed={range === r.key}
-              className={cn(
-                "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-                range === r.key
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {r.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <ZoomControls zoom={zoom} />
+          <div
+            className="bg-muted flex gap-0.5 rounded-md p-0.5"
+            role="group"
+            aria-label="Time range"
+          >
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                type="button"
+                onClick={() => {
+                  setRange(r.key);
+                  zoom.reset();
+                }}
+                aria-pressed={range === r.key}
+                className={cn(
+                  "rounded px-2.5 py-2 text-xs font-medium transition-colors sm:py-1",
+                  range === r.key
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
-      <div style={{ height }}>
+      <div ref={plotRef} className={zoomSurface(zoom)} style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={rows} margin={{ top: 10, right: 8, bottom: 0, left: 0 }}>
+          <ComposedChart data={view} margin={{ top: 10, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" />
             <XAxis
               dataKey="ts"
               type="number"
               scale="time"
-              domain={["dataMin", "dataMax"]}
+              domain={[zoom.lo, zoom.hi]}
+              allowDataOverflow
               tickFormatter={(v: number) => fmtTime(v, span)}
               tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
               axisLine={false}
@@ -315,6 +346,7 @@ export function EquityChart({
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+      {max > min && <ZoomHint />}
       <EquityTable rows={all} />
     </figure>
   );

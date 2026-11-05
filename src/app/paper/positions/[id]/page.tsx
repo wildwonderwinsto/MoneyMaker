@@ -224,14 +224,14 @@ function Timeline({ data }: { data: PositionDetail }) {
   ].sort((a, b) => b.ts.getTime() - a.ts.getTime());
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+      <CardHeader className="px-4 sm:px-6">
         <CardTitle>What happened</CardTitle>
         <CardDescription>
           Our fills and the trader&apos;s trades in this outcome, newest first.
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-4 sm:px-6">
         {items.length === 0 ? (
           <p className="text-muted-foreground text-sm">No trades recorded.</p>
         ) : (
@@ -348,8 +348,8 @@ async function HedgePanel({
 }) {
   if (hedge && hedge.status === "open") {
     return (
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle className="flex items-center gap-2">
             <Shield className="text-primary size-4" aria-hidden /> Hedged
           </CardTitle>
@@ -373,8 +373,8 @@ async function HedgePanel({
   const ours = q.ok ? (q.position?.outcome ?? "your side") : "your side";
   const other = q.ok ? (q.opposite?.outcome ?? "the other side") : "the other side";
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+      <CardHeader className="px-4 sm:px-6">
         <CardTitle className="flex items-center gap-2">
           <Shield className="size-4" aria-hidden /> Cancel out a loss (hedge)
         </CardTitle>
@@ -386,7 +386,7 @@ async function HedgePanel({
             ` Auto-hedge is on (${cfg.autoHedge === "lock" ? "lock in" : "break even"} when a copy is down ${pct(cfg.hedgeTriggerLossPct, 0)}).`}
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-4 sm:px-6">
         {!q.ok ? (
           <p className="text-muted-foreground text-sm">{q.message}</p>
         ) : (

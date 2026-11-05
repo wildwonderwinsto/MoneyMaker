@@ -60,8 +60,8 @@ async function BacktestContent() {
   const cashMonths = s.months.filter((m) => m.strategyPicks.length === 0).length;
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
         <StatTile
           label="Strategy return"
           value={pct(s.strategyTotalReturn, 1, { sign: true })}
@@ -90,15 +90,15 @@ async function BacktestContent() {
         />
       </div>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>Growth of $1,000</CardTitle>
           <CardDescription>
             Run {timeAgo(run.createdAt)} · {params.traders ?? "?"} traders · last{" "}
             {params.months ?? s.months.length} months
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           <LineChart
             data={data}
             series={[
@@ -110,17 +110,20 @@ async function BacktestContent() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>Month by month</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Month</TableHead>
-                <TableHead className="text-right">Traders picked</TableHead>
-                <TableHead className="text-right">Bets copied</TableHead>
+                <TableHead className="text-right">
+                  <span className="sm:hidden">Picked</span>
+                  <span className="hidden sm:inline">Traders picked</span>
+                </TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Bets copied</TableHead>
                 <TableHead className="text-right">Strategy</TableHead>
                 <TableHead className="text-right">Baseline</TableHead>
               </TableRow>
@@ -132,7 +135,9 @@ async function BacktestContent() {
                   <TableCell className="text-right tabular-nums">
                     {m.strategyPicks.length || "cash"}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{m.strategyBets}</TableCell>
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                    {m.strategyBets}
+                  </TableCell>
                   <TableCell className="text-right">
                     <Signed value={m.strategyReturn}>
                       {pct(m.strategyReturn, 1, { sign: true })}

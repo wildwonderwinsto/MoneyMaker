@@ -48,8 +48,8 @@ async function SettingsContent() {
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <Card id="access" className="scroll-mt-24">
-        <CardHeader>
+      <Card id="access" className="scroll-mt-24 gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle className="flex items-center gap-2">
             {admin ? <ShieldCheck className="text-yes size-4" /> : <Lock className="size-4" />}
             {admin ? "Unlocked" : "View only"}
@@ -62,11 +62,13 @@ async function SettingsContent() {
               : "Visitors can look but not change anything. Enter the admin password to make changes."}
           </CardDescription>
         </CardHeader>
-        <CardContent>{admin ? passwordSet && <LockButton /> : <UnlockForm />}</CardContent>
+        <CardContent className="px-4 sm:px-6">
+          {admin ? passwordSet && <LockButton /> : <UnlockForm />}
+        </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>Following</CardTitle>
           <CardDescription>
             {admin
@@ -74,7 +76,7 @@ async function SettingsContent() {
               : "Traders being copied."}
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 px-4 sm:px-6">
           {followList.length === 0 ? (
             <p className="text-muted-foreground text-sm">
               Not following anyone yet. Pick verified traders on the{" "}
@@ -112,8 +114,8 @@ async function SettingsContent() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>Copy engine: speed, sizing &amp; risk</CardTitle>
           <CardDescription>
             Saved changes apply from the engine&apos;s very next trade. Examples use your current
@@ -125,8 +127,8 @@ async function SettingsContent() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>Trader verification rules</CardTitle>
           <CardDescription>
             What a trader must pass to be Verified. Applied at the next daily scoring run.
@@ -137,12 +139,12 @@ async function SettingsContent() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>Background jobs</CardTitle>
           <CardDescription>The daily pipeline runs on GitHub Actions.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           {runs.length === 0 ? (
             <p className="text-muted-foreground text-sm">No runs yet.</p>
           ) : (
