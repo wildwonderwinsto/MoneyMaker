@@ -84,7 +84,12 @@ export interface TraderMetrics {
   medianHoldHours: number | null;
   oosRoi: number | null;
   oosPnl: number | null;
+  /** Cautious copy return: stake-weighted average minus `copyRoiZ` standard errors. */
   copyAdjRoi: number | null;
+  /** Plain stake-weighted average return of the replayed copies. */
+  copyAdjRoiMean: number | null;
+  /** Replays weighted by stake count like this many equal bets (Kish). */
+  copyEffectiveN: number | null;
   nCopyReplays: number;
   lastTradeAt: number | null;
   daysSinceTrade: number | null;
@@ -225,19 +230,41 @@ export function drawdownStats(series: PnlSeriesPoint[]) {
 // Copyability
 // ---------------------------------------------------------------------------
 
-/** Stake-weighted ROI of replayed copies (sized proportionally to the leader's stake). */
-export function copyAdjustedRoi(replays: CopyReplay[]): number | null {
+export interface CopyRoiStats {
+  /** Stake-weighted average return (= total copy profit ÷ total copied). */
+  mean: number;
+  /** Standard error of `mean`; null with a single replay. */
+  se: number | null;
+  /** Kish effective sample size, (Σw)² ÷ Σw²: few big bets → small. */
+  nEff: number;
+}
+
+/**
+ * Stake-weighted ROI of replayed copies (sized proportionally to the leader's stake), with
+ * its standard error from the ratio-estimator (linearization) variance:
+ * SE² = n/(n−1) · Σ w²(r − mean)² ÷ (Σw)².
+ */
+export function copyRoiStats(replays: CopyReplay[]): CopyRoiStats | null {
   const valid = replays.filter(
     (r) => r.delayedPrice > 0 && r.delayedPrice < 0.99 && (r.weight ?? 1) > 0,
   );
   if (valid.length === 0) return null;
-  const totalWeight = valid.reduce((a, r) => a + (r.weight ?? 1), 0);
-  return (
-    valid.reduce(
-      (a, r) => a + (r.weight ?? 1) * ((r.exitValue - r.delayedPrice) / r.delayedPrice),
-      0,
-    ) / totalWeight
-  );
+  const w = valid.map((r) => r.weight ?? 1);
+  const ret = valid.map((r) => (r.exitValue - r.delayedPrice) / r.delayedPrice);
+  const total = w.reduce((a, b) => a + b, 0);
+  const m = w.reduce((a, wi, i) => a + wi * ret[i], 0) / total;
+  const n = valid.length;
+  const sq = w.reduce((a, wi, i) => a + wi * wi * (ret[i] - m) ** 2, 0);
+  return {
+    mean: m,
+    se: n > 1 ? Math.sqrt((n / (n - 1)) * sq) / total : null,
+    nEff: total ** 2 / w.reduce((a, wi) => a + wi * wi, 0),
+  };
+}
+
+/** Stake-weighted ROI of replayed copies (the plain average). */
+export function copyAdjustedRoi(replays: CopyReplay[]): number | null {
+  return copyRoiStats(replays)?.mean ?? null;
 }
 
 export function bothSidesRatio(positions: PositionRecord[]): number {
@@ -309,6 +336,8 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
 
   const daysActive = activity.joinDate ? Math.max(1, (now - activity.joinDate) / DAY) : null;
   const replays = input.copyReplays;
+  // Too few replays is not evidence either way: report "not measured".
+  const copy = replays && replays.length >= cfg.minCopyReplays ? copyRoiStats(replays) : null;
 
   return {
     nClosed,
@@ -342,8 +371,9 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     oosRoi:
       oos.length >= 5 && oosCost > 0 ? oos.reduce((a, p) => a + p.realizedPnl, 0) / oosCost : null,
     oosPnl: latest && atCutoff ? latest.pnl - atCutoff.pnl : null,
-    // Too few replays is not evidence either way: report "not measured".
-    copyAdjRoi: replays && replays.length >= cfg.minCopyReplays ? copyAdjustedRoi(replays) : null,
+    copyAdjRoi: copy && copy.se !== null ? copy.mean - cfg.copyRoiZ * copy.se : null,
+    copyAdjRoiMean: copy?.mean ?? null,
+    copyEffectiveN: copy?.nEff ?? null,
     nCopyReplays: replays?.length ?? 0,
     lastTradeAt,
     daysSinceTrade: lastTradeAt === null ? null : Math.max(0, (now - lastTradeAt) / DAY),

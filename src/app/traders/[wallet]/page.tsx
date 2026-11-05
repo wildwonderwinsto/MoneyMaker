@@ -76,6 +76,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
     resolvedWinRate?: number | null;
     recoveryFactor?: number | null;
     nCopyReplays?: number;
+    copyAdjRoiMean?: number | null;
   };
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
@@ -156,9 +157,11 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               value={pct(score.copyAdjRoi, 1, { sign: true })}
               tone={score.copyAdjRoi === null ? undefined : score.copyAdjRoi >= 0 ? "gain" : "loss"}
               hint={
-                typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0
-                  ? `Replayed ${metrics.nCopyReplays} of their trades`
-                  : "Delayed entry + spread"
+                typeof metrics.copyAdjRoiMean === "number"
+                  ? `Cautious estimate · average ${pct(metrics.copyAdjRoiMean, 1, { sign: true })} over ${metrics.nCopyReplays} trades`
+                  : typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0
+                    ? `Replayed ${metrics.nCopyReplays} of their trades`
+                    : "Delayed entry + spread + fees"
               }
             />
             <StatTile

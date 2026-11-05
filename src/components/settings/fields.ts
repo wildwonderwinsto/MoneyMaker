@@ -550,6 +550,16 @@ export const SCORING_GROUPS: Group[] = [
       },
       {
         kind: "number",
+        name: "copyRoiZ",
+        label: "Caution on copy returns",
+        help: "A few big bets can make the average copy return look great by luck. The check uses the average minus this many standard errors: 1.28 means about 90% confident, 0 uses the plain average.",
+        unit: "number",
+        min: 0,
+        max: 3,
+        step: 0.01,
+      },
+      {
+        kind: "number",
         name: "minCopyReplays",
         label: "Trades to replay (minimum)",
         help: "Fewer replayable trades than this isn't enough evidence, and the check can't pass.",

@@ -6,7 +6,7 @@ import type { ScoreCheck, ScoreTier } from "@/lib/db/schema";
 
 import type { ScoringConfig } from "./config";
 import type { TraderMetrics } from "./metrics";
-import { clamp } from "./stats";
+import { clamp, normalCdf } from "./stats";
 
 export interface ScoreContext {
   /** Benjamini–Hochberg p-value threshold for this scoring run (0 = nothing significant). */
@@ -131,6 +131,7 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
     atLeast(
       "copy_roi",
       `Still profitable when copied ${Math.round(cfg.copyDelaySeconds / 60)} min late` +
+        (cfg.copyRoiZ > 0 ? `, ${pct(normalCdf(cfg.copyRoiZ))} confident` : "") +
         (m.nCopyReplays >= cfg.minCopyReplays
           ? ` (${m.nCopyReplays} trades replayed)`
           : m.nCopyReplays > 0

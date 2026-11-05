@@ -69,7 +69,7 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
             <dd className="font-medium tabular-nums">{pct(t.profitableMonthsPct, 0)}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground text-xs">If copied 2 min late</dt>
+            <dt className="text-muted-foreground text-xs">Copied 2 min late (cautious)</dt>
             <dd className="font-medium">
               <Signed value={t.copyAdjRoi}>{pct(t.copyAdjRoi, 1, { sign: true })}</Signed>
               {typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0 && (
