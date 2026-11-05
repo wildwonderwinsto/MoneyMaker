@@ -90,6 +90,8 @@ export const markets = pgTable(
     tokenIds: jsonb().$type<string[]>().notNull().default([]),
     /** Index into `outcomes` of the winner once resolved; null while unresolved. */
     winnerIndex: integer(),
+    /** USDC per share for each outcome once settled ([1,0], or [0.5,0.5] for a 50/50). */
+    payouts: jsonb().$type<number[]>(),
     resolvedAt: tsz(),
     /** Polymarket taker fee rate (gamma.takerFeeRate); null until refreshed from Gamma. */
     takerFeeRate: doublePrecision(),

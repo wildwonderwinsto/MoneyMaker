@@ -6,6 +6,7 @@ import {
   categoryFromTags,
   DEFAULT_TAKER_FEE_RATE,
   GammaMarket,
+  resolvedPayouts,
   takerFeeRate,
   winnerIndex,
 } from "@/lib/polymarket/gamma";
@@ -66,6 +67,22 @@ describe("gamma parsing", () => {
     expect(winnerIndex(open)).toBeNull();
     expect(winnerIndex(unsettled)).toBeNull();
     expect(GammaMarket.parse({ ...base, outcomePrices: "not json" }).outcomePrices).toEqual([]);
+  });
+
+  it("pays $1/$0 for a winner and $0.50 each for a resolved 50/50", () => {
+    const won = GammaMarket.parse({ ...base, closed: true, outcomePrices: '["0", "1"]' });
+    expect(resolvedPayouts(won)).toEqual([0, 1]);
+    const split = { ...base, closed: true, outcomePrices: '["0.5", "0.5"]' };
+    expect(
+      resolvedPayouts(GammaMarket.parse({ ...split, umaResolutionStatus: "resolved" })),
+    ).toEqual([0.5, 0.5]);
+    // Closed but the oracle hasn't ruled yet (an untraded market also sits at 0.5/0.5).
+    expect(resolvedPayouts(GammaMarket.parse({ ...split, umaResolutionStatus: "proposed" }))).toBe(
+      null,
+    );
+    expect(resolvedPayouts(GammaMarket.parse({ ...base, outcomePrices: '["0.5", "0.5"]' }))).toBe(
+      null,
+    );
   });
 
   it("maps event tags to a top-level category", () => {

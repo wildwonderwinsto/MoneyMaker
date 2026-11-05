@@ -225,15 +225,16 @@ export async function applySell(
 export async function settlePosition(
   tx: Tx,
   position: PaperPosition,
-  won: boolean,
+  /** USDC per share: 1 (won), 0 (lost) or 0.5 (market resolved 50/50). */
+  payoutPerShare: number,
 ): Promise<number> {
-  const payout = won ? position.shares : 0;
+  const payout = position.shares * payoutPerShare;
   await tx
     .update(paperPositions)
     .set({
       shares: 0,
       costBasis: 0,
-      currentPrice: won ? 1 : 0,
+      currentPrice: payoutPerShare,
       realizedPnl: position.realizedPnl + payout - position.costBasis,
       status: "settled",
       closedAt: new Date(),
@@ -248,9 +249,9 @@ export async function settlePosition(
     accountId: position.accountId,
     positionId: position.id,
     kind: "settlement",
-    side: won ? "WIN" : "LOSS",
+    side: payoutPerShare >= 1 ? "WIN" : payoutPerShare <= 0 ? "LOSS" : "SPLIT",
     shares: position.shares,
-    avgPrice: won ? 1 : 0,
+    avgPrice: payoutPerShare,
     notional: payout,
     realizedPnl: payout - position.costBasis,
   });

@@ -2,7 +2,12 @@ import { inArray, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { markets } from "@/lib/db/schema";
-import { getMarketsByConditionIds, takerFeeRate, winnerIndex } from "@/lib/polymarket/gamma";
+import {
+  getMarketsByConditionIds,
+  resolvedPayouts,
+  takerFeeRate,
+  winnerIndex,
+} from "@/lib/polymarket/gamma";
 
 import type { MarketInfo } from "./engine";
 
@@ -19,8 +24,18 @@ const toInfo = (m: MarketRow): MarketInfo => ({
   tokenIds: m.tokenIds,
   outcomes: m.outcomes,
   winnerIndex: m.winnerIndex,
+  payouts: m.payouts,
   takerFeeRate: m.takerFeeRate,
 });
+
+/** USDC paid per share of `tokenId` once the market is settled; null while it isn't. */
+export function payoutPerShare(m: MarketInfo, tokenId: string): number | null {
+  const i = m.tokenIds.indexOf(tokenId);
+  if (i < 0) return null;
+  if (m.payouts) return m.payouts[i] ?? null;
+  // Rows cached before payouts were stored.
+  return m.winnerIndex === null ? null : m.winnerIndex === i ? 1 : 0;
+}
 
 /**
  * Market info with a DB cache. Rows older than `maxAgeMs` (or unresolved markets past
@@ -45,6 +60,7 @@ export async function getMarketInfo(
     const fresh =
       row &&
       (row.winnerIndex !== null ||
+        row.payouts !== null ||
         (row.takerFeeRate !== null && now - row.updatedAt.getTime() < maxAgeMs));
     if (row && fresh) out.set(id, toInfo(row));
     else stale.push(id);
@@ -55,6 +71,7 @@ export async function getMarketInfo(
   if (fetched.length === 0) return out;
   const rows = fetched.map((m) => {
     const winner = winnerIndex(m);
+    const payouts = resolvedPayouts(m);
     return {
       conditionId: m.conditionId,
       question: m.question,
@@ -67,7 +84,8 @@ export async function getMarketInfo(
       outcomes: m.outcomes,
       tokenIds: m.clobTokenIds,
       winnerIndex: winner,
-      resolvedAt: winner === null ? null : new Date(),
+      payouts,
+      resolvedAt: payouts === null ? null : new Date(),
       takerFeeRate: takerFeeRate(m),
       updatedAt: new Date(),
     };
@@ -87,6 +105,7 @@ export async function getMarketInfo(
         outcomes: sql`excluded.outcomes`,
         tokenIds: sql`excluded.token_ids`,
         winnerIndex: sql`excluded.winner_index`,
+        payouts: sql`excluded.payouts`,
         resolvedAt: sql`coalesce(${markets.resolvedAt}, excluded.resolved_at)`,
         takerFeeRate: sql`excluded.taker_fee_rate`,
         updatedAt: sql`excluded.updated_at`,

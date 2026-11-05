@@ -43,6 +43,8 @@ export interface MarketInfo {
   tokenIds: string[];
   outcomes: string[];
   winnerIndex: number | null;
+  /** USDC per share for each outcome once settled (see gamma.resolvedPayouts). */
+  payouts?: number[] | null;
   /** Polymarket taker fee rate (see gamma.takerFeeRate); missing = unknown, treated as 0. */
   takerFeeRate?: number | null;
 }

@@ -18,7 +18,7 @@ import {
   traderTrades,
 } from "@/lib/db/schema";
 import { collect, getPositions, getUserPnl, paginate, type Position } from "@/lib/polymarket/data";
-import { getMarketsByConditionIds, winnerIndex } from "@/lib/polymarket/gamma";
+import { getMarketsByConditionIds, resolvedPayouts, winnerIndex } from "@/lib/polymarket/gamma";
 
 import { chunk, toDate } from "./util";
 
@@ -143,7 +143,8 @@ export async function resolveMarkets(
       and(
         isNull(traderPositions.won),
         or(isNull(traderPositions.endDate), lt(traderPositions.endDate, new Date())),
-        or(isNull(markets.conditionId), isNull(markets.winnerIndex)),
+        // A 50/50 market has no winner but is settled: don't refetch it every day.
+        or(isNull(markets.conditionId), and(isNull(markets.winnerIndex), isNull(markets.payouts))),
       ),
     );
   const ids = pending.map((r) => r.conditionId);
@@ -167,6 +168,7 @@ export async function resolveMarkets(
         outcomes: m.outcomes,
         tokenIds: m.clobTokenIds,
         winnerIndex: winner,
+        payouts: resolvedPayouts(m),
         resolvedAt: winner === null ? null : m.closedTime ? new Date(m.closedTime) : new Date(),
       };
     });
@@ -179,6 +181,7 @@ export async function resolveMarkets(
         set: {
           closed: sql`excluded.closed`,
           winnerIndex: sql`excluded.winner_index`,
+          payouts: sql`excluded.payouts`,
           resolvedAt: sql`excluded.resolved_at`,
           image: sql`excluded.image`,
           updatedAt: new Date(),

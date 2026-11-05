@@ -55,7 +55,7 @@ import {
 } from "./engine";
 import { simulateSell, type Fill } from "./fillSim";
 import { oppositeToken, planHedge, type HedgeMode, type HedgeQuote } from "./hedge";
-import { getMarketInfo } from "./markets";
+import { getMarketInfo, payoutPerShare } from "./markets";
 
 export interface TickStats {
   skipped?: string;
@@ -768,9 +768,9 @@ async function settleAndMark(db: Db, ctx: EngineCtx) {
   const live: typeof open = [];
   for (const p of open) {
     const m = info.get(p.conditionId);
-    if (m && m.winnerIndex !== null && m.tokenIds.length > 0) {
-      const won = m.tokenIds[m.winnerIndex] === p.tokenId;
-      await db.transaction((tx) => settlePosition(tx, p, won));
+    const payout = m ? payoutPerShare(m, p.tokenId) : null;
+    if (payout !== null) {
+      await db.transaction((tx) => settlePosition(tx, p, payout));
       ctx.stats.settled++;
     } else {
       live.push(p);

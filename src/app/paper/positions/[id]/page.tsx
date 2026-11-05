@@ -170,7 +170,9 @@ function Timeline({ data }: { data: PositionDetail }) {
             {f.kind === "settlement"
               ? f.side === "WIN"
                 ? "Market settled: won"
-                : "Market settled: lost"
+                : f.side === "SPLIT"
+                  ? "Market settled 50/50"
+                  : "Market settled: lost"
               : f.side === "BUY"
                 ? "We bought"
                 : "We sold"}{" "}

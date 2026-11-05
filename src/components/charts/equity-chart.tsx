@@ -66,7 +66,9 @@ const fillLabel = (f: FillMarker) =>
   f.kind === "settlement"
     ? f.side === "WIN"
       ? "Won"
-      : "Lost"
+      : f.side === "SPLIT"
+        ? "50/50"
+        : "Lost"
     : f.side === "BUY"
       ? "Bought"
       : "Sold";

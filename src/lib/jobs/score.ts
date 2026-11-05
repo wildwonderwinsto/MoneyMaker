@@ -20,8 +20,8 @@ import { collect, getActivity, paginate, tradeIds, type Activity } from "@/lib/p
 import {
   DEFAULT_TAKER_FEE_RATE,
   getMarketsByConditionIds,
+  resolvedPayouts,
   takerFeeRate,
-  winnerIndex,
 } from "@/lib/polymarket/gamma";
 import type { ScoringConfig } from "@/lib/scoring/config";
 import {
@@ -190,9 +190,10 @@ async function buildCopyReplays(
     if (delayedPrice === null) return null;
 
     const market = marketsById.get(t.conditionId);
-    const winner = market ? winnerIndex(market) : null;
+    // Settled: $1 / $0, or $0.50 for a 50/50 resolution. Otherwise mark at the midpoint.
+    const payouts = market ? resolvedPayouts(market) : null;
     let holdValue: number | undefined;
-    if (winner !== null && t.outcomeIndex !== null) holdValue = winner === t.outcomeIndex ? 1 : 0;
+    if (payouts && t.outcomeIndex !== null) holdValue = payouts[t.outcomeIndex];
     else holdValue = mids.get(t.tokenId);
     if (holdValue === undefined) return null;
     // Copies take liquidity, so they pay the market's taker fee on entry and on any

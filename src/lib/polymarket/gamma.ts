@@ -109,6 +109,25 @@ export function takerFeeRate(m: Pick<GammaMarket, "feesEnabled" | "feeSchedule">
   return m.feeSchedule?.rate ?? DEFAULT_TAKER_FEE_RATE;
 }
 
+/**
+ * Payout per share for each outcome once a market is settled, else null: [1, 0] or [0, 1]
+ * for a winner, [0.5, 0.5] when the oracle resolves it 50/50 (ambiguous or cancelled;
+ * docs.polymarket.com/concepts/resolution). A 50/50 needs a resolved oracle status: an
+ * untraded market also shows 0.5/0.5 before it resolves.
+ */
+export function resolvedPayouts(
+  m: Pick<GammaMarket, "closed" | "outcomePrices" | "umaResolutionStatus">,
+): number[] | null {
+  const winner = winnerIndex(m);
+  if (winner !== null) return m.outcomePrices.map((_, i) => (i === winner ? 1 : 0));
+  const split =
+    !!m.closed &&
+    m.outcomePrices.length === 2 &&
+    m.outcomePrices.every((p) => Number(p) === 0.5) &&
+    (m.umaResolutionStatus === "resolved" || m.umaResolutionStatus === "settled");
+  return split ? [0.5, 0.5] : null;
+}
+
 // ---------------------------------------------------------------------------
 // Events & categories
 // ---------------------------------------------------------------------------

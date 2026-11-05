@@ -169,6 +169,43 @@ describe("runTick", () => {
     expect(await openPosition()).toBeUndefined();
   });
 
+  it("settles a 50/50 resolution at $0.50 per share", async () => {
+    const COND2 = "0xambiguous";
+    const [account] = await db.select().from(paperAccounts);
+    await db.insert(paperPositions).values({
+      accountId: account.id,
+      sourceWallet: LEADER,
+      conditionId: COND2,
+      tokenId: "333",
+      shares: 100,
+      avgPrice: 0.4,
+      costBasis: 40,
+    });
+    const cashBefore = await cash();
+    vi.mocked(data.getActivity).mockResolvedValue(page([]));
+    vi.mocked(gamma.getMarketsByConditionIds).mockResolvedValue([
+      gamma.GammaMarket.parse({
+        id: "2",
+        question: "Ambiguous?",
+        conditionId: COND2,
+        closed: true,
+        umaResolutionStatus: "resolved",
+        outcomes: '["Yes","No"]',
+        outcomePrices: '["0.5","0.5"]',
+        clobTokenIds: '["333","444"]',
+      }),
+    ]);
+    const s = await runTick(db, (t0 + 150) * 1000);
+    expect(s.settled).toBe(1);
+    expect(await cash()).toBeCloseTo(cashBefore + 50, 4);
+    const [pos] = await db
+      .select()
+      .from(paperPositions)
+      .where(eq(paperPositions.conditionId, COND2));
+    expect(pos.status).toBe("settled");
+    expect(pos.realizedPnl).toBeCloseTo(10, 4);
+  });
+
   it("refuses to run concurrently", async () => {
     expect(await acquireLease(db, "tick", 60_000)).toBe(true);
     const s = await runTick(db);

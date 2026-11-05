@@ -163,7 +163,11 @@ async function PaperContent() {
                       <span
                         className={cn(
                           "w-11 shrink-0 text-xs font-semibold",
-                          f.side === "BUY" || f.side === "WIN" ? "text-yes" : "text-no",
+                          f.side === "BUY" || f.side === "WIN"
+                            ? "text-yes"
+                            : f.side === "SPLIT"
+                              ? "text-muted-foreground"
+                              : "text-no",
                         )}
                       >
                         {f.side}
