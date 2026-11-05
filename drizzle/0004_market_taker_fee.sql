@@ -1,0 +1,1 @@
+ALTER TABLE "markets" ADD COLUMN "taker_fee_rate" double precision;

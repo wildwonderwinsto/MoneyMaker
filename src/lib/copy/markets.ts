@@ -2,7 +2,7 @@ import { inArray, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { markets } from "@/lib/db/schema";
-import { getMarketsByConditionIds, winnerIndex } from "@/lib/polymarket/gamma";
+import { getMarketsByConditionIds, takerFeeRate, winnerIndex } from "@/lib/polymarket/gamma";
 
 import type { MarketInfo } from "./engine";
 
@@ -19,6 +19,7 @@ const toInfo = (m: MarketRow): MarketInfo => ({
   tokenIds: m.tokenIds,
   outcomes: m.outcomes,
   winnerIndex: m.winnerIndex,
+  takerFeeRate: m.takerFeeRate,
 });
 
 /**
@@ -40,7 +41,11 @@ export async function getMarketInfo(
   const cachedById = new Map(cached.map((m) => [m.conditionId, m]));
   for (const id of ids) {
     const row = cachedById.get(id);
-    const fresh = row && (row.winnerIndex !== null || now - row.updatedAt.getTime() < maxAgeMs);
+    // An open market cached before fee rates were stored is refreshed at once.
+    const fresh =
+      row &&
+      (row.winnerIndex !== null ||
+        (row.takerFeeRate !== null && now - row.updatedAt.getTime() < maxAgeMs));
     if (row && fresh) out.set(id, toInfo(row));
     else stale.push(id);
   }
@@ -63,6 +68,7 @@ export async function getMarketInfo(
       tokenIds: m.clobTokenIds,
       winnerIndex: winner,
       resolvedAt: winner === null ? null : new Date(),
+      takerFeeRate: takerFeeRate(m),
       updatedAt: new Date(),
     };
   });
@@ -82,6 +88,7 @@ export async function getMarketInfo(
         tokenIds: sql`excluded.token_ids`,
         winnerIndex: sql`excluded.winner_index`,
         resolvedAt: sql`coalesce(${markets.resolvedAt}, excluded.resolved_at)`,
+        takerFeeRate: sql`excluded.taker_fee_rate`,
         updatedAt: sql`excluded.updated_at`,
       },
     })

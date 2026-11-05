@@ -91,6 +91,8 @@ export const markets = pgTable(
     /** Index into `outcomes` of the winner once resolved; null while unresolved. */
     winnerIndex: integer(),
     resolvedAt: tsz(),
+    /** Polymarket taker fee rate (gamma.takerFeeRate); null until refreshed from Gamma. */
+    takerFeeRate: doublePrecision(),
     updatedAt: createdAt(),
   },
   (t) => [index().on(t.closed), index().on(t.eventId)],

@@ -43,6 +43,8 @@ export interface MarketInfo {
   tokenIds: string[];
   outcomes: string[];
   winnerIndex: number | null;
+  /** Polymarket taker fee rate (see gamma.takerFeeRate); missing = unknown, treated as 0. */
+  takerFeeRate?: number | null;
 }
 
 export type Details = Record<string, number | string | boolean | null>;
@@ -156,7 +158,13 @@ export function decideBuy(ctx: BuyContext): Decision {
   );
   if ("reason" in size) return skip(size.reason, size.code, size.details);
 
-  const fill = simulateBuy(book.asks, size.usd, limitPrice, cfg.takerFeeBps);
+  const fill = simulateBuy(
+    book.asks,
+    size.usd,
+    limitPrice,
+    cfg.takerFeeBps,
+    market.takerFeeRate ?? 0,
+  );
   if (fill.shares <= 0) {
     return skip("Not enough liquidity within the price limit", "no_liquidity", {
       limitPrice,
@@ -194,6 +202,8 @@ export interface SellContext {
   /** Share of their position the leader just sold (0–1). */
   leaderSoldFraction: number;
   book: OrderBook | null;
+  /** The market's taker fee rate (MarketInfo.takerFeeRate). */
+  feeRate?: number | null;
   cfg: RiskConfig;
 }
 
@@ -207,7 +217,7 @@ export function decideSell(ctx: SellContext): Decision {
   if (fraction <= 0) return skip("Leader's sell size is unknown", "sell_size_unknown");
   const shares = ctx.ourShares * fraction;
   // Exits take whatever the book offers: getting out matters more than the price.
-  const fill = simulateSell(book.bids, shares, 0, cfg.takerFeeBps);
+  const fill = simulateSell(book.bids, shares, 0, cfg.takerFeeBps, ctx.feeRate ?? 0);
   if (fill.shares <= 0) return skip("No buyers in the order book", "no_buyers");
   return {
     action: "sell",

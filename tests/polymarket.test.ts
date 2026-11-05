@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeBook, priceAtOrAfter } from "@/lib/polymarket/clob";
 import { legacyTradeId, tradeId, tradeIds } from "@/lib/polymarket/data";
-import { categoryFromTags, GammaMarket, winnerIndex } from "@/lib/polymarket/gamma";
+import {
+  categoryFromTags,
+  DEFAULT_TAKER_FEE_RATE,
+  GammaMarket,
+  takerFeeRate,
+  winnerIndex,
+} from "@/lib/polymarket/gamma";
 
 describe("normalizeBook", () => {
   it("sorts best-first regardless of API ordering and drops empty levels", () => {
@@ -67,6 +73,20 @@ describe("gamma parsing", () => {
     expect(categoryFromTags([{ slug: "nba" }])).toBe("sports");
     expect(categoryFromTags([{ slug: "unknown" }])).toBeNull();
     expect(categoryFromTags(null)).toBeNull();
+  });
+
+  it("reads each market's taker fee rate (fee-free when disabled or absent)", () => {
+    const sports = GammaMarket.parse({
+      ...base,
+      feesEnabled: true,
+      feeSchedule: { rate: 0.05, exponent: 1, takerOnly: true, rebateRate: 0.15 },
+    });
+    expect(takerFeeRate(sports)).toBe(0.05);
+    expect(takerFeeRate(GammaMarket.parse({ ...base, feesEnabled: false }))).toBe(0);
+    expect(takerFeeRate(GammaMarket.parse(base))).toBe(0);
+    expect(takerFeeRate(GammaMarket.parse({ ...base, feesEnabled: true }))).toBe(
+      DEFAULT_TAKER_FEE_RATE,
+    );
   });
 });
 

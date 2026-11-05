@@ -381,8 +381,8 @@ export const RISK_GROUPS: Group[] = [
       {
         kind: "number",
         name: "takerFeeBps",
-        label: "Trading fee",
-        help: "Fee charged on each simulated fill, as a share of the amount traded.",
+        label: "Extra trading fee",
+        help: "Added on top of Polymarket's own taker fee, which every simulated fill already pays (rate × price × (1 − price) per share; the rate depends on the market's category). Leave at 0 unless you want a safety margin.",
         unit: "bps",
         min: 0,
         max: 10,

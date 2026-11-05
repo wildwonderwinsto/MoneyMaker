@@ -463,10 +463,12 @@ async function processTrades(
             leaderPositions.get(`${t.wallet}|${t.tokenId}`),
           ),
           book: books.get(t.tokenId) ?? null,
+          feeRate: market?.takerFeeRate,
           cfg,
         });
         if (decision.action === "sell") {
-          hedgeExit = planHedgeExit(state, position, decision.fraction, books, cfg);
+          const feeRate = market?.takerFeeRate ?? 0;
+          hedgeExit = planHedgeExit(state, position, decision.fraction, books, cfg, feeRate);
         }
       }
     }
@@ -516,11 +518,13 @@ function planHedgeExit(
   fraction: number,
   books: Map<string, OrderBook | null>,
   cfg: RiskConfig,
+  /** Same market as the copy, so the same taker fee rate. */
+  feeRate = 0,
 ): HedgeExit | null {
   const hedge = openHedge(state, position.id);
   const book = hedge ? books.get(hedge.tokenId) : null;
   if (!hedge || !book || book.bids.length === 0) return null;
-  const fill = simulateSell(book.bids, hedge.shares * fraction, 0, cfg.takerFeeBps);
+  const fill = simulateSell(book.bids, hedge.shares * fraction, 0, cfg.takerFeeBps, feeRate);
   return fill.shares > 0 ? { hedge, fill } : null;
 }
 
@@ -856,6 +860,7 @@ export async function quoteHedge(
     realizedPnl: position.realizedPnl,
     asks: book.asks,
     feeBps: cfg.takerFeeBps,
+    feeRate: market.takerFeeRate ?? 0,
     maxCost,
     maxPrice: cfg.hedgeMaxPrice,
   };

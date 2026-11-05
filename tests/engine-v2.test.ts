@@ -173,6 +173,16 @@ describe("planHedge", () => {
     expect(q.pnlIfOursWins).toBeCloseTo(100 - 60 - 90);
   });
 
+  it("includes Polymarket's taker fee in the hedge cost", () => {
+    // Fee per share at 60¢, rate 0.05: 0.05 × 0.6 × 0.4 = 1.2¢ → all-in 61.2¢.
+    const lock = planHedge({ ...base, mode: "lock", feeRate: 0.05 });
+    expect(lock.cost).toBeCloseTo(61.2);
+    expect(lock.pnlIfOppositeWins).toBeCloseTo(100 - 60 - 61.2);
+    const be = planHedge({ ...base, mode: "breakeven", feeRate: 0.05 });
+    // N − 0.612N = 60 → a flip still costs nothing after fees.
+    expect(be.pnlIfOppositeWins).toBeCloseTo(0);
+  });
+
   it("walks the book and counts fees", () => {
     const q = planHedge({
       ...base,

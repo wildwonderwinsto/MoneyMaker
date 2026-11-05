@@ -29,6 +29,13 @@
       "when": 1793826711435,
       "tag": "0003_engine_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793847224529,
+      "tag": "0004_market_taker_fee",
+      "breakpoints": true
     }
   ]
 }

@@ -29,6 +29,8 @@ export interface HedgeInput {
   /** Opposite outcome's asks, cheapest first. */
   asks: BookLevel[];
   feeBps?: number;
+  /** Polymarket taker fee rate for this market (fee = shares × rate × p × (1 − p)). */
+  feeRate?: number;
   /** Most we're willing to spend on the hedge. */
   maxCost: number;
   /** Don't buy opposite shares above this price. */
@@ -54,6 +56,9 @@ export interface HedgeQuote {
 /** Plan a hedge against the live order book. Pure. */
 export function planHedge(input: HedgeInput): HedgeQuote {
   const fee = 1 + (input.feeBps ?? 0) / 10_000;
+  const rate = input.feeRate ?? 0;
+  /** All-in USDC for one share at price p (flat fee + Polymarket's taker fee). */
+  const perShare = (p: number) => p * fee + rate * p * (1 - p);
   const maxPrice = input.maxPrice ?? 0.99;
   const banked = input.realizedPnl;
   const base = {
@@ -83,20 +88,22 @@ export function planHedge(input: HedgeInput): HedgeQuote {
   }
 
   // Walk the book until the target is met.
-  // lock: buy `shares` shares. breakeven: N − K = C − banked (each share adds 1 − p·fee).
+  // lock: buy `shares` shares. breakeven: N − K = C − banked (each share adds 1 − all-in price).
   const target = input.mode === "lock" ? input.shares : Math.max(0, input.costBasis - banked);
   if (target <= 1e-9) return fail("Already at break-even or better");
   let n = 0;
   let cost = 0; // before fees
+  let allIn = 0; // fees included
   let progress = 0;
   let levels = 0;
   for (const level of asks) {
-    const gainPerShare = input.mode === "lock" ? 1 : 1 - level.price * fee;
+    const gainPerShare = input.mode === "lock" ? 1 : 1 - perShare(level.price);
     if (gainPerShare <= 0) break;
     const need = (target - progress) / gainPerShare;
     const take = Math.min(level.size, need);
     n += take;
     cost += take * level.price;
+    allIn += take * perShare(level.price);
     progress += take * gainPerShare;
     levels++;
     if (progress >= target - 1e-9) break;
@@ -104,7 +111,7 @@ export function planHedge(input: HedgeInput): HedgeQuote {
   if (progress < target - 1e-6) {
     return fail("Not enough sellers on the other side to finish the hedge");
   }
-  const total = cost * fee;
+  const total = allIn;
   if (total > input.maxCost + 1e-9) {
     return fail(
       `Hedge would cost $${total.toFixed(2)}, above the $${input.maxCost.toFixed(2)} limit`,

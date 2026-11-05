@@ -45,6 +45,9 @@ export const GammaMarket = z.object({
   bestBid: z.number().nullish(),
   bestAsk: z.number().nullish(),
   lastTradePrice: z.number().nullish(),
+  /** Taker fees (docs.polymarket.com/trading/fees). Absent or false = fee-free market. */
+  feesEnabled: z.boolean().nullish(),
+  feeSchedule: z.object({ rate: z.number().nullish(), exponent: z.number().nullish() }).nullish(),
   events: z
     .array(z.object({ id: z.string(), slug: z.string().nullish(), title: z.string().nullish() }))
     .nullish(),
@@ -90,6 +93,20 @@ export function winnerIndex(m: Pick<GammaMarket, "closed" | "outcomePrices">): n
   if (!m.closed) return null;
   const idx = m.outcomePrices.findIndex((p) => Number(p) === 1);
   return idx >= 0 ? idx : null;
+}
+
+/** Polymarket's default taker rate ("Other / General"), used if a fee market omits its rate. */
+export const DEFAULT_TAKER_FEE_RATE = 0.05;
+
+/**
+ * Taker fee rate for a market: fee = shares × rate × p × (1 − p), in USDC, paid by takers
+ * only (copies always take). Rates by category: crypto 0.07, sports/economics/culture/
+ * weather 0.05, politics/finance/tech/mentions 0.04, geopolitics 0. Verified live (Nov
+ * 2026): every schedule has exponent 1, and markets without one have feesEnabled false.
+ */
+export function takerFeeRate(m: Pick<GammaMarket, "feesEnabled" | "feeSchedule">): number {
+  if (!m.feesEnabled) return 0;
+  return m.feeSchedule?.rate ?? DEFAULT_TAKER_FEE_RATE;
 }
 
 // ---------------------------------------------------------------------------

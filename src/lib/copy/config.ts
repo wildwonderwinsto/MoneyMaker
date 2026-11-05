@@ -35,7 +35,7 @@ export const RiskConfigSchema = z.object({
   maxDailyLossPct: z.number().min(0).max(1).default(0.1),
   /** Mirror leader sells proportionally. */
   copySells: z.boolean().default(true),
-  /** Taker fee applied to simulated fills, in basis points. */
+  /** Extra flat fee on simulated fills, in bps, on top of each market's Polymarket taker fee. */
   takerFeeBps: z.number().min(0).max(1000).default(0),
 
   // --- Speed -------------------------------------------------------------------------

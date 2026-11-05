@@ -47,6 +47,20 @@ describe("simulateBuy / simulateSell", () => {
     expect(f.fee).toBeCloseTo(1, 6);
   });
 
+  it("charges Polymarket's taker fee curve: shares × rate × p × (1 − p)", () => {
+    const asks = [{ price: 0.5, size: 10_000 }];
+    // Sports rate 0.05 at 50¢: 0.05 × 0.25 = 1.25¢ per share, so $102.50 buys 200 shares.
+    const buy = simulateBuy(asks, 102.5, 0.6, 0, 0.05);
+    expect(buy.shares).toBeCloseTo(200, 6);
+    expect(buy.avgPrice).toBeCloseTo(0.5, 6);
+    expect(buy.fee).toBeCloseTo(2.5, 6);
+    expect(buy.notional).toBeCloseTo(102.5, 6);
+    const sell = simulateSell([{ price: 0.9, size: 10_000 }], 200, 0, 0, 0.05);
+    // 200 × 0.05 × 0.9 × 0.1 = $0.90 fee on $180 of proceeds.
+    expect(sell.fee).toBeCloseTo(0.9, 6);
+    expect(sell.notional).toBeCloseTo(179.1, 6);
+  });
+
   it("sells into the bids best-first", () => {
     const f = simulateSell(book.bids, 150, 0);
     expect(f.notional).toBeCloseTo(100 * 0.49 + 50 * 0.48, 6);
@@ -176,6 +190,20 @@ describe("decideSell", () => {
   it("closes everything when the leader (almost) fully exits", () => {
     const d = decideSell({ trade, ourShares: 100, leaderSoldFraction: 0.99, book, cfg });
     if (d.action === "sell") expect(d.fill.shares).toBeCloseTo(100);
+  });
+
+  it("pays the market's taker fee on the way out", () => {
+    const d = decideSell({
+      trade,
+      ourShares: 100,
+      leaderSoldFraction: 1,
+      book,
+      cfg,
+      feeRate: 0.04,
+    });
+    // 100 @ 0.49: fee = 100 × 0.04 × 0.49 × 0.51
+    if (d.action === "sell") expect(d.fill.fee).toBeCloseTo(100 * 0.04 * 0.49 * 0.51, 6);
+    expect(d.action).toBe("sell");
   });
 
   it("skips when we never copied the position", () => {
