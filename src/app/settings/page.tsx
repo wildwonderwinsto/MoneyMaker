@@ -59,11 +59,22 @@ async function SettingsContent() {
               ? passwordSet
                 ? "You can change settings, follow or hide traders, hedge and reset on this device."
                 : "No ADMIN_PASSWORD is set, so changes are open (local development only)."
-              : "Visitors can look but not change anything. Enter the admin password to make changes."}
+              : passwordSet
+                ? "Visitors can look but not change anything. Enter the admin password to make changes."
+                : "Changes are locked because ADMIN_PASSWORD is not set on the server."}
           </CardDescription>
         </CardHeader>
         <CardContent className="px-4 sm:px-6">
-          {admin ? passwordSet && <LockButton /> : <UnlockForm />}
+          {admin ? (
+            passwordSet && <LockButton />
+          ) : passwordSet ? (
+            <UnlockForm />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              In Render, open the service → Environment, add <code>ADMIN_PASSWORD</code> (at least 8
+              characters) and save. After the redeploy, come back here and enter it to unlock.
+            </p>
+          )}
         </CardContent>
       </Card>
 

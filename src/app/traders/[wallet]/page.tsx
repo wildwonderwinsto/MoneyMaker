@@ -8,7 +8,7 @@ import { Suspense } from "react";
 import { LineChart } from "@/components/charts/line-chart";
 import { PnlBars } from "@/components/charts/pnl-bars";
 import { Avatar, Signed, StatTile, TierBadge } from "@/components/common";
-import { FollowButton } from "@/components/follow-button";
+import { FollowButton, FollowLocked } from "@/components/follow-button";
 import { HideButton } from "@/components/hide-button";
 import { isAdmin } from "@/lib/admin";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -120,12 +120,12 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               <FollowButton wallet={trader.wallet} following={!!follow?.enabled} size="default" />
             )}
           </div>
+        ) : follow?.enabled ? (
+          <span className="bg-yes/10 text-yes rounded-full px-3 py-1.5 text-sm font-semibold">
+            Following
+          </span>
         ) : (
-          follow?.enabled && (
-            <span className="bg-yes/10 text-yes rounded-full px-3 py-1.5 text-sm font-semibold">
-              Following
-            </span>
-          )
+          <FollowLocked size="default" />
         )}
       </div>
 

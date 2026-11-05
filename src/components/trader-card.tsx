@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { Sparkline } from "@/components/charts/sparkline";
 import { Avatar, Signed, TierBadge } from "@/components/common";
-import { FollowButton } from "@/components/follow-button";
+import { FollowButton, FollowLocked } from "@/components/follow-button";
 import { HideButton } from "@/components/hide-button";
 import { Card } from "@/components/ui/card";
 import { pct, traderName, usd } from "@/lib/format";
@@ -105,12 +105,12 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
             <HideButton wallet={t.wallet} hidden={!!t.hidden} />
             {!t.hidden && <FollowButton wallet={t.wallet} following={!!t.following} />}
           </div>
+        ) : t.following ? (
+          <span className="bg-yes/10 text-yes rounded-full px-2.5 py-1 text-xs font-semibold">
+            Following
+          </span>
         ) : (
-          t.following && (
-            <span className="bg-yes/10 text-yes rounded-full px-2.5 py-1 text-xs font-semibold">
-              Following
-            </span>
-          )
+          <FollowLocked />
         )}
       </div>
     </Card>
