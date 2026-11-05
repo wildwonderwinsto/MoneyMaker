@@ -17,7 +17,12 @@ import {
 } from "@/lib/db/schema";
 import { getMidpoints, getPriceHistory, type PricePoint } from "@/lib/polymarket/clob";
 import { collect, getActivity, paginate, tradeIds, type Activity } from "@/lib/polymarket/data";
-import { getMarketsByConditionIds, winnerIndex } from "@/lib/polymarket/gamma";
+import {
+  DEFAULT_TAKER_FEE_RATE,
+  getMarketsByConditionIds,
+  takerFeeRate,
+  winnerIndex,
+} from "@/lib/polymarket/gamma";
 import type { ScoringConfig } from "@/lib/scoring/config";
 import {
   computeMetrics,
@@ -190,14 +195,18 @@ async function buildCopyReplays(
     if (winner !== null && t.outcomeIndex !== null) holdValue = winner === t.outcomeIndex ? 1 : 0;
     else holdValue = mids.get(t.tokenId);
     if (holdValue === undefined) return null;
+    // Copies take liquidity, so they pay the market's taker fee on entry and on any
+    // mirrored sell. Redeeming a resolved market is free.
+    const rate = market ? takerFeeRate(market) : DEFAULT_TAKER_FEE_RATE;
+    const afterFee = (p: number, sign: 1 | -1) => p + sign * rate * p * (1 - p);
     // The engine mirrors sells: the part the leader sold exits near their sell price
     // (minus the same slippage); only the rest rides to resolution.
     const exit = exits.get(t.id);
     const exitValue = exit
-      ? exit.soldFraction * Math.max(0, exit.avgPrice - cfg.copySlippage) +
+      ? exit.soldFraction * afterFee(Math.max(0, exit.avgPrice - cfg.copySlippage), -1) +
         (1 - exit.soldFraction) * holdValue
       : holdValue;
-    return { delayedPrice, exitValue, weight: t.usdcSize };
+    return { delayedPrice: afterFee(delayedPrice, 1), exitValue, weight: t.usdcSize };
   });
   return replays.filter((r): r is CopyReplay => r !== null);
 }

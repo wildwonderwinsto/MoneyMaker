@@ -35,6 +35,16 @@ describe("copiedBetReturn", () => {
     );
     expect(r).toBe(-1);
   });
+
+  it("pays the taker fee on entry", () => {
+    // We pay 0.51 + 0.05 × 0.51 × 0.49 per share instead of the leader's 0.50.
+    const r = copiedBetReturn(
+      { ...base, avgPrice: 0.5, sharesBought: 100, realizedPnl: 50, won: true },
+      0.01,
+      0.05,
+    );
+    expect(r).toBeCloseTo(2 * (0.5 / (0.51 + 0.05 * 0.51 * 0.49)) - 1, 6);
+  });
 });
 
 describe("asOf (no look-ahead)", () => {
@@ -56,7 +66,14 @@ describe("runBacktest", () => {
     const res = runBacktest(
       traders,
       cfg,
-      { months: 4, topK: 3, copySlippage: 0.01, startingEquity: 1000, simulations: 300 },
+      {
+        months: 4,
+        topK: 3,
+        copySlippage: 0.01,
+        takerFeeRate: 0.05,
+        startingEquity: 1000,
+        simulations: 300,
+      },
       NOW,
     );
     expect(res.months).toHaveLength(4);

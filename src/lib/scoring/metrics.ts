@@ -45,7 +45,7 @@ export interface ActivityProfile {
 
 /** A leader BUY replayed as if we entered `copyDelaySeconds` later. */
 export interface CopyReplay {
-  /** Our hypothetical entry price after the delay. */
+  /** Our cost per share after the delay: price + slippage + taker fee. */
   delayedPrice: number;
   /** 1/0 if resolved, otherwise the latest price (mark-to-market). */
   exitValue: number;

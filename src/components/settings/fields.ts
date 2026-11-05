@@ -519,7 +519,7 @@ export const SCORING_GROUPS: Group[] = [
     id: "copyable",
     title: "Copyable",
     description:
-      "Their edge has to survive you copying them a bit later, at a slightly worse price.",
+      "Their edge has to survive you copying them a bit later, at a slightly worse price, after paying Polymarket's taker fee.",
     fields: [
       {
         kind: "number",

@@ -3,13 +3,16 @@
  *
  * For each month: score every trader using ONLY information available before the month
  * starts (positions whose market ended earlier, PnL series up to then), pick the top-K,
- * then "copy" the bets those traders opened during the month with extra slippage.
+ * then "copy" the bets those traders opened during the month with extra slippage and
+ * Polymarket's taker fee (copies always take liquidity).
  * Baseline: the naive approach — copy last month's top-K by realized profit.
  *
  * Known bias (disclosed in the UI): the candidate pool is today's leaderboard, which
  * favors traders who survived. Strategy and baseline share that bias, so the comparison
  * between them is the meaningful number, not the absolute return.
  */
+import { DEFAULT_TAKER_FEE_RATE } from "@/lib/polymarket/gamma";
+
 import type { ScoringConfig } from "./config";
 import { computeMetrics, type MetricsInput, type PositionRecord } from "./metrics";
 import { scoreTrader } from "./score";
@@ -22,6 +25,8 @@ export interface BacktestParams {
   topK: number;
   /** Extra price paid per copied entry (price points). */
   copySlippage: number;
+  /** Taker fee rate paid on each copied entry (fee = rate × p × (1 − p) per share). */
+  takerFeeRate: number;
   startingEquity: number;
   /** Simulations per trader per month (lower than live scoring for speed). */
   simulations: number;
@@ -31,6 +36,8 @@ export const DEFAULT_BACKTEST: BacktestParams = {
   months: 6,
   topK: 10,
   copySlippage: 0.01,
+  // Positions carry no fee schedule; Polymarket's general rate (sports, culture, …).
+  takerFeeRate: DEFAULT_TAKER_FEE_RATE,
   startingEquity: 1000,
   simulations: 300,
 };
@@ -65,13 +72,15 @@ export interface BacktestResult {
   };
 }
 
-/** Return of copying one bet at a slightly worse price (equal $ stake per bet). */
-export function copiedBetReturn(p: PositionRecord, slippage: number): number | null {
+/** Return of copying one bet at a slightly worse price plus the taker fee (equal $ stake). */
+export function copiedBetReturn(p: PositionRecord, slippage: number, feeRate = 0): number | null {
   const cost = p.sharesBought * p.avgPrice;
   if (cost <= 0 || p.avgPrice <= 0) return null;
   const pnl = p.realizedPnl + (p.closed ? 0 : p.unrealizedPnl);
   const leaderReturn = pnl / cost;
-  const ours = (1 + leaderReturn) * (p.avgPrice / Math.min(0.999, p.avgPrice + slippage)) - 1;
+  const entry = Math.min(0.999, p.avgPrice + slippage);
+  const allIn = entry + feeRate * entry * (1 - entry);
+  const ours = (1 + leaderReturn) * (p.avgPrice / allIn) - 1;
   return Math.max(-1, ours);
 }
 
@@ -94,6 +103,7 @@ function portfolioReturn(
   from: number,
   to: number,
   slippage: number,
+  feeRate: number,
 ) {
   let bets = 0;
   // Proportional copying: each leader's bets are weighted by the dollars they risked,
@@ -103,7 +113,7 @@ function portfolioReturn(
     let pnl = 0;
     for (const p of byWallet.get(w)?.positions ?? []) {
       if (p.firstEntryAt === null || p.firstEntryAt < from || p.firstEntryAt >= to) continue;
-      const r = copiedBetReturn(p, slippage);
+      const r = copiedBetReturn(p, slippage, feeRate);
       if (r === null) continue;
       const stake = p.sharesBought * p.avgPrice;
       staked += stake;
@@ -173,8 +183,9 @@ export function runBacktest(
       .slice(0, params.topK)
       .map((x) => x.wallet);
 
-    const s = portfolioReturn(eligible, byWallet, start, end, params.copySlippage);
-    const b = portfolioReturn(baseline, byWallet, start, end, params.copySlippage);
+    const cost = [params.copySlippage, params.takerFeeRate] as const;
+    const s = portfolioReturn(eligible, byWallet, start, end, ...cost);
+    const b = portfolioReturn(baseline, byWallet, start, end, ...cost);
     months.push({
       month: label,
       strategyPicks: eligible,

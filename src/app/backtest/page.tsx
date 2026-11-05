@@ -26,7 +26,7 @@ export default function BacktestPage() {
     <>
       <PageHeader
         title="Backtest"
-        description="Would the selection method have worked? Each month, traders are scored using only data available at the time. Then their next month of bets is copied, with slippage. The comparison is against the naive approach: copying last month's top earners."
+        description="Would the selection method have worked? Each month, traders are scored using only data available at the time. Then their next month of bets is copied, with slippage and Polymarket's taker fee. The comparison is against the naive approach: copying last month's top earners."
       />
       <Suspense fallback={<Skeleton className="h-[500px] rounded-xl" />}>
         <BacktestContent />
