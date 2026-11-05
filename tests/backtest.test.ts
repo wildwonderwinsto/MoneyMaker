@@ -83,6 +83,39 @@ describe("runBacktest", () => {
     expect([...picked].some((w) => w.startsWith("0xflip"))).toBe(false);
     expect(picked.has("0xgrinder")).toBe(true);
   });
+
+  it("uses picks recorded at the time, and only bets opened after them", () => {
+    const traders = [steadyGrinder(12), oneHitWonder()];
+    const params = {
+      months: 1,
+      topK: 3,
+      copySlippage: 0.01,
+      takerFeeRate: 0.05,
+      startingEquity: 1000,
+      simulations: 300,
+    };
+    // NOW is 2026-11-01, so the one month tested is October.
+    const oct = Date.UTC(2026, 9, 1) / 1000;
+    const nov = Date.UTC(2026, 10, 1) / 1000;
+    const at = (from: number) =>
+      runBacktest(
+        traders,
+        cfg,
+        params,
+        NOW,
+        new Map([["2026-10", { strategy: ["0xgrinder"], baseline: ["0xonehit"], from }]]),
+      );
+    const early = at(oct);
+    expect(early.months[0]).toMatchObject({
+      recorded: true,
+      strategyPicks: ["0xgrinder"],
+      baselinePicks: ["0xonehit"],
+    });
+    expect(early.months[0].strategyBets).toBeGreaterThan(0);
+    expect(early.summary.recordedMonths).toBe(1);
+    // Recorded at the very end of the month: no bet was opened after it, so none count.
+    expect(at(nov - 1).months[0].strategyBets).toBe(0);
+  });
 });
 
 describe("copy replay helpers", () => {

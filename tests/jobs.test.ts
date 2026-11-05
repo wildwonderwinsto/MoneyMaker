@@ -2,8 +2,18 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
-import { markets, traderPnlDaily, traderPositions, traders, traderTrades } from "@/lib/db/schema";
+import {
+  leaderboardSnapshots,
+  markets,
+  monthlySelections,
+  traderPnlDaily,
+  traderPositions,
+  traders,
+  traderScores,
+  traderTrades,
+} from "@/lib/db/schema";
 import { backfillTrader, cleanupStorage, prunePositions } from "@/lib/jobs/backfill";
+import { loadRecordedPicks, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
 import * as data from "@/lib/polymarket/data";
 
 import { createTestDb } from "./helpers/db";
@@ -143,5 +153,67 @@ describe("storage maintenance", () => {
     expect(cleaned).toEqual({ markets: 1, trades: 1, snapshots: 0 });
     const left = await db.select({ id: markets.conditionId }).from(markets);
     expect(left.map((m) => m.id)).toEqual(["c-keep"]);
+  });
+});
+
+describe("monthly selections (point-in-time picks)", () => {
+  it("records each method once per month and feeds next month's backtest", async () => {
+    const day = new Date(Date.UTC(2026, 10, 3, 10));
+    const score = (wallet: string, tier: "elite" | "verified" | "rejected", s: number) => ({
+      wallet,
+      tier,
+      score: s,
+      passed: tier !== "rejected",
+      nResolved: 60,
+      nEvents: 30,
+    });
+    await db
+      .insert(traderScores)
+      .values([
+        score("0xa", "verified", 60),
+        score("0xb", "elite", 80),
+        score("0xc", "rejected", 90),
+      ]);
+    await db.insert(leaderboardSnapshots).values(
+      ["0xtop1", "0xtop2"].map((wallet, i) => ({
+        capturedAt: day,
+        timePeriod: "month",
+        category: "overall",
+        sortBy: "PNL",
+        rank: i + 1,
+        wallet,
+        pnl: 1000 - i,
+      })),
+    );
+    const log = () => {};
+    expect(await recordMonthlySelections(db, 10, log, day)).toMatchObject({
+      month: "2026-11",
+      strategy: 2,
+      baseline: 2,
+    });
+    // Later runs in the month change nothing.
+    await db.insert(traderScores).values(score("0xd", "elite", 99));
+    expect(
+      await recordMonthlySelections(db, 10, log, new Date(Date.UTC(2026, 10, 20))),
+    ).toMatchObject({
+      strategy: 0,
+      baseline: 0,
+    });
+    const rows = await db.select().from(monthlySelections);
+    expect(rows.filter((r) => r.method === "strategy").map((r) => r.wallet)).toEqual([
+      "0xb",
+      "0xa",
+    ]);
+    // Top earners get a trader row so they are backfilled and evaluated.
+    const known = (await db.select({ w: traders.wallet }).from(traders)).map((r) => r.w);
+    expect(known).toEqual(expect.arrayContaining(["0xtop1", "0xtop2"]));
+    expect(await recordedWallets(db, 6, day)).toHaveLength(4);
+
+    const next = await loadRecordedPicks(db, 6, new Date(Date.UTC(2026, 11, 2)));
+    expect(next.get("2026-11")).toEqual({
+      strategy: ["0xb", "0xa"],
+      baseline: ["0xtop1", "0xtop2"],
+      from: day.getTime() / 1000,
+    });
   });
 });

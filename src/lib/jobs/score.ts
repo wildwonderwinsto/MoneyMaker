@@ -32,7 +32,7 @@ import {
   type TraderMetrics,
 } from "@/lib/scoring/metrics";
 import { scoreTrader, type ScoreResult } from "@/lib/scoring/score";
-import { benjaminiHochbergThreshold } from "@/lib/scoring/stats";
+import { benjaminiHochbergThreshold, simulationsFor } from "@/lib/scoring/stats";
 
 import { chunk, mapPool, toDate, toEpoch } from "./util";
 
@@ -289,7 +289,7 @@ function scoreRow(wallet: string, m: TraderMetrics, r: ScoreResult, category: st
 
 export async function scoreAll(
   db: Db,
-  cfg: ScoringConfig,
+  baseCfg: ScoringConfig,
   opts: ScoreOptions,
   log: (m: string) => void,
 ): Promise<{ scored: number; shortlisted: number; verified: number; rejected: string[] }> {
@@ -300,6 +300,10 @@ export async function scoreAll(
     .where(isNotNull(traders.lastBackfillAt));
   const wallets = walletRows.map((r) => r.wallet);
   const { inputs, meta } = await loadInputs(db, wallets, now);
+  const cfg = {
+    ...baseCfg,
+    simulations: simulationsFor(inputs.size, baseCfg.fdrQ, baseCfg.simulations),
+  };
 
   // Stage 1
   const metrics = new Map<string, TraderMetrics>();

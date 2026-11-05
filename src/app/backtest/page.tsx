@@ -58,9 +58,27 @@ async function BacktestContent() {
     baseline: byT.get(p.t) ?? 0,
   }));
   const cashMonths = s.months.filter((m) => m.strategyPicks.length === 0).length;
+  const recordedMonths = s.recordedMonths ?? 0;
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      {cashMonths === s.months.length && (
+        <div className="bg-card flex gap-3 rounded-xl border p-4 text-sm">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-500" aria-label="Caution" />
+          <div className="text-muted-foreground space-y-1">
+            <p className="text-foreground font-medium">
+              Not enough history to judge the method yet
+            </p>
+            <p>
+              No trader passed every check using only what was known at the start of each month, so
+              the strategy stayed in cash ({pct(0, 1)}). That doesn&apos;t mean it lost: most of
+              today&apos;s top traders didn&apos;t yet have a record long enough to pass the sample
+              size and luck checks. From now on each month&apos;s picks are recorded as they happen,
+              so this page builds a real track record. Paper trading is the test in the meantime.
+            </p>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
         <StatTile
           label="Strategy return"
@@ -96,6 +114,7 @@ async function BacktestContent() {
           <CardDescription>
             Run {timeAgo(run.createdAt)} · {params.traders ?? "?"} traders · last{" "}
             {params.months ?? s.months.length} months
+            {recordedMonths > 0 && ` · ${recordedMonths} recorded at the time`}
           </CardDescription>
         </CardHeader>
         <CardContent className="px-4 sm:px-6">
@@ -131,7 +150,12 @@ async function BacktestContent() {
             <TableBody>
               {s.months.map((m) => (
                 <TableRow key={m.month}>
-                  <TableCell>{m.month}</TableCell>
+                  <TableCell>
+                    {m.month}
+                    {m.recorded && (
+                      <span className="text-muted-foreground text-xs"> · recorded</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {m.strategyPicks.length || "cash"}
                   </TableCell>
@@ -160,10 +184,13 @@ async function BacktestContent() {
         <div className="text-muted-foreground space-y-1">
           <p className="text-foreground font-medium">How to read this honestly</p>
           <p>
-            The traders tested come from <em>today&apos;s</em> leaderboards, so everyone in the pool
-            is someone who survived (survivorship bias). That inflates both lines. The useful signal
-            is the <strong>gap between the two lines</strong>, plus how often the strategy sat in
-            cash because nobody passed. Paper trading forward is the real test.
+            For months not marked <em>recorded</em>, the traders tested come from{" "}
+            <em>today&apos;s</em> leaderboards, so everyone in the pool is someone who survived
+            (survivorship bias). That inflates both lines; the useful signal is the{" "}
+            <strong>gap between them</strong>, plus how often the strategy sat in cash. Months
+            marked <em>recorded</em> use the picks saved at the time (the top Verified traders and
+            the month leaderboard&apos;s top earners), so they have no such bias. Paper trading
+            forward is the other real test.
           </p>
         </div>
       </div>

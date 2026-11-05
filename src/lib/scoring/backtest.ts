@@ -7,16 +7,17 @@
  * Polymarket's taker fee (copies always take liquidity).
  * Baseline: the naive approach — copy last month's top-K by realized profit.
  *
- * Known bias (disclosed in the UI): the candidate pool is today's leaderboard, which
- * favors traders who survived. Strategy and baseline share that bias, so the comparison
- * between them is the meaningful number, not the absolute return.
+ * Known bias (disclosed in the UI): for months nobody recorded, the candidate pool is
+ * today's leaderboard, which favors traders who survived. Strategy and baseline share that
+ * bias, so the comparison between them is the meaningful number, not the absolute return.
+ * Months whose picks were recorded at the time (monthlySelections) have no such bias.
  */
 import { DEFAULT_TAKER_FEE_RATE } from "@/lib/polymarket/gamma";
 
 import type { ScoringConfig } from "./config";
 import { computeMetrics, type MetricsInput, type PositionRecord } from "./metrics";
 import { scoreTrader } from "./score";
-import { benjaminiHochbergThreshold, mean } from "./stats";
+import { benjaminiHochbergThreshold, mean, simulationsFor } from "./stats";
 
 const DAY = 86_400;
 
@@ -42,6 +43,14 @@ export const DEFAULT_BACKTEST: BacktestParams = {
   simulations: 300,
 };
 
+/** Picks recorded at the time (see db monthlySelections): point-in-time, no survivors-only pool. */
+export interface RecordedPicks {
+  strategy: string[];
+  baseline: string[];
+  /** Epoch seconds the picks were recorded; bets opened earlier in the month don't count. */
+  from: number;
+}
+
 export interface BacktestMonth {
   month: string;
   strategyPicks: string[];
@@ -50,6 +59,8 @@ export interface BacktestMonth {
   baselineReturn: number;
   strategyBets: number;
   baselineBets: number;
+  /** Picks were recorded that month, not re-derived from today's pool. */
+  recorded?: boolean;
 }
 
 export interface CurvePoint {
@@ -69,6 +80,8 @@ export interface BacktestResult {
     strategyMaxDrawdown: number;
     baselineMaxDrawdown: number;
     avgStrategyPicks: number;
+    /** Months whose picks were recorded at the time (free of survivorship bias). */
+    recordedMonths: number;
   };
 }
 
@@ -135,13 +148,59 @@ function maxDrawdown(curve: CurvePoint[]): number {
   return dd;
 }
 
+/**
+ * Picks re-derived from today's pool as of `start` (used for months nobody recorded).
+ * Only data from before `start` is used, but the pool itself is today's survivors.
+ */
+function simulatedPicks(
+  traders: MetricsInput[],
+  cfg: ScoringConfig,
+  topK: number,
+  start: number,
+): { strategy: string[]; baseline: string[] } {
+  const formation = traders.map((t) => asOf(t, start));
+  const metrics = formation.map((f) => computeMetrics(f, cfg));
+  const pValues = metrics.map((m) => m.mcPValue).filter((p): p is number => p !== null);
+  const ctx = {
+    mcPThreshold: benjaminiHochbergThreshold(pValues, cfg.fdrQ),
+    candidates: pValues.length,
+  };
+
+  // Copy-ROI can't be measured historically; its effect is modelled via slippage.
+  const strategy = formation
+    .map((f, i) => ({ wallet: f.wallet, result: scoreTrader(metrics[i], cfg, ctx) }))
+    .filter((x) => x.result.checks.every((c) => c.ok || c.code === "copy_roi"))
+    .sort((a, b) => b.result.score - a.result.score)
+    .slice(0, topK)
+    .map((x) => x.wallet);
+
+  const baseline = traders
+    .map((t) => ({
+      wallet: t.wallet,
+      pnl: t.positions
+        .filter((p) => {
+          const at = p.endAt ?? p.lastActivityAt ?? Infinity;
+          return p.closed && at >= start - 30 * DAY && at < start;
+        })
+        .reduce((a, p) => a + p.realizedPnl, 0),
+    }))
+    .filter((x) => x.pnl > 0)
+    .sort((a, b) => b.pnl - a.pnl)
+    .slice(0, topK)
+    .map((x) => x.wallet);
+  return { strategy, baseline };
+}
+
 export function runBacktest(
   traders: MetricsInput[],
   baseCfg: ScoringConfig,
   params: BacktestParams,
   now: number,
+  recorded: ReadonlyMap<string, RecordedPicks> = new Map(),
 ): BacktestResult {
-  const cfg = { ...baseCfg, simulations: params.simulations };
+  // Fewer simulations for speed, but never so few that the luck test can't be passed.
+  const simulations = simulationsFor(traders.length, baseCfg.fdrQ, params.simulations);
+  const cfg = { ...baseCfg, simulations };
   const byWallet = new Map(traders.map((t) => [t.wallet, t]));
   const today = new Date(now * 1000);
   const months: BacktestMonth[] = [];
@@ -152,48 +211,28 @@ export function runBacktest(
     const end = monthStart(today.getUTCFullYear(), today.getUTCMonth() - k + 1);
     const label = new Date(start * 1000).toISOString().slice(0, 7);
 
-    const formation = traders.map((t) => asOf(t, start));
-    const metrics = formation.map((f) => computeMetrics(f, cfg));
-    const pValues = metrics.map((m) => m.mcPValue).filter((p): p is number => p !== null);
-    const ctx = {
-      mcPThreshold: benjaminiHochbergThreshold(pValues, cfg.fdrQ),
-      candidates: pValues.length,
-    };
-
-    // Copy-ROI can't be measured historically; its effect is modelled via slippage.
-    const eligible = formation
-      .map((f, i) => ({ wallet: f.wallet, result: scoreTrader(metrics[i], cfg, ctx) }))
-      .filter((x) => x.result.checks.every((c) => c.ok || c.code === "copy_roi"))
-      .sort((a, b) => b.result.score - a.result.score)
-      .slice(0, params.topK)
-      .map((x) => x.wallet);
-
-    const baseline = traders
-      .map((t) => ({
-        wallet: t.wallet,
-        pnl: t.positions
-          .filter((p) => {
-            const at = p.endAt ?? p.lastActivityAt ?? Infinity;
-            return p.closed && at >= start - 30 * DAY && at < start;
-          })
-          .reduce((a, p) => a + p.realizedPnl, 0),
-      }))
-      .filter((x) => x.pnl > 0)
-      .sort((a, b) => b.pnl - a.pnl)
-      .slice(0, params.topK)
-      .map((x) => x.wallet);
+    const rec = recorded.get(label);
+    const picks = rec
+      ? {
+          strategy: rec.strategy.slice(0, params.topK),
+          baseline: rec.baseline.slice(0, params.topK),
+        }
+      : simulatedPicks(traders, cfg, params.topK, start);
+    // Picks recorded mid-month only get credit for bets opened after they were known.
+    const from = rec ? Math.max(start, rec.from) : start;
 
     const cost = [params.copySlippage, params.takerFeeRate] as const;
-    const s = portfolioReturn(eligible, byWallet, start, end, ...cost);
-    const b = portfolioReturn(baseline, byWallet, start, end, ...cost);
+    const s = portfolioReturn(picks.strategy, byWallet, from, end, ...cost);
+    const b = portfolioReturn(picks.baseline, byWallet, from, end, ...cost);
     months.push({
       month: label,
-      strategyPicks: eligible,
-      baselinePicks: baseline,
+      strategyPicks: picks.strategy,
+      baselinePicks: picks.baseline,
       strategyReturn: s.ret,
       baselineReturn: b.ret,
       strategyBets: s.bets,
       baselineBets: b.bets,
+      recorded: !!rec,
     });
   }
 
@@ -222,6 +261,7 @@ export function runBacktest(
       strategyMaxDrawdown: maxDrawdown(strategyCurve),
       baselineMaxDrawdown: maxDrawdown(baselineCurve),
       avgStrategyPicks: mean(months.map((m) => m.strategyPicks.length)),
+      recordedMonths: months.filter((m) => m.recorded).length,
     },
   };
 }

@@ -4,7 +4,7 @@
  *   npm run job -- backfill            # all known candidates without recent backfill
  *   npm run job -- score
  *   npm run job -- backtest [--months 6] [--top 10]
- *   npm run job -- daily [--limit 300] # discover → backfill → resolve → score → backtest → prune
+ *   npm run job -- daily [--limit 300] # discover → backfill → resolve → score → record picks → backtest → prune
  *   npm run job -- follow <wallet>     # follow a trader (paper copy)
  *   npm run job -- tick                # run one copy-engine tick locally
  */
@@ -22,7 +22,7 @@ import {
   prunePositions,
   resolveMarkets,
 } from "@/lib/jobs/backfill";
-import { backtestJob } from "@/lib/jobs/backtest";
+import { backtestJob, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
 import { DEFAULT_DISCOVER, discoverCandidates } from "@/lib/jobs/discover";
 import { DEFAULT_SCORE, scoreAll } from "@/lib/jobs/score";
 import { mapPool, runJob } from "@/lib/jobs/util";
@@ -103,8 +103,12 @@ async function main() {
     case "daily":
       await runJob(db, "daily", async (log) => {
         const discovered = await discoverCandidates(db, cfg, discoverOpts, log);
-        const backfill = await backfillMany(db, discovered.wallets, log);
+        // Traders picked in recorded months are judged by the backtest: keep them fresh too.
+        const recorded = await recordedWallets(db, backtestOpts.months);
+        const wallets = [...new Set([...discovered.wallets, ...recorded])];
+        const backfill = await backfillMany(db, wallets, log);
         const { rejected, ...score } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
+        const selections = await recordMonthlySelections(db, backtestOpts.topK, log);
         const backtest = await backtestJob(db, cfg, backtestOpts, log);
         const pruned = values["no-prune"] ? 0 : await prunePositions(db, rejected);
         log(`pruned ${pruned} position rows of ${rejected.length} rejected traders`);
@@ -112,7 +116,15 @@ async function main() {
         log(
           `removed ${cleaned.markets} orphan markets, ${cleaned.trades} old trades, ${cleaned.snapshots} old leaderboard rows`,
         );
-        return { discovered: discovered.kept, backfill, score, backtest, pruned, cleaned };
+        return {
+          discovered: discovered.kept,
+          backfill,
+          score,
+          selections,
+          backtest,
+          pruned,
+          cleaned,
+        };
       });
       break;
     case "follow": {

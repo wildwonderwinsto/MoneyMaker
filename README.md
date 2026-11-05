@@ -31,7 +31,10 @@ failed. All thresholds can be changed in **Settings**.
 
 A walk-forward **backtest** asks: "if I had picked traders this way each month, using only
 what was known then, how would copying them have done?" It compares against simply copying
-last month's top earners.
+last month's top earners. Past months re-derived from today's leaderboards only contain
+traders who survived, so each month's real picks (top Verified traders and the month
+leaderboard's top earners) are also **recorded as they happen**. Recorded months replace the
+re-derived ones, building a track record with no survivorship bias.
 
 ## How copying works (paper)
 

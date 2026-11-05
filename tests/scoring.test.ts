@@ -10,7 +10,12 @@ import {
   skillZ,
 } from "@/lib/scoring/metrics";
 import { scoreTrader } from "@/lib/scoring/score";
-import { benjaminiHochbergThreshold, normalCdf, wilsonLowerBound } from "@/lib/scoring/stats";
+import {
+  benjaminiHochbergThreshold,
+  normalCdf,
+  simulationsFor,
+  wilsonLowerBound,
+} from "@/lib/scoring/stats";
 
 import {
   coinFlipper,
@@ -40,6 +45,18 @@ describe("stats", () => {
     // m=5, q=0.1 → cutoffs 0.02,0.04,0.06,0.08,0.10
     expect(benjaminiHochbergThreshold([0.001, 0.03, 0.05, 0.5, 0.9], 0.1)).toBe(0.05);
     expect(benjaminiHochbergThreshold([0.5, 0.6], 0.1)).toBe(0);
+  });
+
+  it("runs enough simulations for the luck test to be passable", () => {
+    // Regression: the backtest used 300, so the best p-value possible (1/301) was above
+    // what Benjamini–Hochberg needs for 63 traders (0.1/63) and nobody could ever pass.
+    const sims = simulationsFor(63, 0.1, 300);
+    expect(1 / (sims + 1)).toBeLessThanOrEqual(0.1 / 63);
+    expect(
+      benjaminiHochbergThreshold([1 / (sims + 1), ...Array(62).fill(0.5)], 0.1),
+    ).toBeGreaterThan(0);
+    expect(benjaminiHochbergThreshold([1 / 301, ...Array(62).fill(0.5)], 0.1)).toBe(0);
+    expect(simulationsFor(10, 0.1, 2000)).toBe(2000); // never fewer than asked
   });
 });
 

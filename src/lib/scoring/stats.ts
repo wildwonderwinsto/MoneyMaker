@@ -36,6 +36,15 @@ export function benjaminiHochbergThreshold(pValues: number[], q: number): number
   return threshold;
 }
 
+/**
+ * Simulations needed for the luck test to be passable at all. A Monte Carlo p-value can't
+ * go below 1/(simulations + 1), while Benjamini–Hochberg needs the best of `candidates`
+ * at or below q/candidates. With fewer simulations nobody can pass, however skilled.
+ */
+export function simulationsFor(candidates: number, q: number, wanted: number): number {
+  return q > 0 ? Math.max(wanted, Math.ceil(candidates / q)) : wanted;
+}
+
 /** Deterministic PRNG (mulberry32) so scores are reproducible run to run. */
 export function seededRandom(seed: number): () => number {
   let a = seed >>> 0;

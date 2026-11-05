@@ -43,6 +43,13 @@
       "when": 1793848652686,
       "tag": "0005_market_payouts",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793849815497,
+      "tag": "0006_monthly_selections",
+      "breakpoints": true
     }
   ]
 }

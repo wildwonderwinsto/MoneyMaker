@@ -421,6 +421,26 @@ export const backtestRuns = pgTable("backtest_runs", {
   baselineCurve: jsonb().$type<EquityPoint[]>().notNull(),
 });
 
+/**
+ * Who each method would copy, recorded once per month by the first daily run of it:
+ * "strategy" = the top Verified/Elite traders, "baseline" = the month leaderboard's top
+ * earners. Re-deriving old picks from today's pool only finds traders who survived; these
+ * records are point-in-time, so the backtest uses them for every recorded month.
+ */
+export const monthlySelections = pgTable(
+  "monthly_selections",
+  {
+    /** YYYY-MM. */
+    month: text().notNull(),
+    method: text().$type<"strategy" | "baseline">().notNull(),
+    wallet: text().notNull(),
+    rank: integer().notNull(),
+    /** Only bets opened after this count (no look-ahead for mid-month records). */
+    recordedAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.month, t.method, t.wallet] })],
+);
+
 /** Key/value settings (scoring thresholds, risk limits). Validated with Zod on read. */
 export const appSettings = pgTable("app_settings", {
   key: text().primaryKey(),
