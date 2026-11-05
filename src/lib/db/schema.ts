@@ -6,6 +6,9 @@
  *   via `casing: "snake_case"` (see drizzle.config.ts and db/client.ts).
  * - Wallet addresses are stored lowercase.
  * - Money / prices use `numeric` with `mode: "number"`; pure statistics use doublePrecision.
+ * - Every table has row level security ON with no policies: Supabase publishes the public
+ *   schema through its Data API, and RLS blocks that API entirely. The app connects as the
+ *   table owner, which RLS doesn't apply to.
  * - Timestamps are timestamptz.
  */
 import { sql } from "drizzle-orm";
@@ -54,7 +57,7 @@ export const traders = pgTable("traders", {
   /** Median dollars they put into one market (recent positions); sizes copies by conviction. */
   typicalStakeUsd: money(),
   updatedAt: createdAt(),
-});
+}).enableRLS();
 
 export const leaderboardSnapshots = pgTable(
   "leaderboard_snapshots",
@@ -70,7 +73,7 @@ export const leaderboardSnapshots = pgTable(
     volume: doublePrecision(),
   },
   (t) => [index().on(t.capturedAt), index().on(t.wallet)],
-);
+).enableRLS();
 
 // ---------------------------------------------------------------------------
 // Markets (Polymarket conditions)
@@ -102,7 +105,7 @@ export const markets = pgTable(
     updatedAt: createdAt(),
   },
   (t) => [index().on(t.closed), index().on(t.eventId)],
-);
+).enableRLS();
 
 // ---------------------------------------------------------------------------
 // Trader history (inputs to scoring)
@@ -140,7 +143,7 @@ export const traderPositions = pgTable(
     updatedAt: createdAt(),
   },
   (t) => [uniqueIndex().on(t.wallet, t.tokenId), index().on(t.conditionId)],
-);
+).enableRLS();
 
 /** Individual trades; only kept for shortlisted/followed traders. */
 export const traderTrades = pgTable(
@@ -163,7 +166,7 @@ export const traderTrades = pgTable(
     transactionHash: text(),
   },
   (t) => [index().on(t.wallet, t.ts), index().on(t.conditionId)],
-);
+).enableRLS();
 
 /** Daily cumulative PnL series (from /v2/user-pnl). */
 export const traderPnlDaily = pgTable(
@@ -174,7 +177,7 @@ export const traderPnlDaily = pgTable(
     pnl: money().notNull(),
   },
   (t) => [primaryKey({ columns: [t.wallet, t.day] })],
-);
+).enableRLS();
 
 export type ScoreTier = "elite" | "verified" | "watchlist" | "rejected";
 
@@ -216,7 +219,7 @@ export const traderScores = pgTable(
     metrics: jsonb().$type<Record<string, unknown>>().notNull().default({}),
   },
   (t) => [index().on(t.tier, t.score)],
-);
+).enableRLS();
 
 // ---------------------------------------------------------------------------
 // Copy engine
@@ -229,7 +232,7 @@ export const follows = pgTable("follows", {
   weight: doublePrecision().notNull().default(1),
   note: text(),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 /** Last processed leader activity, so ticks are idempotent. */
 export const cursors = pgTable("cursors", {
@@ -237,14 +240,14 @@ export const cursors = pgTable("cursors", {
   /** Epoch seconds of the newest processed trade. */
   lastTs: bigint({ mode: "number" }).notNull(),
   updatedAt: createdAt(),
-});
+}).enableRLS();
 
 /** Traders the admin said "no" to: hidden from the Top traders list until restored. */
 export const hiddenTraders = pgTable("hidden_traders", {
   wallet: text().primaryKey(),
   note: text(),
   createdAt: createdAt(),
-});
+}).enableRLS();
 
 export type SignalDecision = "copied" | "skipped" | "closed";
 
@@ -312,7 +315,7 @@ export const signals = pgTable(
     accountId: integer(),
   },
   (t) => [index().on(t.detectedAt), index().on(t.wallet), index().on(t.decision, t.reasonCode)],
-);
+).enableRLS();
 
 // ---------------------------------------------------------------------------
 // Paper trading
@@ -325,7 +328,7 @@ export const paperAccounts = pgTable("paper_accounts", {
   cash: money().notNull(),
   createdAt: createdAt(),
   resetAt: tsz(),
-});
+}).enableRLS();
 
 export type PaperPositionStatus = "open" | "closed" | "settled";
 /** copy = mirrors a leader; hedge = opposite outcome bought to limit a copy's loss. */
@@ -366,7 +369,7 @@ export const paperPositions = pgTable(
     index().on(t.accountId, t.status),
     index().on(t.hedgeOf),
   ],
-);
+).enableRLS();
 
 export type PaperFillKind = "trade" | "settlement";
 
@@ -390,8 +393,8 @@ export const paperFills = pgTable(
     realizedPnl: money(),
     ts: createdAt(),
   },
-  (t) => [index().on(t.accountId, t.ts), index().on(t.signalId)],
-);
+  (t) => [index().on(t.accountId, t.ts), index().on(t.signalId), index().on(t.positionId)],
+).enableRLS();
 
 export const equitySnapshots = pgTable(
   "equity_snapshots",
@@ -405,7 +408,7 @@ export const equitySnapshots = pgTable(
     positionsValue: money().notNull(),
   },
   (t) => [primaryKey({ columns: [t.accountId, t.ts] })],
-);
+).enableRLS();
 
 // ---------------------------------------------------------------------------
 // Backtests, settings, observability
@@ -423,7 +426,7 @@ export const backtestRuns = pgTable("backtest_runs", {
   summary: jsonb().$type<Record<string, unknown>>().notNull(),
   strategyCurve: jsonb().$type<EquityPoint[]>().notNull(),
   baselineCurve: jsonb().$type<EquityPoint[]>().notNull(),
-});
+}).enableRLS();
 
 /**
  * Who each method would copy, recorded once per month by the first daily run of it:
@@ -443,14 +446,14 @@ export const monthlySelections = pgTable(
     recordedAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.month, t.method, t.wallet] })],
-);
+).enableRLS();
 
 /** Key/value settings (scoring thresholds, risk limits). Validated with Zod on read. */
 export const appSettings = pgTable("app_settings", {
   key: text().primaryKey(),
   value: jsonb().notNull(),
   updatedAt: createdAt(),
-});
+}).enableRLS();
 
 export type JobStatus = "running" | "ok" | "error";
 
@@ -466,4 +469,4 @@ export const jobRuns = pgTable(
     error: text(),
   },
   (t) => [index().on(t.job, t.startedAt)],
-);
+).enableRLS();
