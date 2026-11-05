@@ -41,7 +41,17 @@ export interface ScoreOptions {
   replaysPerTrader: number;
   /** Days of trade history fetched for copy replays. */
   replayLookbackDays: number;
+  /**
+   * Most trades fetched per trader for replays. The API returns newest first, so a low cap
+   * silently shrinks the window: 2000 covered only the last 10–30 days for active traders.
+   * 20k covers 90 days even at the bot limit (200 trades/day); a full 90 days for the most
+   * active verified traders was ~6k trades, fetched in ~3 s (Nov 2026).
+   */
+  maxReplayTrades: number;
 }
+
+/** Raw trades kept per shortlisted trader (profile page); bounds Supabase storage. */
+const STORED_TRADES = 2000;
 
 export const DEFAULT_SCORE: ScoreOptions = {
   shortlistSize: 60,
@@ -49,6 +59,7 @@ export const DEFAULT_SCORE: ScoreOptions = {
   // within its time budget (minute price history, rate-limited).
   replaysPerTrader: 150,
   replayLookbackDays: 90,
+  maxReplayTrades: 20_000,
 };
 
 type PositionRow = typeof traderPositions.$inferSelect;
@@ -72,6 +83,16 @@ export function toPositionRecord(r: PositionRow): PositionRecord {
     lastActivityAt: toEpoch(r.lastActivityAt),
     endAt: toEpoch(r.endDate),
   };
+}
+
+/**
+ * `k` items spread evenly over the whole list. Regression: a whole-number step (every
+ * 1st/2nd/… item, then the first k) took only the newest k when there were fewer than 2k
+ * items, e.g. 150 of 280 buys = just the last 10 days of a 90-day window. Pure (tested).
+ */
+export function evenSample<T>(items: T[], k: number): T[] {
+  const n = Math.min(k, items.length);
+  return Array.from({ length: n }, (_, i) => items[Math.floor((i * items.length) / n)]);
 }
 
 /** Our entry `delay` seconds after the leader, plus slippage; null if no nearby price. */
@@ -127,7 +148,7 @@ async function buildCopyReplays(
   const start = Math.floor(now - opts.replayLookbackDays * 86_400);
   const trades: Activity[] = await collect(
     paginate((cursor) => getActivity({ user: wallet, type: "TRADE", start, cursor }), {
-      maxItems: 2000,
+      maxItems: opts.maxReplayTrades,
     }),
   );
 
@@ -152,7 +173,8 @@ async function buildCopyReplays(
     slug: t.slug ?? null,
     transactionHash: t.transaction_hash ?? null,
   }));
-  for (const part of chunk(rows, 500))
+  // Newest first, so this keeps the most recent trades.
+  for (const part of chunk(rows.slice(0, STORED_TRADES), 500))
     await db.insert(traderTrades).values(part).onConflictDoNothing();
 
   // Only trades the copy engine would actually copy: big enough, sensible price, old
@@ -166,9 +188,7 @@ async function buildCopyReplays(
       toEpoch(t.ts)! < now - cfg.copyDelaySeconds - 900,
   );
   if (buys.length === 0) return [];
-  // Evenly spaced sample across the window.
-  const step = Math.max(1, Math.floor(buys.length / opts.replaysPerTrader));
-  const sample = buys.filter((_, i) => i % step === 0).slice(0, opts.replaysPerTrader);
+  const sample = evenSample(buys, opts.replaysPerTrader);
   const exits = leaderExits(rows);
 
   const marketsById = new Map(
@@ -207,7 +227,14 @@ async function buildCopyReplays(
       ? exit.soldFraction * afterFee(Math.max(0, exit.avgPrice - cfg.copySlippage), -1) +
         (1 - exit.soldFraction) * holdValue
       : holdValue;
-    return { delayedPrice: afterFee(delayedPrice, 1), exitValue, weight: t.usdcSize };
+    return {
+      delayedPrice: afterFee(delayedPrice, 1),
+      exitValue,
+      weight: t.usdcSize,
+      ts,
+      // Neither settled nor sold by the leader: valued at today's price, not a final result.
+      open: !payouts && (exit?.soldFraction ?? 0) < 0.98,
+    };
   });
   return replays.filter((r): r is CopyReplay => r !== null);
 }

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { delayedEntryPrice, leaderExits, toPositionRecord } from "@/lib/jobs/score";
+import {
+  DEFAULT_SCORE,
+  delayedEntryPrice,
+  evenSample,
+  leaderExits,
+  toPositionRecord,
+} from "@/lib/jobs/score";
 import { asOf, copiedBetReturn, runBacktest } from "@/lib/scoring/backtest";
 import { DEFAULT_SCORING_CONFIG as cfg } from "@/lib/scoring/config";
 import { computeMetrics, copyAdjustedRoi, copyRoiStats } from "@/lib/scoring/metrics";
@@ -228,6 +234,46 @@ describe("copy-adjusted ROI sample size", () => {
     expect(computeMetrics(input, cfg).copyAdjRoi).toBeNull();
     const many = { ...input, copyReplays: Array.from({ length: 30 }, () => replays[0]) };
     expect(computeMetrics(many, cfg).copyAdjRoi).toBeCloseTo(1);
+  });
+
+  it("reports how many days the replays cover and how many are still open", () => {
+    const replays = Array.from({ length: 30 }, (_, i) => ({
+      delayedPrice: 0.5,
+      exitValue: 1,
+      ts: 1_800_000_000 - i * 86_400,
+      open: i < 4,
+    }));
+    const m = computeMetrics(
+      {
+        wallet: "0x1",
+        positions: [],
+        pnlSeries: [],
+        activity: { tradeCount: null, joinDate: null },
+        copyReplays: replays,
+        now: 1_800_000_000,
+      },
+      cfg,
+    );
+    expect(m.copyReplayDays).toBeCloseTo(29);
+    expect(m.copyOpenReplays).toBe(4);
+  });
+
+  it("samples replays evenly across the whole window", () => {
+    const buys = Array.from({ length: 280 }, (_, i) => i); // newest first
+    const sample = evenSample(buys, 150);
+    expect(sample).toHaveLength(150);
+    expect(new Set(sample).size).toBe(150);
+    expect(sample[0]).toBe(0);
+    expect(sample.at(-1)).toBeGreaterThan(275); // reaches the oldest trades too
+    expect(evenSample([1, 2, 3], 150)).toEqual([1, 2, 3]);
+  });
+
+  it("fetches enough trades to cover the whole replay window", () => {
+    // Regression: a 2000-trade cap (newest first) covered only 10–30 days for active
+    // traders. Anyone under the bot limit must get the full window.
+    expect(DEFAULT_SCORE.maxReplayTrades).toBeGreaterThanOrEqual(
+      cfg.maxTradesPerDay * DEFAULT_SCORE.replayLookbackDays,
+    );
   });
 
   it("matches the textbook standard error for equal stakes", () => {

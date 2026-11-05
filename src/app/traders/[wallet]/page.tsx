@@ -77,6 +77,8 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
     recoveryFactor?: number | null;
     nCopyReplays?: number;
     copyAdjRoiMean?: number | null;
+    copyReplayDays?: number | null;
+    copyOpenReplays?: number;
   };
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
@@ -158,7 +160,11 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               tone={score.copyAdjRoi === null ? undefined : score.copyAdjRoi >= 0 ? "gain" : "loss"}
               hint={
                 typeof metrics.copyAdjRoiMean === "number"
-                  ? `Cautious estimate · average ${pct(metrics.copyAdjRoiMean, 1, { sign: true })} over ${metrics.nCopyReplays} trades`
+                  ? `Cautious estimate · average ${pct(metrics.copyAdjRoiMean, 1, { sign: true })} over ${metrics.nCopyReplays} trades` +
+                    (typeof metrics.copyReplayDays === "number"
+                      ? ` in ${Math.max(1, Math.round(metrics.copyReplayDays))} days`
+                      : "") +
+                    (metrics.copyOpenReplays ? ` (${metrics.copyOpenReplays} still open)` : "")
                   : typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0
                     ? `Replayed ${metrics.nCopyReplays} of their trades`
                     : "Delayed entry + spread + fees"

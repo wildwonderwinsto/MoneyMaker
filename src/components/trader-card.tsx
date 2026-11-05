@@ -19,6 +19,7 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
     monthlyPnl?: Array<{ month: string; pnl: number }>;
     resolvedWinRate?: number | null;
     nCopyReplays?: number;
+    copyReplayDays?: number | null;
   };
   const curve = cumulative(metrics.monthlyPnl);
   const name = traderName(t);
@@ -76,6 +77,8 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
                 <span className="text-muted-foreground text-xs font-normal">
                   {" "}
                   · {metrics.nCopyReplays} trades
+                  {typeof metrics.copyReplayDays === "number" &&
+                    `, ${Math.max(1, Math.round(metrics.copyReplayDays))} days`}
                 </span>
               )}
             </dd>

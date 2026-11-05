@@ -51,6 +51,10 @@ export interface CopyReplay {
   exitValue: number;
   /** Leader's stake in USDC; copies are sized proportionally (defaults to 1). */
   weight?: number;
+  /** When the leader bought (epoch seconds). */
+  ts?: number;
+  /** Still running: `exitValue` is today's price, not a final result. */
+  open?: boolean;
 }
 
 export interface TraderMetrics {
@@ -90,6 +94,10 @@ export interface TraderMetrics {
   copyAdjRoiMean: number | null;
   /** Replays weighted by stake count like this many equal bets (Kish). */
   copyEffectiveN: number | null;
+  /** Days between the first and last replayed trade. */
+  copyReplayDays: number | null;
+  /** Replays still running (valued at today's price). */
+  copyOpenReplays: number;
   nCopyReplays: number;
   lastTradeAt: number | null;
   daysSinceTrade: number | null;
@@ -262,6 +270,11 @@ export function copyRoiStats(replays: CopyReplay[]): CopyRoiStats | null {
   };
 }
 
+function replaySpanDays(replays: CopyReplay[] | null): number | null {
+  const ts = (replays ?? []).map((r) => r.ts).filter((t): t is number => typeof t === "number");
+  return ts.length ? (Math.max(...ts) - Math.min(...ts)) / DAY : null;
+}
+
 /** Stake-weighted ROI of replayed copies (the plain average). */
 export function copyAdjustedRoi(replays: CopyReplay[]): number | null {
   return copyRoiStats(replays)?.mean ?? null;
@@ -374,6 +387,8 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     copyAdjRoi: copy && copy.se !== null ? copy.mean - cfg.copyRoiZ * copy.se : null,
     copyAdjRoiMean: copy?.mean ?? null,
     copyEffectiveN: copy?.nEff ?? null,
+    copyReplayDays: replaySpanDays(replays),
+    copyOpenReplays: replays?.filter((r) => r.open).length ?? 0,
     nCopyReplays: replays?.length ?? 0,
     lastTradeAt,
     daysSinceTrade: lastTradeAt === null ? null : Math.max(0, (now - lastTradeAt) / DAY),
