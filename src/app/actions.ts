@@ -1,6 +1,6 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { refresh } from "next/cache";
 import { headers } from "next/headers";
 import { z } from "zod";
@@ -9,10 +9,11 @@ import { checkPasswordAndSetCookie, clearAdminCookie, requireAdmin } from "@/lib
 import { ensureDefaultAccount, resetAccount } from "@/lib/copy/account";
 import { RiskConfigSchema } from "@/lib/copy/config";
 import { notifyEngine } from "@/lib/copy/runner";
-import { executeHedge } from "@/lib/copy/tick";
+import { executeHedge, exitTrader, type ExitResult } from "@/lib/copy/tick";
 import { getDb } from "@/lib/db/client";
 import { cursors, follows, hiddenTraders } from "@/lib/db/schema";
 import { env } from "@/lib/env";
+import { usd } from "@/lib/format";
 import { allowAttempt, clearAttempts } from "@/lib/rate-limit";
 import { ScoringConfigSchema } from "@/lib/scoring/config";
 import { getRiskConfig, writeSetting } from "@/lib/settings";
@@ -78,19 +79,56 @@ export async function lockAction() {
 export async function setFollowAction(wallet: string, enabled: boolean): Promise<ActionResult> {
   return adminOnly(async () => {
     const w = Wallet.parse(wallet);
-    const db = getDb();
-    await db
-      .insert(follows)
-      .values({ wallet: w, enabled })
-      .onConflictDoUpdate({ target: follows.wallet, set: { enabled } });
-    // Re-following starts fresh from now instead of replaying missed trades.
-    if (enabled) {
-      await db.delete(cursors).where(eq(cursors.wallet, w));
-      await db.delete(hiddenTraders).where(eq(hiddenTraders.wallet, w));
-    }
+    // One transaction: the engine must never see the re-follow with the old cursor (it
+    // would replay every trade made while unfollowed).
+    await getDb().transaction(async (tx) => {
+      if (enabled) {
+        // Re-following starts fresh from now instead of replaying missed trades.
+        await tx.delete(cursors).where(eq(cursors.wallet, w));
+        await tx.delete(hiddenTraders).where(eq(hiddenTraders.wallet, w));
+      }
+      await tx
+        .insert(follows)
+        .values({ wallet: w, enabled })
+        .onConflictDoUpdate({ target: follows.wallet, set: { enabled } });
+    });
     await notifyEngine();
-    return enabled ? "Following — new trades will be paper-copied" : "Unfollowed";
+    return enabled
+      ? "Following — new trades will be paper-copied"
+      : "Unfollowed — no new copies. Open copies still close when this trader sells.";
   });
+}
+
+/** Drop a paused trader from the follow list. Open copies still close on their sells. */
+export async function removeFollowAction(wallet: string): Promise<ActionResult> {
+  return adminOnly(async () => {
+    const w = Wallet.parse(wallet);
+    const removed = await getDb()
+      .delete(follows)
+      .where(and(eq(follows.wallet, w), eq(follows.enabled, false)))
+      .returning({ wallet: follows.wallet });
+    if (removed.length === 0) throw new Error("Pause copying before removing a trader");
+    await notifyEngine();
+    return "Removed from your list";
+  });
+}
+
+function hideMessage(r: ExitResult): string {
+  if (r.skipped) {
+    return "Hidden and unfollowed. The engine was busy, so open copies weren't sold; they'll close when this trader sells.";
+  }
+  const parts = ["Hidden and unfollowed"];
+  if (r.sold > 0) {
+    parts.push(
+      `sold ${r.sold} open position${r.sold === 1 ? "" : "s"} for ${usd(r.proceeds)} (${usd(r.pnl, { sign: true })})`,
+    );
+  }
+  if (r.left > 0) {
+    parts.push(
+      `${r.left} couldn't be sold now and will close when this trader sells or the market resolves`,
+    );
+  }
+  return parts.join(" · ");
 }
 
 export async function setWeightAction(wallet: string, weight: number): Promise<ActionResult> {
@@ -106,16 +144,23 @@ export async function addFollowAction(_prev: ActionResult | null, form: FormData
   return setFollowAction(String(form.get("wallet") ?? ""), true);
 }
 
-/** Say "no" to a trader: hide them from Top traders and stop copying them. */
+/**
+ * Say "no" to a trader: hide them from Top traders, delete the follow, and sell whatever
+ * was copied from them (and its hedges) right away.
+ */
 export async function setHiddenAction(wallet: string, hidden: boolean): Promise<ActionResult> {
   return adminOnly(async () => {
     const w = Wallet.parse(wallet);
     const db = getDb();
     if (hidden) {
-      await db.insert(hiddenTraders).values({ wallet: w }).onConflictDoNothing();
-      await db.update(follows).set({ enabled: false }).where(eq(follows.wallet, w));
+      await db.transaction(async (tx) => {
+        await tx.insert(hiddenTraders).values({ wallet: w }).onConflictDoNothing();
+        await tx.delete(follows).where(eq(follows.wallet, w));
+        await tx.delete(cursors).where(eq(cursors.wallet, w));
+      });
+      const exit = await exitTrader(db, w);
       await notifyEngine();
-      return "Hidden from Top traders (and no longer copied)";
+      return hideMessage(exit);
     }
     await db.delete(hiddenTraders).where(eq(hiddenTraders.wallet, w));
     return "Restored to Top traders";

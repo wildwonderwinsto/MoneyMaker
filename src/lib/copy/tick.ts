@@ -121,7 +121,72 @@ interface EngineCtx {
   weights: Map<string, number>;
   /** Leaders → usual stake per market (conviction sizing); missing = not known yet. */
   typicalStakes: Map<string, number>;
+  /**
+   * `wallet|tokenId` of copies still open from leaders we no longer follow. Only those
+   * leaders' sells of these tokens are acted on (see loadWindDown).
+   */
+  exitOnly: Set<string>;
   stats: TickStats;
+}
+
+const heldKey = (wallet: string, tokenId: string) => `${wallet}|${tokenId}`;
+
+/**
+ * Leaders we stopped copying but still hold copies from. Their buys are ignored, but their
+ * sells are still mirrored, so those positions close when the leader gets out instead of
+ * being stranded until the market resolves. A leader drops off once nothing is left open.
+ */
+async function loadWindDown(
+  db: Db,
+  accountId: number,
+  followed: Set<string>,
+  onlyWallets?: string[],
+): Promise<{ wallets: string[]; held: Set<string> }> {
+  const rows = await db
+    .selectDistinct({ wallet: paperPositions.sourceWallet, tokenId: paperPositions.tokenId })
+    .from(paperPositions)
+    .where(
+      and(
+        eq(paperPositions.accountId, accountId),
+        eq(paperPositions.status, "open"),
+        eq(paperPositions.kind, "copy"),
+        onlyWallets ? inArray(paperPositions.sourceWallet, onlyWallets) : undefined,
+      ),
+    );
+  const wallets = new Set<string>();
+  const held = new Set<string>();
+  for (const r of rows) {
+    if (followed.has(r.wallet)) continue;
+    wallets.add(r.wallet);
+    held.add(heldKey(r.wallet, r.tokenId));
+  }
+  return { wallets: [...wallets], held };
+}
+
+/** Everything a followed leader does; only exits of copies we still hold otherwise. */
+const isRelevant = (ctx: EngineCtx, t: LeaderTrade) =>
+  ctx.weights.has(t.wallet) ||
+  (t.side === "SELL" && ctx.exitOnly.has(heldKey(t.wallet, t.tokenId)));
+
+/** Wallets the engine watches: followed leaders plus those still being wound down. */
+export async function engineWallets(db: Db): Promise<string[]> {
+  const account = await ensureDefaultAccount(db);
+  const leaders = await db
+    .select({ wallet: follows.wallet })
+    .from(follows)
+    .where(eq(follows.enabled, true));
+  const followed = new Set(leaders.map((l) => l.wallet));
+  const { wallets } = await loadWindDown(db, account.id, followed);
+  return [...followed, ...wallets];
+}
+
+/** Wait for the engine lease (another run usually finishes within a few seconds). */
+async function waitForLease(db: Db, attempts: number): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    if (await acquireLease(db, LEASE, LEASE_TTL_MS)) return true;
+    if (i < attempts - 1) await sleep(500);
+  }
+  return false;
 }
 
 /** Leaders' usual stake per market, from the daily backfill. */
@@ -169,24 +234,22 @@ export async function runTick(
     const now = Math.floor(nowMs / 1000);
     const leaders = await db.select().from(follows).where(eq(follows.enabled, true));
     stats.leaders = leaders.length;
+    const followed = new Set(leaders.map((l) => l.wallet));
+    const windDown = doCopy
+      ? await loadWindDown(db, account.id, followed)
+      : { wallets: [], held: new Set<string>() };
     const ctx: EngineCtx = {
       accountId: account.id,
       cfg,
       now,
       weights: new Map(leaders.map((l) => [l.wallet, l.weight])),
-      typicalStakes: await loadTypicalStakes(
-        db,
-        leaders.map((l) => l.wallet),
-      ),
+      typicalStakes: await loadTypicalStakes(db, [...followed]),
+      exitOnly: windDown.held,
       stats,
     };
 
     if (doCopy) {
-      await pollLeaders(
-        db,
-        ctx,
-        leaders.map((l) => l.wallet),
-      );
+      await pollLeaders(db, ctx, [...followed, ...windDown.wallets]);
       if (cfg.retrySkipped) {
         try {
           await retrySkipped(db, ctx);
@@ -223,12 +286,9 @@ export async function runStreamBatch(
 ): Promise<TickStats> {
   const started = Date.now();
   const stats = newStats("stream");
-  let leased = false;
-  for (let i = 0; i < 10 && !leased; i++) {
-    leased = await acquireLease(db, LEASE, LEASE_TTL_MS);
-    if (!leased) await sleep(500);
+  if (!(await waitForLease(db, 10))) {
+    return { ...stats, skipped: "Engine busy; the next poll will pick these up" };
   }
-  if (!leased) return { ...stats, skipped: "Engine busy; the next poll will pick these up" };
   try {
     const wallets = [...new Set(trades.map((t) => t.wallet))];
     const leaders = await db
@@ -236,21 +296,21 @@ export async function runStreamBatch(
       .from(follows)
       .where(and(eq(follows.enabled, true), inArray(follows.wallet, wallets)));
     stats.leaders = leaders.length;
-    if (leaders.length === 0) return stats;
-    const cfg = await getRiskConfig(db);
     const account = await ensureDefaultAccount(db);
+    const followed = new Set(leaders.map((l) => l.wallet));
+    const windDown = await loadWindDown(db, account.id, followed, wallets);
+    if (leaders.length === 0 && windDown.wallets.length === 0) return stats;
+    const cfg = await getRiskConfig(db);
     const ctx: EngineCtx = {
       accountId: account.id,
       cfg,
       now: Math.floor(nowMs / 1000),
       weights: new Map(leaders.map((l) => [l.wallet, l.weight])),
-      typicalStakes: await loadTypicalStakes(
-        db,
-        leaders.map((l) => l.wallet),
-      ),
+      typicalStakes: await loadTypicalStakes(db, [...followed]),
+      exitOnly: windDown.held,
       stats,
     };
-    const ours = trades.filter((t) => ctx.weights.has(t.wallet));
+    const ours = trades.filter((t) => isRelevant(ctx, t));
     const fresh = await filterUnseen(db, ours, new Map());
     stats.newTrades = fresh.length;
     if (fresh.length) await processTrades(db, ctx, fresh, "stream");
@@ -310,7 +370,7 @@ async function pollLeaders(db: Db, ctx: EngineCtx, wallets: string[]) {
     const ids = tradeIds(page.rows);
     page.rows.forEach((a, i) => {
       const t = toLeaderTrade(a, ids[i]);
-      if (!t) return;
+      if (!t || !isRelevant(ctx, t)) return;
       candidates.push(t);
       legacy.set(t.id, legacyTradeId(a));
     });
@@ -838,6 +898,8 @@ async function settleAndMark(db: Db, ctx: EngineCtx) {
   const hedged = new Set(live.filter((p) => p.kind === "hedge").map((p) => p.hedgeOf));
   for (const p of live) {
     if (p.kind !== "copy" || hedged.has(p.id) || p.costBasis <= 0) continue;
+    // Never spend more on a trader who is no longer followed (manual hedges still work).
+    if (!ctx.weights.has(p.sourceWallet)) continue;
     const value = p.shares * (p.currentPrice ?? p.avgPrice);
     const loss = (p.costBasis - value) / p.costBasis;
     if (loss < ctx.cfg.hedgeTriggerLossPct) continue;
@@ -969,4 +1031,91 @@ export async function executeHedge(
     message: `Hedged: bought ${quote.shares.toFixed(1)} ${q.opposite.outcome ?? "opposite"} shares for $${quote.cost.toFixed(2)}`,
     quote,
   };
+}
+
+export interface ExitResult {
+  /** Positions (copies and their hedges) that sold, fully or in part. */
+  sold: number;
+  /** Positions still open afterwards (no buyers, market closed, or only partly sold). */
+  left: number;
+  proceeds: number;
+  pnl: number;
+  /** Set when nothing could be tried (engine busy). */
+  skipped?: string;
+}
+
+/**
+ * Sell every open position copied from `wallet` (copies and their hedges) at the best bids
+ * right now. Used when the admin hides a trader. Anything that can't be sold stays open:
+ * the engine keeps mirroring the trader's sells for it, and settlement pays it out otherwise.
+ */
+export async function exitTrader(db: Db, wallet: string, nowMs = Date.now()): Promise<ExitResult> {
+  const out: ExitResult = { sold: 0, left: 0, proceeds: 0, pnl: 0 };
+  if (!(await waitForLease(db, 30))) return { ...out, skipped: "Engine busy" };
+  try {
+    const [cfg, account] = await Promise.all([getRiskConfig(db), ensureDefaultAccount(db)]);
+    const open = await db
+      .select()
+      .from(paperPositions)
+      .where(
+        and(
+          eq(paperPositions.accountId, account.id),
+          eq(paperPositions.sourceWallet, wallet),
+          eq(paperPositions.status, "open"),
+        ),
+      );
+    if (open.length === 0) return out;
+    const [info, books] = await Promise.all([
+      getMarketInfo(
+        db,
+        open.map((p) => p.conditionId),
+      ),
+      mapSettled([...new Set(open.map((p) => p.tokenId))], (id) => getBook(id)),
+    ]);
+    const ts = Math.floor(nowMs / 1000);
+    for (const p of open) {
+      const market = info.get(p.conditionId);
+      const book = books.get(p.tokenId);
+      // Closed markets are paid out by settlement, not sold.
+      if (!market || market.closed || !book || book.bids.length === 0) {
+        out.left++;
+        continue;
+      }
+      const fill = simulateSell(book.bids, p.shares, 0, cfg.takerFeeBps, market.takerFeeRate ?? 0);
+      if (fill.shares <= 0) {
+        out.left++;
+        continue;
+      }
+      const pnl = await db.transaction((tx) =>
+        applySell(
+          tx,
+          p,
+          {
+            id: `exit:${p.id}:${ts}`,
+            wallet,
+            ts,
+            conditionId: p.conditionId,
+            tokenId: p.tokenId,
+            side: "SELL",
+            price: book.bids[0].price,
+            size: fill.shares,
+            usdc: fill.notional,
+            outcome: p.outcome,
+            title: p.title,
+            slug: p.slug,
+            icon: p.image,
+          },
+          fill,
+        ),
+      );
+      out.sold++;
+      out.proceeds += fill.notional;
+      out.pnl += pnl;
+      if (fill.shares < p.shares - 1e-6) out.left++;
+    }
+    if (out.sold > 0) await maybeSnapshot(db, account.id, 0);
+    return out;
+  } finally {
+    await releaseLease(db, LEASE, PROCESS_ID);
+  }
 }

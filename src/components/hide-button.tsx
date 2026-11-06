@@ -28,7 +28,7 @@ export function HideButton({
       title={
         hidden
           ? "Show this trader in Top traders again"
-          : "Not interested: hide from Top traders and stop copying"
+          : "Not interested: hide from Top traders, unfollow, and sell what was copied from them"
       }
       onClick={() =>
         start(async () => {

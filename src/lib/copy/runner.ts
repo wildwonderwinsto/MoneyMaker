@@ -12,15 +12,13 @@
  */
 import type { Db } from "@/lib/db/client";
 import { getDb } from "@/lib/db/client";
-import { follows } from "@/lib/db/schema";
 import { PROCESS_ID, releaseLease } from "@/lib/lease";
 import { getRiskConfig } from "@/lib/settings";
-import { eq } from "drizzle-orm";
 
 import type { LeaderTrade } from "./engine";
 import { writeEngineStatus } from "./status";
 import { TradeStream } from "./stream";
-import { LEASE, runStreamBatch, runTick, type TickStats } from "./tick";
+import { engineWallets, LEASE, runStreamBatch, runTick, type TickStats } from "./tick";
 
 type Log = (msg: string) => void;
 
@@ -148,12 +146,10 @@ export class EngineRunner {
   /** Re-read settings and the follow list (call after either changes). */
   async refresh() {
     const db = this.db();
-    const [cfg, leaders] = await Promise.all([
-      getRiskConfig(db),
-      db.select({ wallet: follows.wallet }).from(follows).where(eq(follows.enabled, true)),
-    ]);
-    this.stream.setFollowed(leaders.map((l) => l.wallet));
-    const wantStream = cfg.realtime && leaders.length > 0;
+    // Followed leaders, plus unfollowed ones we still hold copies from (their exits count).
+    const [cfg, watched] = await Promise.all([getRiskConfig(db), engineWallets(db)]);
+    this.stream.setFollowed(watched);
+    const wantStream = cfg.realtime && watched.length > 0;
     if (wantStream && !this.streamEnabled) this.stream.start();
     if (!wantStream && this.streamEnabled) this.stream.stop();
     this.streamEnabled = wantStream;

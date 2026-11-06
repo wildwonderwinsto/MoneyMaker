@@ -2,7 +2,13 @@
 
 import { useState, useTransition } from "react";
 
-import { lockAction, setFollowAction, setWeightAction, type ActionResult } from "@/app/actions";
+import {
+  lockAction,
+  removeFollowAction,
+  setFollowAction,
+  setWeightAction,
+  type ActionResult,
+} from "@/app/actions";
 import { FormMessage } from "@/components/forms";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +53,18 @@ export function FollowRowControls({
           disabled={pending}
           onCheckedChange={(on) => start(async () => setState(await setFollowAction(wallet, on)))}
         />
+        {!enabled && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-muted-foreground hover:text-no"
+            disabled={pending}
+            title="Remove from this list. Open copies still close when this trader sells."
+            onClick={() => start(async () => setState(await removeFollowAction(wallet)))}
+          >
+            Remove
+          </Button>
+        )}
       </div>
       {state && !state.ok && <FormMessage state={state} />}
     </div>

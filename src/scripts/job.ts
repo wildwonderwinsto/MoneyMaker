@@ -10,7 +10,7 @@
  */
 import { parseArgs } from "node:util";
 
-import { and, isNull, lt, or } from "drizzle-orm";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
 
 import { closeDb, getDb, type Db } from "@/lib/db/client";
 import { runTick } from "@/lib/copy/tick";
@@ -106,9 +106,10 @@ async function main() {
         // Traders picked in recorded months are judged by the backtest, and followed traders
         // need a fresh usual stake for sizing: keep both backfilled too.
         const recorded = await recordedWallets(db, backtestOpts.months);
-        const followed = (await db.select({ wallet: follows.wallet }).from(follows)).map(
-          (f) => f.wallet,
-        );
+        // Only traders being copied: paused ones don't need fresh history every day.
+        const followed = (
+          await db.select({ wallet: follows.wallet }).from(follows).where(eq(follows.enabled, true))
+        ).map((f) => f.wallet);
         if (followed.length) {
           await db
             .insert(traders)

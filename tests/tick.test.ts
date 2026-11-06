@@ -1,10 +1,10 @@
 /**
  * End-to-end tick against a real (in-memory) Postgres with the Polymarket APIs mocked.
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runTick } from "@/lib/copy/tick";
+import { engineWallets, exitTrader, runTick } from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
 import { follows, markets, paperAccounts, paperPositions, signals, traders } from "@/lib/db/schema";
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
@@ -252,5 +252,120 @@ describe("runTick", () => {
     const s = await runTick(db);
     expect(s.skipped).toMatch(/in progress/);
     await releaseLease(db, "tick");
+  });
+});
+
+describe("after unfollowing or hiding", () => {
+  const L2 = "0xquitter";
+  const COND4 = "0xwinddown";
+  const TOK_A = "777";
+  const TOK_B = "888";
+  const market4 = gamma.GammaMarket.parse({
+    id: "4",
+    question: "Wind down?",
+    conditionId: COND4,
+    closed: false,
+    endDate: new Date((t0 + 7 * 86_400) * 1000).toISOString(),
+    outcomes: '["Yes","No"]',
+    outcomePrices: '["0.5","0.5"]',
+    clobTokenIds: `["${TOK_A}","${TOK_B}"]`,
+  });
+  const l2Trade = (over: Partial<data.Activity>) =>
+    activity({ proxy_wallet: L2, condition_id: COND4, token_id: TOK_A, ...over });
+  /** Only L2 has new activity; every other leader is quiet. */
+  const l2Activity = (rows: data.Activity[]) =>
+    vi
+      .mocked(data.getActivity)
+      .mockImplementation(async ({ user }) => page(user === L2 ? rows : []));
+  const l2Open = async () =>
+    db
+      .select()
+      .from(paperPositions)
+      .where(and(eq(paperPositions.sourceWallet, L2), eq(paperPositions.status, "open")));
+
+  beforeEach(() => {
+    vi.mocked(gamma.getMarketsByConditionIds).mockResolvedValue([market4]);
+    vi.mocked(data.getPositions).mockResolvedValue(page([])); // leader fully out
+  });
+
+  it("keeps mirroring an unfollowed trader's sells, but copies none of their buys", async () => {
+    await db.insert(follows).values({ wallet: L2 });
+    l2Activity([]);
+    await runTick(db, (t0 + 300) * 1000); // first sighting: start watching
+    l2Activity([l2Trade({ transaction_hash: "0xq1", timestamp: t0 + 310 })]);
+    expect((await runTick(db, (t0 + 320) * 1000)).copied).toBe(1);
+    expect(await l2Open()).toHaveLength(1);
+
+    await db.update(follows).set({ enabled: false }).where(eq(follows.wallet, L2));
+    expect(await engineWallets(db)).toContain(L2);
+
+    l2Activity([
+      l2Trade({ transaction_hash: "0xq2", token_id: TOK_B, timestamp: t0 + 330 }), // new buy
+      l2Trade({ transaction_hash: "0xq3", side: "SELL", timestamp: t0 + 331 }), // exit
+    ]);
+    const s = await runTick(db, (t0 + 340) * 1000);
+    expect(s).toMatchObject({ copied: 0, closed: 1, newTrades: 1, errors: [] });
+    expect(await l2Open()).toHaveLength(0);
+    // The ignored buy isn't even recorded, and nothing is left to watch.
+    const ids = (await db.select().from(signals).where(eq(signals.wallet, L2))).map((r) => r.id);
+    expect(ids.some((id) => id.includes("0xq2"))).toBe(false);
+    expect(await engineWallets(db)).not.toContain(L2);
+  });
+
+  it("never auto-hedges a copy from an unfollowed trader", async () => {
+    await writeSetting(db, "risk", {
+      ...DEFAULT_RISK_CONFIG,
+      stakePct: 0.1,
+      autoHedge: "lock",
+      hedgeTriggerLossPct: 0.1,
+    });
+    const [account] = await db.select().from(paperAccounts);
+    await db.insert(paperPositions).values({
+      accountId: account.id,
+      sourceWallet: L2,
+      conditionId: COND4,
+      tokenId: TOK_A,
+      shares: 100,
+      avgPrice: 0.5,
+      costBasis: 50,
+    });
+    l2Activity([]);
+    vi.mocked(clob.getMidpoints).mockResolvedValue(new Map([[TOK_A, 0.2]])); // down 60%
+    const s = await runTick(db, (t0 + 360) * 1000);
+    expect(s.hedged).toBe(0);
+    await writeSetting(db, "risk", { ...DEFAULT_RISK_CONFIG, stakePct: 0.1 });
+  });
+
+  it("hiding sells everything copied from the trader at the best bid", async () => {
+    const [before] = await l2Open();
+    const cashBefore = await cash();
+    const r = await exitTrader(db, L2);
+    expect(r).toMatchObject({ sold: 1, left: 0 });
+    expect(r.proceeds).toBeCloseTo(before.shares * 0.6, 4); // bids at 60¢
+    expect(await cash()).toBeCloseTo(cashBefore + r.proceeds, 4);
+    expect(await l2Open()).toHaveLength(0);
+  });
+
+  it("leaves a position open when nobody is buying", async () => {
+    const [account] = await db.select().from(paperAccounts);
+    await db.insert(paperPositions).values({
+      accountId: account.id,
+      sourceWallet: L2,
+      conditionId: COND4,
+      tokenId: TOK_A,
+      shares: 10,
+      avgPrice: 0.5,
+      costBasis: 5,
+    });
+    vi.mocked(clob.getBook).mockResolvedValue({
+      tokenId: TOK_A,
+      bids: [],
+      asks: [{ price: 0.5, size: 100 }],
+      tickSize: 0.01,
+      minOrderSize: 5,
+      timestamp: Date.now(),
+    });
+    expect(await exitTrader(db, L2)).toMatchObject({ sold: 0, left: 1 });
+    expect(await l2Open()).toHaveLength(1);
   });
 });

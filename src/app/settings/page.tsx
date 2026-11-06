@@ -86,7 +86,7 @@ async function SettingsContent() {
           <CardTitle>Following</CardTitle>
           <CardDescription>
             {admin
-              ? "Weight scales the copy size for that trader (1 = normal, 2 = double, 0.5 = half). The switch pauses copying."
+              ? "Weight scales the copy size for that trader (1 = normal, 2 = double, 0.5 = half). The switch pauses new copies; open ones still close when that trader sells."
               : "Traders being copied."}
           </CardDescription>
         </CardHeader>

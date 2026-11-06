@@ -211,17 +211,22 @@ export async function getSignals(limit = 150) {
 export type SignalRow = Awaited<ReturnType<typeof getSignals>>[number];
 
 export async function getFollowList() {
-  return getDb()
-    .select({
-      follow: follows,
-      name: traders.name,
-      tier: traderScores.tier,
-      score: traderScores.score,
-    })
-    .from(follows)
-    .leftJoin(traders, eq(traders.wallet, follows.wallet))
-    .leftJoin(traderScores, eq(traderScores.wallet, follows.wallet))
-    .orderBy(desc(follows.enabled), desc(follows.createdAt));
+  return (
+    getDb()
+      .select({
+        follow: follows,
+        name: traders.name,
+        tier: traderScores.tier,
+        score: traderScores.score,
+      })
+      .from(follows)
+      .leftJoin(traders, eq(traders.wallet, follows.wallet))
+      .leftJoin(traderScores, eq(traderScores.wallet, follows.wallet))
+      // Hiding deletes the follow; this covers rows left by older versions.
+      .leftJoin(hiddenTraders, eq(hiddenTraders.wallet, follows.wallet))
+      .where(isNull(hiddenTraders.wallet))
+      .orderBy(desc(follows.enabled), desc(follows.createdAt))
+  );
 }
 
 export async function getPaperOverview() {
