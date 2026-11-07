@@ -83,3 +83,20 @@ describe("the weight box (UI-10)", () => {
     expect(parseWeight("1.25")).toBe(1.25);
   });
 });
+
+describe("caps that would silently block every buy at 0", () => {
+  it.each([
+    ["maxDailyLossPct", "Daily loss limit"],
+    ["maxPositionPct", "Most in one market"],
+    ["maxTraderExposurePct", "Most with one trader"],
+    ["hedgeMaxCostPct", "Most to spend on one hedge"],
+  ])("rejects 0 and negatives for %s, naming the field", (field, label) => {
+    for (const v of [0, -0.1]) {
+      const r = RiskConfigSchema.safeParse({ [field]: v });
+      expect(r.success).toBe(false);
+      expect(r.error?.issues[0].path).toEqual([field]);
+      expect(r.error?.issues[0].message).toContain(label);
+    }
+    expect(RiskConfigSchema.safeParse({ [field]: 0.01 }).success).toBe(true);
+  });
+});

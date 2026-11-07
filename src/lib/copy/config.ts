@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** For caps where 0 would silently block every buy (or hedge). */
+const aboveZero = (label: string) => `${label} must be above 0`;
+
 /** Risk & sizing rules for the copy engine. Stored in app_settings ("risk"). */
 export const RiskConfigSchema = z
   .object({
@@ -35,10 +38,10 @@ export const RiskConfigSchema = z
     /** Smallest proportional copy of a trade worth copying. Risk caps still apply. */
     minCopyUsd: z.number().min(0).default(5),
     /** Caps as fractions of current equity. */
-    maxPositionPct: z.number().min(0).max(1).default(0.1),
-    maxTraderExposurePct: z.number().min(0).max(1).default(0.3),
+    maxPositionPct: z.number().gt(0, aboveZero("Most in one market")).max(1).default(0.1),
+    maxTraderExposurePct: z.number().gt(0, aboveZero("Most with one trader")).max(1).default(0.3),
     /** Stop opening new positions after losing this fraction of equity today (UTC). */
-    maxDailyLossPct: z.number().min(0).max(1).default(0.1),
+    maxDailyLossPct: z.number().gt(0, aboveZero("Daily loss limit")).max(1).default(0.1),
     /**
      * Most copied buys into one open position (0 = no limit). Stops a burst of quick adds
      * from one trader stacking up a single market faster than you can react.
@@ -77,7 +80,7 @@ export const RiskConfigSchema = z
     /** Hedge once a copied position is down this fraction of what it cost. */
     hedgeTriggerLossPct: z.number().min(0.05).max(1).default(0.3),
     /** Never spend more than this fraction of equity on one hedge. */
-    hedgeMaxCostPct: z.number().min(0).max(1).default(0.05),
+    hedgeMaxCostPct: z.number().gt(0, aboveZero("Most to spend on one hedge")).max(1).default(0.05),
     /** Don't hedge when the opposite side costs more than this (too expensive to help). */
     hedgeMaxPrice: z.number().min(0.05).max(0.99).default(0.85),
   })
