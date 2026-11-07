@@ -9,7 +9,7 @@ import { checkPasswordAndSetCookie, clearAdminCookie, requireAdmin } from "@/lib
 import { ensureDefaultAccount, resetAccount } from "@/lib/copy/account";
 import { RiskConfigSchema } from "@/lib/copy/config";
 import { notifyEngine } from "@/lib/copy/runner";
-import { executeHedge, exitTrader, type ExitResult } from "@/lib/copy/tick";
+import { executeHedge, exitTrader, withEngineLease, type ExitResult } from "@/lib/copy/tick";
 import { getDb } from "@/lib/db/client";
 import { cursors, follows, hiddenTraders } from "@/lib/db/schema";
 import { env } from "@/lib/env";
@@ -172,7 +172,7 @@ export async function resetPaperAction(_prev: ActionResult | null, form: FormDat
     const balance = z.coerce.number().min(10).max(10_000_000).parse(form.get("balance"));
     const db = getDb();
     const account = await ensureDefaultAccount(db);
-    await resetAccount(db, account.id, balance);
+    await withEngineLease(db, () => resetAccount(db, account.id, balance));
     return `Paper account reset to $${balance.toLocaleString()}`;
   });
 }
@@ -209,9 +209,9 @@ export async function hedgeAction(
     const db = getDb();
     const [account, cfg] = await Promise.all([ensureDefaultAccount(db), getRiskConfig(db)]);
     // A manual hedge may use any available cash; the admin sees the cost first.
-    const res = await executeHedge(db, account.id, id, m, cfg, {
-      maxCost: Number.POSITIVE_INFINITY,
-    });
+    const res = await withEngineLease(db, () =>
+      executeHedge(db, account.id, id, m, cfg, { maxCost: Number.POSITIVE_INFINITY }),
+    );
     if (res.ok) refresh();
     return { ok: res.ok, message: res.message };
   } catch (err) {

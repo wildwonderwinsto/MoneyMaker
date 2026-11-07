@@ -15,7 +15,7 @@ import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { cursors, follows, paperFills, paperPositions, signals, traders } from "@/lib/db/schema";
-import { acquireLease, PROCESS_ID, releaseLease } from "@/lib/lease";
+import { holdLease, type HeldLease } from "@/lib/lease";
 import { getBook, getMidpoints, type OrderBook } from "@/lib/polymarket/clob";
 import {
   getActivity,
@@ -73,8 +73,8 @@ export interface TickStats {
   durationMs: number;
 }
 
-// Ticks take seconds now. A run killed mid-way (deploy, crash) blocks the engine for at most
-// this long; graceful shutdowns release the lease right away (see runner.ts).
+// A run renews its lease while it works (see holdLease), so this only bounds how long a run
+// killed mid-way (crash, deploy) blocks the engine before the next run may start.
 export const LEASE = "tick";
 export const LEASE_TTL_MS = 60_000;
 
@@ -182,12 +182,27 @@ export async function engineWallets(db: Db): Promise<string[]> {
 }
 
 /** Wait for the engine lease (another run usually finishes within a few seconds). */
-async function waitForLease(db: Db, attempts: number): Promise<boolean> {
+async function waitForLease(db: Db, attempts: number): Promise<HeldLease | null> {
   for (let i = 0; i < attempts; i++) {
-    if (await acquireLease(db, LEASE, LEASE_TTL_MS)) return true;
+    const lease = await holdLease(db, LEASE, LEASE_TTL_MS);
+    if (lease) return lease;
     if (i < attempts - 1) await sleep(500);
   }
-  return false;
+  return null;
+}
+
+/**
+ * Run admin work that changes the paper account (manual hedge, reset) under the engine
+ * lease, so it never interleaves with a run deciding from the state it would change.
+ */
+export async function withEngineLease<T>(db: Db, fn: () => Promise<T>): Promise<T> {
+  const lease = await waitForLease(db, 30);
+  if (!lease) throw new Error("The copy engine is busy; try again in a moment.");
+  try {
+    return await fn();
+  } finally {
+    await lease.release();
+  }
 }
 
 /** Leaders' usual stake per market, from the daily backfill. */
@@ -226,9 +241,8 @@ export async function runTick(
   const doHousekeeping = phases.housekeeping ?? true;
   const started = Date.now();
   const stats = newStats("poll");
-  if (!(await acquireLease(db, LEASE, LEASE_TTL_MS))) {
-    return { ...stats, skipped: "Another engine run is in progress" };
-  }
+  const lease = await holdLease(db, LEASE, LEASE_TTL_MS);
+  if (!lease) return { ...stats, skipped: "Another engine run is in progress" };
   try {
     const cfg = await getRiskConfig(db);
     const account = await ensureDefaultAccount(db);
@@ -276,7 +290,7 @@ export async function runTick(
     const traded = stats.copied + stats.closed + stats.settled + stats.hedged > 0;
     if (traded || doHousekeeping) await maybeSnapshot(db, account.id, traded ? 0 : undefined);
   } finally {
-    await releaseLease(db, LEASE, PROCESS_ID);
+    await lease.release();
   }
   stats.durationMs = Date.now() - started;
   return stats;
@@ -294,9 +308,8 @@ export async function runStreamBatch(
 ): Promise<TickStats> {
   const started = Date.now();
   const stats = newStats("stream");
-  if (!(await waitForLease(db, 10))) {
-    return { ...stats, skipped: "Engine busy; the next poll will pick these up" };
-  }
+  const lease = await waitForLease(db, 10);
+  if (!lease) return { ...stats, skipped: "Engine busy; the next poll will pick these up" };
   try {
     const wallets = [...new Set(trades.map((t) => t.wallet))];
     const leaders = await db
@@ -324,7 +337,7 @@ export async function runStreamBatch(
     if (fresh.length) await processTrades(db, ctx, fresh, "stream");
     if (stats.copied + stats.closed > 0) await maybeSnapshot(db, account.id, 0);
   } finally {
-    await releaseLease(db, LEASE, PROCESS_ID);
+    await lease.release();
   }
   stats.durationMs = Date.now() - started;
   return stats;
@@ -1306,7 +1319,8 @@ export interface ExitResult {
  */
 export async function exitTrader(db: Db, wallet: string, nowMs = Date.now()): Promise<ExitResult> {
   const out: ExitResult = { sold: 0, left: 0, proceeds: 0, pnl: 0 };
-  if (!(await waitForLease(db, 30))) return { ...out, skipped: "Engine busy" };
+  const lease = await waitForLease(db, 30);
+  if (!lease) return { ...out, skipped: "Engine busy" };
   try {
     const [cfg, account] = await Promise.all([getRiskConfig(db), ensureDefaultAccount(db)]);
     const open = await db
@@ -1371,6 +1385,6 @@ export async function exitTrader(db: Db, wallet: string, nowMs = Date.now()): Pr
     if (out.sold > 0) await maybeSnapshot(db, account.id, 0);
     return out;
   } finally {
-    await releaseLease(db, LEASE, PROCESS_ID);
+    await lease.release();
   }
 }

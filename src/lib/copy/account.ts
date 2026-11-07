@@ -128,7 +128,8 @@ export async function applyBuy(
         eq(paperPositions.kind, kind),
         eq(paperPositions.status, "open"),
       ),
-    );
+    )
+    .for("update");
 
   let positionId: number;
   if (existing) {
@@ -184,15 +185,33 @@ export async function applyBuy(
   return positionId;
 }
 
+/**
+ * The position row as it is now, locked until the transaction ends. Callers pass rows read
+ * earlier (an account snapshot), which another run may have sold or settled since.
+ */
+async function lockOpen(tx: Tx, position: PaperPosition): Promise<PaperPosition | null> {
+  const [current] = await tx
+    .select()
+    .from(paperPositions)
+    .where(eq(paperPositions.id, position.id))
+    .for("update");
+  return current?.status === "open" ? current : null;
+}
+
+/** Sell from a position. Returns the realized P&L (0 if it was no longer open). */
 export async function applySell(
   tx: Tx,
-  position: PaperPosition,
+  stale: PaperPosition,
   trade: LeaderTrade,
   fill: Fill,
 ): Promise<number> {
+  const position = await lockOpen(tx, stale);
+  if (!position || position.shares <= 0) return 0;
   const sold = Math.min(fill.shares, position.shares);
+  // Paid only for the shares we actually had.
+  const notional = fill.shares > 0 ? fill.notional * (sold / fill.shares) : 0;
   const costPortion = position.costBasis * (sold / position.shares);
-  const pnl = fill.notional - costPortion;
+  const pnl = notional - costPortion;
   const remaining = position.shares - sold;
   const done = remaining < 1e-6;
   await tx
@@ -208,7 +227,7 @@ export async function applySell(
     .where(eq(paperPositions.id, position.id));
   await tx
     .update(paperAccounts)
-    .set({ cash: sql`${paperAccounts.cash} + ${fill.notional}` })
+    .set({ cash: sql`${paperAccounts.cash} + ${notional}` })
     .where(eq(paperAccounts.id, position.accountId));
   await tx.insert(paperFills).values({
     accountId: position.accountId,
@@ -218,20 +237,22 @@ export async function applySell(
     side: "SELL",
     shares: sold,
     avgPrice: fill.avgPrice,
-    notional: fill.notional,
+    notional,
     slippageBps: trade.price > 0 ? ((trade.price - fill.avgPrice) / trade.price) * 10_000 : null,
     realizedPnl: pnl,
   });
   return pnl;
 }
 
-/** Pay out a resolved position at $1 (won) or $0 (lost) per share. */
+/** Pay out a resolved position at $1 (won) or $0 (lost) per share (0 if no longer open). */
 export async function settlePosition(
   tx: Tx,
-  position: PaperPosition,
+  stale: PaperPosition,
   /** USDC per share: 1 (won), 0 (lost) or 0.5 (market resolved 50/50). */
   payoutPerShare: number,
 ): Promise<number> {
+  const position = await lockOpen(tx, stale);
+  if (!position) return 0;
   const payout = position.shares * payoutPerShare;
   await tx
     .update(paperPositions)

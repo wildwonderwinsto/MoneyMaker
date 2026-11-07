@@ -12,13 +12,12 @@
  */
 import type { Db } from "@/lib/db/client";
 import { getDb } from "@/lib/db/client";
-import { PROCESS_ID, releaseLease } from "@/lib/lease";
 import { getRiskConfig } from "@/lib/settings";
 
 import type { LeaderTrade } from "./engine";
 import { writeEngineStatus } from "./status";
 import { TradeStream } from "./stream";
-import { engineWallets, LEASE, runStreamBatch, runTick, type TickStats } from "./tick";
+import { engineWallets, runStreamBatch, runTick, type TickStats } from "./tick";
 
 type Log = (msg: string) => void;
 
@@ -55,23 +54,23 @@ export class EngineRunner {
     if (this.started) return;
     this.started = true;
     this.log("loop started");
-    this.releaseOnShutdown();
+    this.drainOnShutdown();
     void this.refresh().finally(() => this.schedule(0));
   }
 
   /**
-   * Render sends SIGTERM on every deploy/restart. Release our lease at once so the next
-   * instance can copy immediately instead of waiting for it to expire.
+   * Render sends SIGTERM on every deploy/restart. Start no new work and let work in flight
+   * finish: each run releases its own lease when done. Releasing it here would let the next
+   * instance run beside a run still writing. (`next start` exits on SIGTERM by itself; a run
+   * cut off that way stops renewing, and its lease lapses within LEASE_TTL_MS.)
    */
-  private releaseOnShutdown() {
+  private drainOnShutdown() {
     const onSignal = (signal: NodeJS.Signals) => {
       this.stop();
-      void releaseLease(this.db(), LEASE, PROCESS_ID)
-        .catch(() => undefined)
-        .finally(() => {
-          // Next.js normally owns shutdown; exit only if nobody else will.
-          if (process.listenerCount(signal) === 0) process.exit(0);
-        });
+      void this.drain().finally(() => {
+        // Next.js normally owns shutdown; exit only if nobody else will.
+        if (process.listenerCount(signal) === 0) process.exit(0);
+      });
     };
     process.once("SIGTERM", onSignal);
     process.once("SIGINT", onSignal);
@@ -81,6 +80,15 @@ export class EngineRunner {
     this.started = false;
     if (this.timer) clearTimeout(this.timer);
     this.stream.stop();
+  }
+
+  /** Wait until queued engine work (including work queued meanwhile) has finished. */
+  private async drain() {
+    let current: Promise<unknown>;
+    do {
+      current = this.queue;
+      await current;
+    } while (current !== this.queue);
   }
 
   /** Serialize engine work. A failure never blocks later work. */

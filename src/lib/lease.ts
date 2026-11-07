@@ -32,6 +32,48 @@ export async function acquireLease(
   return resultRows(rows).length > 0;
 }
 
+/** Extend a lease, only if `owner` still holds it. */
+export async function renewLease(
+  db: Db,
+  name: string,
+  ttlMs: number,
+  owner: string,
+): Promise<boolean> {
+  const key = `lease:${name}`;
+  const value = JSON.stringify({ until: Date.now() + ttlMs, owner });
+  const rows = await db.execute(sql`
+    update app_settings set value = ${value}::jsonb, updated_at = now()
+    where key = ${key} and app_settings.value->>'owner' = ${owner}
+    returning key
+  `);
+  return resultRows(rows).length > 0;
+}
+
+export interface HeldLease {
+  release(): Promise<void>;
+}
+
+/**
+ * Take a lease for one run and keep renewing it until released, so a slow run (API
+ * retries, long Retry-After waits) is never overlapped by the next one; it lapses only if
+ * this process dies. Each call has its own owner token, so a run can only ever release its
+ * own lease, never one a later run in the same process took after it lapsed.
+ */
+export async function holdLease(db: Db, name: string, ttlMs: number): Promise<HeldLease | null> {
+  const owner = randomUUID();
+  if (!(await acquireLease(db, name, ttlMs, owner))) return null;
+  const timer = setInterval(() => {
+    void renewLease(db, name, ttlMs, owner).catch(() => undefined);
+  }, ttlMs / 3);
+  timer.unref?.();
+  return {
+    release: async () => {
+      clearInterval(timer);
+      await releaseLease(db, name, owner);
+    },
+  };
+}
+
 /** Release a lease. With `owner`, only if that owner still holds it. */
 export async function releaseLease(db: Db, name: string, owner?: string): Promise<void> {
   const key = `lease:${name}`;
