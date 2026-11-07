@@ -8,6 +8,11 @@ const reqHeaders = new Map<string, string>();
 const jar = new Map<string, string>();
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ refresh: () => {} }));
+// No request scope under vitest; in Next it just marks the route as per-request.
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  connection: async () => {},
+}));
 vi.mock("next/headers", () => ({
   headers: async () => ({ get: (k: string) => reqHeaders.get(k.toLowerCase()) ?? null }),
   cookies: async () => ({
@@ -85,5 +90,35 @@ describe("the admin cookie (UI-03)", () => {
     expect(forged).not.toBe(value);
     jar.set(ADMIN_COOKIE, forged);
     expect(await isAdmin()).toBe(false);
+  });
+});
+
+describe("temporary X-Forwarded-For check (#11)", () => {
+  const call = async () => {
+    const { GET } = await import("@/app/api/admin/forwarded/route");
+    return GET(
+      new Request("http://localhost/api/admin/forwarded", {
+        headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.7", "x-real-ip": "203.0.113.7" },
+      }),
+    );
+  };
+
+  it("is admin-only", async () => {
+    await fresh();
+    expect((await call()).status).toBe(401);
+  });
+
+  it("shows the client-IP headers as received and the key the limiter uses", async () => {
+    await fresh();
+    const { unlockAction } = await import("@/app/actions");
+    const f = new FormData();
+    f.set("password", "correct horse");
+    expect((await unlockAction(null, f)).ok).toBe(true);
+    const body = (await (await call()).json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      "x-forwarded-for": "6.6.6.6, 203.0.113.7",
+      "x-real-ip": "203.0.113.7",
+      limiterKey: "203.0.113.7",
+    });
   });
 });

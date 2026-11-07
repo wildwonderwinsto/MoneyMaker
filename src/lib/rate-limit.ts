@@ -21,6 +21,20 @@ export function allowAttempt(key: string, now = Date.now(), max = MAX_ATTEMPTS):
   return b.count <= max;
 }
 
+/**
+ * The client address for the password limiter: the right-most X-Forwarded-For entry, the
+ * one appended by the proxy in front of us. Entries to its left are whatever the client
+ * sent, so keying on the first one gave a guesser fresh attempts with every request.
+ * (Pending: confirm on Render with /api/admin/forwarded, then remove that check.)
+ */
+export function limiterKey(h: { get(name: string): string | null }): string {
+  const forwarded = (h.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return forwarded.at(-1) || h.get("x-real-ip") || "local";
+}
+
 export function clearAttempts(key: string) {
   buckets.delete(key);
 }
