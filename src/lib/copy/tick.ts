@@ -132,9 +132,6 @@ interface EngineCtx {
 
 const heldKey = (wallet: string, tokenId: string) => `${wallet}|${tokenId}`;
 
-/** How far the positions endpoint can trail the trade feed (~15 s measured, Nov 2026). */
-const POSITIONS_LAG_SECONDS = 30;
-
 /**
  * Leaders we stopped copying but still hold copies from. Their buys are ignored, but their
  * sells are still mirrored, so those positions close when the leader gets out instead of
@@ -552,7 +549,9 @@ async function processTrades(
       !fetched.failed.has(t.wallet) &&
       !leaderPositions.has(heldKey(t.wallet, t.tokenId)),
   );
-  for (const [k, v] of await estimateUnlisted(db, ctx, unlisted)) leaderPositions.set(k, v);
+  for (const [k, v] of await estimateUnlisted(db, ctx, state0, unlisted)) {
+    leaderPositions.set(k, v);
+  }
 
   let state = state0;
   for (const t of merged) {
@@ -649,39 +648,54 @@ async function fetchLeaderPositions(byWallet: Map<string, Set<string>>) {
 }
 
 /**
- * The positions endpoint lags the trade feed, so a position opened moments ago may not be
- * listed yet. For those, the leader's size before this batch is rebuilt from the trades we
- * recorded for them within that lag window. Older trades are already reflected in the
- * endpoint, so an unlisted position with no recent trades really is empty.
+ * The leader's size in our copy's outcome by our own records: every trade of theirs we
+ * recorded there (copied or skipped) since the one that opened the copy. Used when the
+ * positions endpoint doesn't list a position we hold a copy of: it lags the trade feed by
+ * an unbounded amount, but our copy proves the leader held these shares.
+ * Blind to leader exits that aren't trades (merge, redeem, transfer).
  */
-async function estimateUnlisted(
-  db: Db,
-  ctx: EngineCtx,
-  keys: Array<{ wallet: string; tokenId: string }>,
-): Promise<Map<string, LeaderPosition>> {
-  const out = new Map<string, LeaderPosition>();
-  if (keys.length === 0) return out;
-  const recent = await db
-    .select({
-      wallet: signals.wallet,
-      tokenId: signals.tokenId,
-      side: signals.side,
-      size: signals.leaderSize,
-    })
+async function recordedSinceCopy(db: Db, ctx: EngineCtx, copy: PaperPosition) {
+  const [opening] = await db
+    .select({ ts: signals.leaderTs })
+    .from(paperFills)
+    .innerJoin(signals, eq(signals.id, paperFills.signalId))
+    .where(and(eq(paperFills.positionId, copy.id), eq(paperFills.side, "BUY")))
+    .orderBy(asc(signals.leaderTs))
+    .limit(1);
+  const rows = await db
+    .select({ side: signals.side, size: signals.leaderSize })
     .from(signals)
     .where(
       and(
         eq(signals.accountId, ctx.accountId),
-        inArray(signals.wallet, [...new Set(keys.map((k) => k.wallet))]),
-        inArray(signals.tokenId, [...new Set(keys.map((k) => k.tokenId))]),
-        gte(signals.leaderTs, new Date((ctx.now - POSITIONS_LAG_SECONDS) * 1000)),
+        eq(signals.wallet, copy.sourceWallet),
+        eq(signals.tokenId, copy.tokenId),
+        opening ? gte(signals.leaderTs, opening.ts) : undefined,
       ),
     );
+  return Math.max(
+    0,
+    rows.reduce((s, r) => s + (r.side === "BUY" ? r.size : -r.size), 0),
+  );
+}
+
+/**
+ * Sells of positions the endpoint doesn't list (yet): the leader's size before this batch
+ * is rebuilt from the trades we recorded since our copy opened (this batch isn't recorded
+ * yet, and is applied on top by leaderSoldFraction).
+ */
+async function estimateUnlisted(
+  db: Db,
+  ctx: EngineCtx,
+  state: AccountState,
+  keys: Array<{ wallet: string; tokenId: string }>,
+): Promise<Map<string, LeaderPosition>> {
+  const out = new Map<string, LeaderPosition>();
   for (const { wallet, tokenId } of keys) {
-    const net = recent
-      .filter((r) => r.wallet === wallet && r.tokenId === tokenId)
-      .reduce((s, r) => s + (r.side === "BUY" ? r.size : -r.size), 0);
-    if (net > 0) out.set(heldKey(wallet, tokenId), { size: net, lastEventAt: -Infinity });
+    const copy = openCopy(state, wallet, tokenId);
+    if (!copy || out.has(heldKey(wallet, tokenId))) continue;
+    const size = await recordedSinceCopy(db, ctx, copy);
+    out.set(heldKey(wallet, tokenId), { size, lastEventAt: -Infinity });
   }
   return out;
 }
@@ -922,9 +936,10 @@ async function retrySkippedSells(db: Db, ctx: EngineCtx) {
     const position = openCopy(state, t.wallet, t.tokenId);
     if (!position || fetched.failed.has(t.wallet)) continue;
     const market = info.get(t.conditionId) ?? null;
-    // Not listed now = they hold nothing now; every recorded trade is already reflected.
+    // Not listed (the endpoint may still lag): their size now by our records, which
+    // already include every trade of theirs, so nothing is applied on top.
     const pos = fetched.positions.get(heldKey(t.wallet, t.tokenId)) ?? {
-      size: 0,
+      size: await recordedSinceCopy(db, ctx, position),
       lastEventAt: Number.MAX_SAFE_INTEGER,
     };
     const decision = decideSell({

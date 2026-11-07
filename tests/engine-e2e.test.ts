@@ -253,7 +253,8 @@ describe("hedging", () => {
     vi.mocked(data.getActivity).mockResolvedValue(
       page([
         activityFrom(
-          streamTrade({ side: "SELL", size: 200, usdc: 100, ts: t0 + 80, price: 0.5 }),
+          // Everything earlier tests recorded them buying here (30 + 30 + 200).
+          streamTrade({ side: "SELL", size: 260, usdc: 130, ts: t0 + 80, price: 0.5 }),
           "0xsell",
         ),
       ]),

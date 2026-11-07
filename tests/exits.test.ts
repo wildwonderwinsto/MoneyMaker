@@ -173,6 +173,46 @@ describe("leader's position can't be loaded", () => {
     await runTick(db, (t0 + 16) * 1000);
     expect((await openShares())[0]).toBeCloseTo(30, 6); // 25% of 40 sold, not 100%
   });
+
+  it("an unlisted position is sized from the leader trades recorded for our copy, however old", async () => {
+    // Leader buys 200 at t+10 (copied); /positions still doesn't list it 50 s later, when
+    // they sell 20 (10%). A lag longer than any fixed window must not become a full exit.
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    rows.push(
+      act({
+        transaction_hash: "0xsell",
+        side: "SELL",
+        size: 20,
+        usdc_size: 9.8,
+        timestamp: t0 + 60,
+      }),
+    );
+    await runTick(db, (t0 + 65) * 1000);
+    expect((await openShares())[0]).toBeCloseTo(36, 6); // 10% of 40 sold, not 100%
+  });
+
+  it("a re-checked exit of a position the API still doesn't list isn't a full exit either", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    rows.push(
+      act({
+        transaction_hash: "0xsell",
+        side: "SELL",
+        size: 20,
+        usdc_size: 9.8,
+        timestamp: t0 + 60,
+      }),
+    );
+    vi.mocked(clob.getBook).mockRejectedValue(new Error("timeout"));
+    await runTick(db, (t0 + 65) * 1000);
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => book(id));
+    expect((await signalOf("0xsell"))?.reasonCode).toBe("no_buyers");
+
+    await runTick(db, (t0 + 80) * 1000); // re-check; /positions still lags
+    expect((await openShares())[0]).toBeCloseTo(36, 6);
+    expect((await signalOf("0xsell"))?.decision).toBe("closed");
+  });
 });
 
 describe("a skipped exit is re-checked", () => {
