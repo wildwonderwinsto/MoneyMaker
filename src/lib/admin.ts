@@ -5,7 +5,7 @@ import { createHmac } from "node:crypto";
 import { cookies } from "next/headers";
 
 import { safeEqual } from "@/lib/auth";
-import { env } from "@/lib/env";
+import { allowsOpenAccess, env } from "@/lib/env";
 
 export const ADMIN_COOKIE = "mm_admin";
 
@@ -16,11 +16,11 @@ function token(password: string): string {
 
 /**
  * Whether the current request may change state. Without ADMIN_PASSWORD, local development
- * is open but production is locked (fail closed).
+ * on PGlite is open; production or any real Postgres is locked (fail closed).
  */
 export async function isAdmin(): Promise<boolean> {
-  const { ADMIN_PASSWORD, NODE_ENV } = env();
-  if (!ADMIN_PASSWORD) return NODE_ENV !== "production";
+  const { ADMIN_PASSWORD } = env();
+  if (!ADMIN_PASSWORD) return allowsOpenAccess(env());
   const value = (await cookies()).get(ADMIN_COOKIE)?.value;
   return value !== undefined && safeEqual(value, token(ADMIN_PASSWORD));
 }

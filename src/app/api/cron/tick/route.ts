@@ -10,12 +10,12 @@ import { bearerToken, safeEqual } from "@/lib/auth";
 import { getRunner } from "@/lib/copy/runner";
 import { runTick } from "@/lib/copy/tick";
 import { getDb } from "@/lib/db/client";
-import { env } from "@/lib/env";
+import { allowsOpenAccess, env } from "@/lib/env";
 
 async function handle(request: Request): Promise<Response> {
-  const { CRON_SECRET, NODE_ENV } = env();
+  const { CRON_SECRET } = env();
   if (!CRON_SECRET) {
-    if (NODE_ENV === "production") {
+    if (!allowsOpenAccess(env())) {
       return Response.json({ error: "CRON_SECRET is not configured" }, { status: 503 });
     }
   } else {

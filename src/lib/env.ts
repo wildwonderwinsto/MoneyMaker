@@ -29,6 +29,15 @@ export const EnvSchema = z
 
 export type Env = z.infer<typeof EnvSchema>;
 
+/**
+ * Whether a missing ADMIN_PASSWORD / CRON_SECRET may leave things open: only for local
+ * development on the embedded PGlite database. Against any real Postgres (e.g. a
+ * production URL copied into a local .env) everything fails closed.
+ */
+export function allowsOpenAccess(e: Pick<Env, "DATABASE_URL" | "NODE_ENV">): boolean {
+  return e.NODE_ENV !== "production" && e.DATABASE_URL.startsWith("pglite:");
+}
+
 let cached: Env | undefined;
 
 export function env(): Env {
