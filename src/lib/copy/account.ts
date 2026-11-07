@@ -134,9 +134,13 @@ export async function applyBuy(
   if (existing) {
     const shares = existing.shares + fill.shares;
     const costBasis = existing.costBasis + fill.notional;
+    // A hedge bought into an open hedge row (left from an earlier copy whose hedge couldn't
+    // be sold) now protects this copy. Keeping the old link made auto-hedge see this copy
+    // as unhedged and buy again on every tick.
+    const hedgeOf = kind === "hedge" && opts.hedgeOf != null ? { hedgeOf: opts.hedgeOf } : {};
     await tx
       .update(paperPositions)
-      .set({ shares, costBasis, avgPrice: costBasis / shares, updatedAt: new Date() })
+      .set({ shares, costBasis, avgPrice: costBasis / shares, updatedAt: new Date(), ...hedgeOf })
       .where(eq(paperPositions.id, existing.id));
     positionId = existing.id;
   } else {
