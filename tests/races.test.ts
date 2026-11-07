@@ -293,6 +293,50 @@ describe("the engine lease (#6)", () => {
   });
 });
 
+describe("graceful shutdown", () => {
+  it("gives up after its deadline so the process exits inside Render's grace period", async () => {
+    const before = { term: process.listeners("SIGTERM"), int: process.listeners("SIGINT") };
+    rows = [act({ transaction_hash: "0xbuy" })];
+    const release = holdBook(YES); // a run that won't finish in time
+    const runner = new EngineRunner(
+      () => db,
+      () => {},
+    );
+    try {
+      runner.start();
+      await new Promise((r) => setTimeout(r, 300));
+      const started = Date.now();
+      const drained = await runner.shutdown(200);
+      expect(drained).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1_000);
+      // The cut-off run still holds the lease: the next instance waits for it to lapse.
+      expect(await acquireLease(db, LEASE, LEASE_TTL_MS, "next-instance")).toBe(false);
+    } finally {
+      release();
+      runner.stop();
+      await vi.waitFor(
+        async () => expect(await acquireLease(db, LEASE, LEASE_TTL_MS, "cleanup")).toBe(true),
+        { timeout: 5_000, interval: 50 },
+      );
+      for (const [sig, kept] of [
+        ["SIGTERM", before.term],
+        ["SIGINT", before.int],
+      ] as const) {
+        for (const l of process.listeners(sig)) if (!kept.includes(l)) process.off(sig, l);
+      }
+    }
+  });
+
+  it("the start script hands SIGTERM to the app instead of Next.js", async () => {
+    const pkg = JSON.parse(
+      await (
+        await import("node:fs/promises")
+      ).readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { scripts: Record<string, string> };
+    expect(pkg.scripts.start).toMatch(/^NEXT_MANUAL_SIG_HANDLE=true next start$/);
+  });
+});
+
 describe("admin actions beside the engine (#6)", () => {
   it("a double-clicked manual hedge buys it once", async () => {
     const { hedgeAction } = await import("@/app/actions");

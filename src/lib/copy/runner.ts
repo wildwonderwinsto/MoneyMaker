@@ -21,6 +21,12 @@ import { engineWallets, runStreamBatch, runTick, type TickStats } from "./tick";
 
 type Log = (msg: string) => void;
 
+/**
+ * Render waits 30 s after SIGTERM before SIGKILL (default `maxShutdownDelaySeconds`,
+ * render.com/docs/deploys); finish well inside that. Raise both together if needed.
+ */
+export const SHUTDOWN_DRAIN_MS = 25_000;
+
 export class EngineRunner {
   private queue: Promise<unknown> = Promise.resolve();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -59,21 +65,38 @@ export class EngineRunner {
   }
 
   /**
-   * Render sends SIGTERM on every deploy/restart. Start no new work and let work in flight
-   * finish: each run releases its own lease when done. Releasing it here would let the next
-   * instance run beside a run still writing. (`next start` exits on SIGTERM by itself; a run
-   * cut off that way stops renewing, and its lease lapses within LEASE_TTL_MS.)
+   * Render sends SIGTERM on every deploy/restart (`npm start` sets NEXT_MANUAL_SIG_HANDLE, so
+   * this handler, not Next.js, decides when to exit). Start no new work, let work in flight
+   * finish (each run releases its own lease), then exit, inside Render's grace period.
+   * Releasing the lease here would let the next instance run beside a run still writing.
    */
   private drainOnShutdown() {
     const onSignal = (signal: NodeJS.Signals) => {
-      this.stop();
-      void this.drain().finally(() => {
-        // Next.js normally owns shutdown; exit only if nobody else will.
+      void this.shutdown().finally(() => {
+        // Exit only if nobody else will (e.g. Next.js, when it handles signals itself).
         if (process.listenerCount(signal) === 0) process.exit(0);
       });
     };
     process.once("SIGTERM", onSignal);
     process.once("SIGINT", onSignal);
+  }
+
+  /**
+   * Stop the loop and wait for work in flight, at most `timeoutMs`. Returns false if it gave
+   * up: that run is cut off when the process exits, and its lease lapses on its own within
+   * LEASE_TTL_MS, so the next instance waits rather than overlapping it.
+   */
+  async shutdown(timeoutMs = SHUTDOWN_DRAIN_MS): Promise<boolean> {
+    this.stop();
+    this.log("shutting down: waiting for engine work in progress");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const drained = await Promise.race([this.drain().then(() => true as const), deadline]);
+    clearTimeout(timer);
+    this.log(drained ? "engine work finished" : "gave up waiting; its lease will lapse");
+    return drained;
   }
 
   stop() {
