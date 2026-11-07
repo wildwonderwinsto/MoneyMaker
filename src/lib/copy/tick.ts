@@ -11,7 +11,7 @@
  * applied one at a time (they share the account's cash). A database lease guarantees only
  * one engine run touches the account at a time; trade ids make everything idempotent.
  */
-import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { cursors, follows, paperFills, paperPositions, signals, traders } from "@/lib/db/schema";
@@ -565,6 +565,14 @@ async function processTrades(
   for (const [k, v] of await estimateUnlisted(db, ctx, state0, unlisted)) {
     leaderPositions.set(k, v);
   }
+  const batchIds = new Set(sorted.map((t) => t.id));
+  for (const t of merged) {
+    const key = heldKey(t.wallet, t.tokenId);
+    const pos = leaderPositions.get(key);
+    if (t.side !== "SELL" || !pos || unlisted.includes(t) || !openCopy(state0, t.wallet, t.tokenId))
+      continue;
+    leaderPositions.set(key, await catchUpSnapshot(db, ctx, t.wallet, t.tokenId, pos, batchIds));
+  }
 
   let state = state0;
   for (const t of merged) {
@@ -662,19 +670,14 @@ async function fetchLeaderPositions(byWallet: Map<string, Set<string>>) {
 
 /**
  * The leader's size in our copy's outcome by our own records: every trade of theirs we
- * recorded there (copied or skipped) since the one that opened the copy. Used when the
- * positions endpoint doesn't list a position we hold a copy of: it lags the trade feed by
- * an unbounded amount, but our copy proves the leader held these shares.
- * Blind to leader exits that aren't trades (merge, redeem, transfer).
+ * recorded there, copied or skipped (skipped buys before our copy opened count too), in
+ * time order and never below zero, so a holding they had fully sold earlier drops out.
+ * Used when the positions endpoint doesn't list a position we hold a copy of: it lags the
+ * trade feed by an unbounded amount, but our copy proves the leader held these shares.
+ * Blind to leader exits that aren't trades (merge, redeem, transfer) and to trades made
+ * while we didn't record them (before following, or while unfollowed).
  */
-async function recordedSinceCopy(db: Db, ctx: EngineCtx, copy: PaperPosition) {
-  const [opening] = await db
-    .select({ ts: signals.leaderTs })
-    .from(paperFills)
-    .innerJoin(signals, eq(signals.id, paperFills.signalId))
-    .where(and(eq(paperFills.positionId, copy.id), eq(paperFills.side, "BUY")))
-    .orderBy(asc(signals.leaderTs))
-    .limit(1);
+async function recordedSize(db: Db, ctx: EngineCtx, copy: PaperPosition) {
   const rows = await db
     .select({ side: signals.side, size: signals.leaderSize })
     .from(signals)
@@ -683,19 +686,47 @@ async function recordedSinceCopy(db: Db, ctx: EngineCtx, copy: PaperPosition) {
         eq(signals.accountId, ctx.accountId),
         eq(signals.wallet, copy.sourceWallet),
         eq(signals.tokenId, copy.tokenId),
-        opening ? gte(signals.leaderTs, opening.ts) : undefined,
+      ),
+    )
+    .orderBy(asc(signals.leaderTs));
+  return rows.reduce((s, r) => Math.max(0, s + (r.side === "BUY" ? r.size : -r.size)), 0);
+}
+
+/**
+ * A listed position reflects the leader's trades up to its `lastEventAt`; the endpoint may
+ * still lag behind trades we recorded after that in earlier runs. Those are added here
+ * (`batch` = trades the caller applies itself, skipped).
+ */
+async function catchUpSnapshot(
+  db: Db,
+  ctx: EngineCtx,
+  wallet: string,
+  tokenId: string,
+  pos: LeaderPosition,
+  batch: Set<string>,
+): Promise<LeaderPosition> {
+  if (pos.lastEventAt === null) return pos;
+  const rows = await db
+    .select({ id: signals.id, side: signals.side, size: signals.leaderSize })
+    .from(signals)
+    .where(
+      and(
+        eq(signals.accountId, ctx.accountId),
+        eq(signals.wallet, wallet),
+        eq(signals.tokenId, tokenId),
+        gt(signals.leaderTs, new Date(pos.lastEventAt * 1000)),
       ),
     );
-  return Math.max(
-    0,
-    rows.reduce((s, r) => s + (r.side === "BUY" ? r.size : -r.size), 0),
-  );
+  const net = rows
+    .filter((r) => !batch.has(r.id))
+    .reduce((s, r) => s + (r.side === "BUY" ? r.size : -r.size), 0);
+  return net === 0 ? pos : { ...pos, size: Math.max(0, pos.size + net) };
 }
 
 /**
  * Sells of positions the endpoint doesn't list (yet): the leader's size before this batch
- * is rebuilt from the trades we recorded since our copy opened (this batch isn't recorded
- * yet, and is applied on top by leaderSoldFraction).
+ * is rebuilt from the trades we recorded (this batch isn't recorded yet, and is applied on
+ * top by leaderSoldFraction).
  */
 async function estimateUnlisted(
   db: Db,
@@ -707,7 +738,7 @@ async function estimateUnlisted(
   for (const { wallet, tokenId } of keys) {
     const copy = openCopy(state, wallet, tokenId);
     if (!copy || out.has(heldKey(wallet, tokenId))) continue;
-    const size = await recordedSinceCopy(db, ctx, copy);
+    const size = await recordedSize(db, ctx, copy);
     out.set(heldKey(wallet, tokenId), { size, lastEventAt: -Infinity });
   }
   return out;
@@ -927,6 +958,7 @@ async function retrySkippedSells(db: Db, ctx: EngineCtx) {
     slug: r.slug,
   }));
 
+  const fillIds = new Set(fills.map((f) => f.id));
   const conditions = new Map<string, Set<string>>();
   for (const t of exits) {
     conditions.set(t.wallet, (conditions.get(t.wallet) ?? new Set()).add(t.conditionId));
@@ -951,10 +983,10 @@ async function retrySkippedSells(db: Db, ctx: EngineCtx) {
     const market = info.get(t.conditionId) ?? null;
     // Not listed (the endpoint may still lag): their size now by our records, which
     // already include every trade of theirs, so nothing is applied on top.
-    const pos = fetched.positions.get(heldKey(t.wallet, t.tokenId)) ?? {
-      size: await recordedSinceCopy(db, ctx, position),
-      lastEventAt: Number.MAX_SAFE_INTEGER,
-    };
+    const listed = fetched.positions.get(heldKey(t.wallet, t.tokenId));
+    const pos = listed
+      ? await catchUpSnapshot(db, ctx, t.wallet, t.tokenId, listed, fillIds)
+      : { size: await recordedSize(db, ctx, position), lastEventAt: Number.MAX_SAFE_INTEGER };
     const decision = decideSell({
       trade: t,
       ourShares: position.shares,

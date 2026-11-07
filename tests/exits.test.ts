@@ -192,6 +192,71 @@ describe("leader's position can't be loaded", () => {
     expect((await openShares())[0]).toBeCloseTo(36, 6); // 10% of 40 sold, not 100%
   });
 
+  it("a listed but stale position also counts the trades we recorded after its snapshot", async () => {
+    // Leader buys 100 at t+10 and 100 at t+40 (both copied: 80 shares). /positions still
+    // shows 100 as of t+10 when they sell 20 at t+60, so they sold 10%, not 20%.
+    rows = [act({ transaction_hash: "0xbuy1", size: 100, usdc_size: 50 })];
+    await runTick(db, (t0 + 20) * 1000);
+    rows.push(act({ transaction_hash: "0xbuy2", size: 100, usdc_size: 50, timestamp: t0 + 40 }));
+    vi.mocked(data.getPositions).mockResolvedValue(page([position(100, t0 + 10)]));
+    await runTick(db, (t0 + 45) * 1000);
+    rows.push(
+      act({
+        transaction_hash: "0xsell",
+        side: "SELL",
+        size: 20,
+        usdc_size: 9.8,
+        timestamp: t0 + 60,
+      }),
+    );
+    await runTick(db, (t0 + 65) * 1000);
+    expect((await openShares())[0]).toBeCloseTo(72, 6);
+  });
+
+  it("the same on re-check: trades recorded between the snapshot and the exit count", async () => {
+    rows = [act({ transaction_hash: "0xbuy1", size: 100, usdc_size: 50 })];
+    await runTick(db, (t0 + 20) * 1000);
+    rows.push(act({ transaction_hash: "0xbuy2", size: 100, usdc_size: 50, timestamp: t0 + 40 }));
+    vi.mocked(data.getPositions).mockResolvedValue(page([position(100, t0 + 10)]));
+    await runTick(db, (t0 + 45) * 1000);
+    rows.push(
+      act({
+        transaction_hash: "0xsell",
+        side: "SELL",
+        size: 20,
+        usdc_size: 9.8,
+        timestamp: t0 + 60,
+      }),
+    );
+    vi.mocked(clob.getBook).mockRejectedValue(new Error("timeout"));
+    await runTick(db, (t0 + 65) * 1000);
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => book(id));
+    expect((await signalOf("0xsell"))?.reasonCode).toBe("no_buyers");
+    await runTick(db, (t0 + 80) * 1000); // re-check; snapshot still 100 as of t+10
+    expect((await openShares())[0]).toBeCloseTo(72, 6);
+  });
+
+  it("an unlisted position also counts the leader's buys we skipped before our copy opened", async () => {
+    // A $10 buy (under the $25 minimum, skipped; 40 s before the next, so not merged with
+    // it), then a $50 buy we copy (40 shares). They
+    // hold 200 when they sell 20 with /positions lagging: 10%, not 20%.
+    rows = [act({ transaction_hash: "0xsmall", usdc_size: 10, size: 100, timestamp: t0 - 30 })];
+    rows.push(act({ transaction_hash: "0xbuy", size: 100, usdc_size: 50 }));
+    await runTick(db, (t0 + 20) * 1000);
+    expect((await signalOf("0xsmall"))?.decision).toBe("skipped");
+    rows.push(
+      act({
+        transaction_hash: "0xsell",
+        side: "SELL",
+        size: 20,
+        usdc_size: 9.8,
+        timestamp: t0 + 60,
+      }),
+    );
+    await runTick(db, (t0 + 65) * 1000);
+    expect((await openShares())[0]).toBeCloseTo(36, 6);
+  });
+
   it("a re-checked exit of a position the API still doesn't list isn't a full exit either", async () => {
     rows = [act({ transaction_hash: "0xbuy" })];
     await runTick(db, (t0 + 20) * 1000);
