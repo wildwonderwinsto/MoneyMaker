@@ -712,3 +712,13 @@ export const SCORING_GROUPS: Group[] = [
     ],
   },
 ];
+
+/**
+ * A follow's sizing weight as typed in its box: null (no change) when blank, not a number
+ * or outside 0–5. A blank box used to become `Number("")` = 0×, silently pausing copies.
+ */
+export function parseWeight(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 && v <= 5 ? v : null;
+}

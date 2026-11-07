@@ -60,3 +60,26 @@ describe("settings fields", () => {
     expect(next.fixedUsd).toBe(30);
   });
 });
+
+describe("settings that contradict each other (UI-09)", () => {
+  it("rejects a minimum entry price above the maximum, naming the field", () => {
+    const r = RiskConfigSchema.safeParse({ minEntryPrice: 0.6, maxEntryPrice: 0.4 });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0].path).toEqual(["minEntryPrice"]);
+    expect(RiskConfigSchema.safeParse({ minEntryPrice: 0.4, maxEntryPrice: 0.4 }).success).toBe(
+      true,
+    );
+  });
+});
+
+describe("the weight box (UI-10)", () => {
+  it("a blank or invalid entry is no change, not 0×", async () => {
+    const { parseWeight } = await import("@/components/settings/fields");
+    expect(parseWeight("")).toBeNull();
+    expect(parseWeight("   ")).toBeNull();
+    expect(parseWeight("abc")).toBeNull();
+    expect(parseWeight("6")).toBeNull();
+    expect(parseWeight("0")).toBe(0);
+    expect(parseWeight("1.25")).toBe(1.25);
+  });
+});

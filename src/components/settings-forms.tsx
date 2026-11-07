@@ -10,6 +10,7 @@ import {
   type ActionResult,
 } from "@/app/actions";
 import { FormMessage } from "@/components/forms";
+import { parseWeight } from "@/components/settings/fields";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -42,8 +43,9 @@ export function FollowRowControls({
             className="h-8 w-20 text-right tabular-nums"
             disabled={pending}
             onBlur={(e) => {
-              const v = Number(e.currentTarget.value);
-              if (v !== weight) start(async () => setState(await setWeightAction(wallet, v)));
+              const v = parseWeight(e.currentTarget.value);
+              if (v === null) e.currentTarget.value = String(weight);
+              else if (v !== weight) start(async () => setState(await setWeightAction(wallet, v)));
             }}
           />
         </label>
