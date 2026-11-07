@@ -44,9 +44,18 @@ async function adminOnly(fn: () => Promise<string>): Promise<ActionResult> {
   }
 }
 
+/**
+ * The client address for the password limiter: the right-most X-Forwarded-For entry, the
+ * one appended by the proxy in front of us. Entries to its left are whatever the client
+ * sent, so keying on the first one gave a guesser fresh attempts with every request.
+ */
 async function clientIp(): Promise<string> {
   const h = await headers();
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || "local";
+  const forwarded = (h.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return forwarded.at(-1) || h.get("x-real-ip") || "local";
 }
 
 export async function unlockAction(_prev: ActionResult | null, form: FormData) {
