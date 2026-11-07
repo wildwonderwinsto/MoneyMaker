@@ -47,6 +47,7 @@ import {
   decideSell,
   mergeFills,
   RETRYABLE_CODES,
+  SELL_RETRYABLE_CODES,
   skip,
   type Decision,
   type LeaderTrade,
@@ -130,6 +131,9 @@ interface EngineCtx {
 }
 
 const heldKey = (wallet: string, tokenId: string) => `${wallet}|${tokenId}`;
+
+/** How far the positions endpoint can trail the trade feed (~15 s measured, Nov 2026). */
+const POSITIONS_LAG_SECONDS = 30;
 
 /**
  * Leaders we stopped copying but still hold copies from. Their buys are ignored, but their
@@ -257,6 +261,13 @@ export async function runTick(
           stats.errors.push(`retry: ${errMsg(err)}`);
         }
       }
+      if (cfg.copySells) {
+        try {
+          await retrySkippedSells(db, ctx);
+        } catch (err) {
+          stats.errors.push(`retry sells: ${errMsg(err)}`);
+        }
+      }
     }
     if (doHousekeeping) {
       try {
@@ -380,8 +391,12 @@ async function pollLeaders(db: Db, ctx: EngineCtx, wallets: string[]) {
   // `start` is inclusive and the stream may have copied some already: skip known ids.
   const fresh = await filterUnseen(db, candidates, legacy);
   ctx.stats.newTrades += fresh.length;
-  if (fresh.length) await processTrades(db, ctx, fresh, "poll");
-  for (const [wallet, ts] of maxTs) await setCursor(db, wallet, ts);
+  const failedAt = fresh.length ? await processTrades(db, ctx, fresh, "poll") : new Map();
+  // `start` is inclusive, so a trade that failed to record is fetched again next tick
+  // (already-recorded ones are filtered out by id).
+  for (const [wallet, ts] of maxTs) {
+    await setCursor(db, wallet, Math.min(ts, failedAt.get(wallet) ?? Infinity));
+  }
 }
 
 /** Drop trades already recorded (by current id, or by the pre-fill-aware legacy id). */
@@ -435,7 +450,11 @@ interface LeaderPosition {
  *
  * The positions endpoint lags the trade feed by ~15 s, so it may not include this batch
  * yet. Trades newer than the position's `lastEventAt` are applied on top first; then
- * trades after `trade` are undone, giving the size right after it. Pure (tested).
+ * trades after `trade` are undone, giving the size right after it. `batch` should hold the
+ * individual fills (not merged trades): each fill is judged by its own time, so an exit that
+ * filled in pieces is measured correctly when the API has applied only some of them.
+ * No listed position = it didn't exist before this batch, so every fill in it applies.
+ * Pure (tested).
  */
 export function leaderSoldFraction(
   trade: LeaderTrade,
@@ -444,11 +463,17 @@ export function leaderSoldFraction(
 ): number {
   const same = batch.filter((m) => m.wallet === trade.wallet && m.tokenId === trade.tokenId);
   let size = pos?.size ?? 0;
-  if (pos && pos.lastEventAt !== null) {
-    for (const m of same) if (m.ts > pos.lastEventAt) size += m.side === "BUY" ? m.size : -m.size;
+  if (!pos || pos.lastEventAt !== null) {
+    const after = pos?.lastEventAt ?? -Infinity;
+    for (const m of same) if (m.ts > after) size += m.side === "BUY" ? m.size : -m.size;
   }
   size = Math.max(0, size);
-  const idx = same.indexOf(trade);
+  // The last fill belonging to `trade` (a merged trade lists its fills in `ids`).
+  const ids = new Set(trade.ids ?? [trade.id]);
+  let idx = -1;
+  same.forEach((m, i) => {
+    if (m === trade || ids.has(m.id)) idx = i;
+  });
   for (const m of same.slice(idx + 1)) size += m.side === "SELL" ? m.size : -m.size;
   size = Math.max(0, size);
   return trade.size / (size + trade.size);
@@ -469,8 +494,10 @@ async function processTrades(
   ctx: EngineCtx,
   trades: LeaderTrade[],
   source: "poll" | "stream",
-) {
+): Promise<Map<string, number>> {
   const { cfg } = ctx;
+  /** Wallet → earliest epoch second of a trade that couldn't be recorded. */
+  const failedAt = new Map<string, number>();
   const sorted = [...trades].sort((a, b) => a.ts - b.ts);
   const originals = new Map(sorted.map((t) => [t.id, t]));
   const merged = mergeFills(sorted, 30, Math.max(0.01, cfg.maxPriceDrift));
@@ -513,10 +540,19 @@ async function processTrades(
       sellConditions.set(t.wallet, set);
     }
   }
-  const [books, leaderPositions] = await Promise.all([
+  const [books, fetched] = await Promise.all([
     mapSettled([...bookTokens], (id) => getBook(id)),
     fetchLeaderPositions(sellConditions),
   ]);
+  const leaderPositions = fetched.positions;
+  const unlisted = merged.filter(
+    (t) =>
+      t.side === "SELL" &&
+      sellConditions.has(t.wallet) &&
+      !fetched.failed.has(t.wallet) &&
+      !leaderPositions.has(heldKey(t.wallet, t.tokenId)),
+  );
+  for (const [k, v] of await estimateUnlisted(db, ctx, unlisted)) leaderPositions.set(k, v);
 
   let state = state0;
   for (const t of merged) {
@@ -544,14 +580,19 @@ async function processTrades(
       const position = openCopy(state, t.wallet, t.tokenId);
       if (!position) {
         decision = skip("No copied position to close", "no_position");
+      } else if (fetched.failed.has(t.wallet)) {
+        decision = skip(
+          "Couldn't load the trader's position to size this sell; will re-check",
+          "sell_size_unknown",
+        );
       } else {
         decision = decideSell({
           trade: t,
           ourShares: position.shares,
           leaderSoldFraction: leaderSoldFraction(
             t,
-            merged,
-            leaderPositions.get(`${t.wallet}|${t.tokenId}`),
+            sorted,
+            leaderPositions.get(heldKey(t.wallet, t.tokenId)),
           ),
           book: books.get(t.tokenId) ?? null,
           feeRate: market?.takerFeeRate,
@@ -567,6 +608,8 @@ async function processTrades(
       await recordDecision(db, ctx, t, originals, market, decision, source, hedgeExit);
     } catch (err) {
       ctx.stats.errors.push(`${t.wallet} ${t.id}: ${errMsg(err)}`);
+      // Nothing was recorded: keep the poll cursor at or before it so it's tried again.
+      failedAt.set(t.wallet, Math.min(failedAt.get(t.wallet) ?? Infinity, t.ts));
       continue;
     }
     if (decision.action === "buy") ctx.stats.copied++;
@@ -574,10 +617,17 @@ async function processTrades(
     else ctx.stats.ignored++;
     if (decision.action !== "skip") state = await loadAccountState(db, ctx.accountId);
   }
+  return failedAt;
 }
 
+/**
+ * Leaders' current positions in the markets they're selling. Wallets whose fetch failed are
+ * listed in `failed`: their sells can't be sized, so they are skipped and re-checked
+ * (treating "unknown" as "fully exited" would dump the whole copy on a partial sell).
+ */
 async function fetchLeaderPositions(byWallet: Map<string, Set<string>>) {
   const out = new Map<string, LeaderPosition>();
+  const failed = new Set<string>();
   await Promise.all(
     [...byWallet].map(async ([wallet, conditions]) => {
       const ids = [...conditions];
@@ -585,6 +635,7 @@ async function fetchLeaderPositions(byWallet: Map<string, Set<string>>) {
         const res = await getPositions({ user: wallet, condition: ids.slice(i, i + 20) }).catch(
           () => null,
         );
+        if (!res) failed.add(wallet);
         for (const p of res?.data ?? []) {
           out.set(`${wallet}|${p.token_id}`, {
             size: p.current_size,
@@ -594,6 +645,44 @@ async function fetchLeaderPositions(byWallet: Map<string, Set<string>>) {
       }
     }),
   );
+  return { positions: out, failed };
+}
+
+/**
+ * The positions endpoint lags the trade feed, so a position opened moments ago may not be
+ * listed yet. For those, the leader's size before this batch is rebuilt from the trades we
+ * recorded for them within that lag window. Older trades are already reflected in the
+ * endpoint, so an unlisted position with no recent trades really is empty.
+ */
+async function estimateUnlisted(
+  db: Db,
+  ctx: EngineCtx,
+  keys: Array<{ wallet: string; tokenId: string }>,
+): Promise<Map<string, LeaderPosition>> {
+  const out = new Map<string, LeaderPosition>();
+  if (keys.length === 0) return out;
+  const recent = await db
+    .select({
+      wallet: signals.wallet,
+      tokenId: signals.tokenId,
+      side: signals.side,
+      size: signals.leaderSize,
+    })
+    .from(signals)
+    .where(
+      and(
+        eq(signals.accountId, ctx.accountId),
+        inArray(signals.wallet, [...new Set(keys.map((k) => k.wallet))]),
+        inArray(signals.tokenId, [...new Set(keys.map((k) => k.tokenId))]),
+        gte(signals.leaderTs, new Date((ctx.now - POSITIONS_LAG_SECONDS) * 1000)),
+      ),
+    );
+  for (const { wallet, tokenId } of keys) {
+    const net = recent
+      .filter((r) => r.wallet === wallet && r.tokenId === tokenId)
+      .reduce((s, r) => s + (r.side === "BUY" ? r.size : -r.size), 0);
+    if (net > 0) out.set(heldKey(wallet, tokenId), { size: net, lastEventAt: -Infinity });
+  }
   return out;
 }
 
@@ -716,6 +805,187 @@ async function recordDecision(
 // Re-checking skipped trades
 // ---------------------------------------------------------------------------
 
+type SignalRow = typeof signals.$inferSelect;
+
+/** One leader trade per recorded order (pieces share a groupId), in time order. */
+function signalGroups(rows: SignalRow[]): LeaderTrade[] {
+  const groups = new Map<string, SignalRow[]>();
+  for (const r of rows) {
+    const key = r.groupId ?? r.id;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  return [...groups].map(([key, g]) => {
+    const size = g.reduce((a, r) => a + r.leaderSize, 0);
+    const usdc = g.reduce((a, r) => a + r.leaderUsdc, 0);
+    const first = g[0];
+    return {
+      // The group's first fill, unless it already aged out of the window.
+      id: g.some((r) => r.id === key) ? key : first.id,
+      ids: g.map((r) => r.id),
+      wallet: first.wallet,
+      ts: Math.floor(Math.min(...g.map((r) => r.leaderTs.getTime())) / 1000),
+      conditionId: first.conditionId,
+      tokenId: first.tokenId,
+      side: first.side === "SELL" ? "SELL" : "BUY",
+      price:
+        size > 0
+          ? g.reduce((a, r) => a + r.leaderPrice * r.leaderSize, 0) / size
+          : first.leaderPrice,
+      size,
+      usdc,
+      outcome: first.outcome,
+      title: first.title,
+      slug: first.slug,
+      icon: first.image,
+    };
+  });
+}
+
+/**
+ * A leader exit we couldn't follow (no buyers, below the sell floor, or their position
+ * couldn't be loaded) is re-checked every tick while we still hold the copy. The share
+ * they sold is recomputed from their position now, undoing trades they made since.
+ */
+async function retrySkippedSells(db: Db, ctx: EngineCtx) {
+  const { cfg } = ctx;
+  const rows = await db
+    .select()
+    .from(signals)
+    .where(
+      and(
+        eq(signals.accountId, ctx.accountId),
+        eq(signals.decision, "skipped"),
+        eq(signals.side, "SELL"),
+        inArray(signals.reasonCode, [...SELL_RETRYABLE_CODES]),
+      ),
+    )
+    .orderBy(asc(signals.leaderTs))
+    .limit(200);
+  if (rows.length === 0) return;
+  let state = await loadAccountState(db, ctx.accountId);
+  // Only exits of a copy we still hold that was already open when the leader sold.
+  const heldAtSell = (t: LeaderTrade) => {
+    const p = openCopy(state, t.wallet, t.tokenId);
+    return !!p && p.openedAt.getTime() <= t.ts * 1000;
+  };
+  const exits = signalGroups(rows).filter(heldAtSell);
+  if (exits.length === 0) return;
+
+  // Every trade they made in these outcomes since the earliest pending exit.
+  const since = new Date(Math.min(...exits.map((t) => t.ts)) * 1000);
+  const later = await db
+    .select()
+    .from(signals)
+    .where(
+      and(
+        eq(signals.accountId, ctx.accountId),
+        inArray(signals.wallet, [...new Set(exits.map((t) => t.wallet))]),
+        inArray(signals.tokenId, [...new Set(exits.map((t) => t.tokenId))]),
+        gte(signals.leaderTs, since),
+      ),
+    )
+    .orderBy(asc(signals.leaderTs));
+  const fills: LeaderTrade[] = later.map((r) => ({
+    id: r.id,
+    wallet: r.wallet,
+    ts: Math.floor(r.leaderTs.getTime() / 1000),
+    conditionId: r.conditionId,
+    tokenId: r.tokenId,
+    side: r.side === "SELL" ? "SELL" : "BUY",
+    price: r.leaderPrice,
+    size: r.leaderSize,
+    usdc: r.leaderUsdc,
+    outcome: r.outcome,
+    title: r.title,
+    slug: r.slug,
+  }));
+
+  const conditions = new Map<string, Set<string>>();
+  for (const t of exits) {
+    conditions.set(t.wallet, (conditions.get(t.wallet) ?? new Set()).add(t.conditionId));
+  }
+  const tokens = new Set(exits.map((t) => t.tokenId));
+  for (const t of exits) {
+    const hedge = openHedge(state, openCopy(state, t.wallet, t.tokenId)!.id);
+    if (hedge) tokens.add(hedge.tokenId);
+  }
+  const [fetched, info, books] = await Promise.all([
+    fetchLeaderPositions(conditions),
+    getMarketInfo(
+      db,
+      exits.map((t) => t.conditionId),
+    ),
+    mapSettled([...tokens], (id) => getBook(id)),
+  ]);
+
+  for (const t of exits) {
+    const position = openCopy(state, t.wallet, t.tokenId);
+    if (!position || fetched.failed.has(t.wallet)) continue;
+    const market = info.get(t.conditionId) ?? null;
+    // Not listed now = they hold nothing now; every recorded trade is already reflected.
+    const pos = fetched.positions.get(heldKey(t.wallet, t.tokenId)) ?? {
+      size: 0,
+      lastEventAt: Number.MAX_SAFE_INTEGER,
+    };
+    const decision = decideSell({
+      trade: t,
+      ourShares: position.shares,
+      leaderSoldFraction: leaderSoldFraction(t, fills, pos),
+      book: books.get(t.tokenId) ?? null,
+      feeRate: market?.takerFeeRate,
+      cfg,
+    });
+    const hedgeExit =
+      decision.action === "sell"
+        ? planHedgeExit(state, position, decision.fraction, books, cfg, market?.takerFeeRate ?? 0)
+        : null;
+    const ids = t.ids ?? [t.id];
+    const sold = await db.transaction(async (tx) => {
+      const base = {
+        retries: sql`${signals.retries} + 1`,
+        details: decision.action === "skip" ? (decision.details ?? null) : decision.details,
+      };
+      const set =
+        decision.action === "sell"
+          ? {
+              ...base,
+              decision: "closed" as const,
+              reasonCode: "sold" as const,
+              reason: `Sold on re-check: ${reasonText(decision, ids.length)}`,
+            }
+          : decision.action === "skip"
+            ? { ...base, reasonCode: decision.code, reason: decision.reason }
+            : base;
+      const updated = await tx
+        .update(signals)
+        .set(set)
+        .where(and(inArray(signals.id, ids), eq(signals.decision, "skipped")))
+        .returning({ id: signals.id });
+      if (decision.action !== "sell" || !updated.some((r) => r.id === t.id)) return false;
+      const [current] = await tx
+        .select()
+        .from(paperPositions)
+        .where(eq(paperPositions.id, position.id));
+      if (current?.status !== "open") return false;
+      await applySell(tx, current, t, decision.fill);
+      if (hedgeExit) {
+        await applySell(
+          tx,
+          hedgeExit.hedge,
+          { ...t, price: hedgeExit.fill.avgPrice },
+          hedgeExit.fill,
+        );
+      }
+      return true;
+    });
+    if (sold) {
+      ctx.stats.closed++;
+      ctx.stats.retried++;
+      state = await loadAccountState(db, ctx.accountId);
+    }
+  }
+}
+
 /**
  * A big leader order often empties a thin book ("price moved"), and sellers come back
  * within minutes. Re-check those skips until they're older than maxSignalAgeSeconds.
@@ -757,37 +1027,7 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
         s.wallet === r.wallet && s.tokenId === r.tokenId && s.ts.getTime() > r.leaderTs.getTime(),
     );
 
-  const groups = new Map<string, typeof rows>();
-  for (const r of rows) {
-    if (!ctx.weights.has(r.wallet) || soldAfter(r)) continue;
-    const key = r.groupId ?? r.id;
-    groups.set(key, [...(groups.get(key) ?? []), r]);
-  }
-  const trades: LeaderTrade[] = [...groups].map(([key, g]) => {
-    const size = g.reduce((a, r) => a + r.leaderSize, 0);
-    const usdc = g.reduce((a, r) => a + r.leaderUsdc, 0);
-    const first = g[0];
-    return {
-      // The group's first fill, unless it already aged out of the window.
-      id: g.some((r) => r.id === key) ? key : first.id,
-      ids: g.map((r) => r.id),
-      wallet: first.wallet,
-      ts: Math.floor(Math.min(...g.map((r) => r.leaderTs.getTime())) / 1000),
-      conditionId: first.conditionId,
-      tokenId: first.tokenId,
-      side: "BUY",
-      price:
-        size > 0
-          ? g.reduce((a, r) => a + r.leaderPrice * r.leaderSize, 0) / size
-          : first.leaderPrice,
-      size,
-      usdc,
-      outcome: first.outcome,
-      title: first.title,
-      slug: first.slug,
-      icon: first.image,
-    };
-  });
+  const trades = signalGroups(rows.filter((r) => ctx.weights.has(r.wallet) && !soldAfter(r)));
   if (trades.length === 0) return;
 
   const [info, startEquity] = await Promise.all([

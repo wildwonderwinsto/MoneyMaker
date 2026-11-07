@@ -90,6 +90,16 @@ export const RETRYABLE_CODES: ReadonlySet<ReasonCode> = new Set([
   "no_liquidity",
 ]);
 
+/**
+ * Sell skips worth re-checking while we still hold the copy: following the leader out
+ * matters at any age (otherwise the copy sits until the market resolves).
+ */
+export const SELL_RETRYABLE_CODES: ReadonlySet<ReasonCode> = new Set([
+  "no_buyers",
+  "sell_floor",
+  "sell_size_unknown",
+]);
+
 export function decideBuy(ctx: BuyContext): Decision {
   const { trade, market, book, cfg, now } = ctx;
   const age = now - trade.ts;
