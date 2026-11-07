@@ -1,6 +1,7 @@
 /**
- * Copy-engine heartbeat. cron-job.org calls this every minute with
+ * Copy-engine heartbeat. cron-job.org POSTs here every minute with
  * `Authorization: Bearer <CRON_SECRET>`; the call also keeps the free Render instance awake.
+ * POST only: it changes state, so a GET (link, prefetch, crawler) must never run a tick.
  *
  * When the in-process loop is running (see src/instrumentation.ts) it already ticks every
  * 15–60 s, so this only runs a tick itself if the loop looks stalled. Without the loop
@@ -53,5 +54,4 @@ async function handle(request: Request): Promise<Response> {
   }
 }
 
-export const GET = handle;
 export const POST = handle;

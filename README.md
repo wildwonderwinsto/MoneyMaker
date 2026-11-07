@@ -117,6 +117,7 @@ npm run smoke:polymarket                 # live API sanity check
    it from the service's **Environment** tab.
 5. **cron-job.org** (heartbeat): create a free account, then a job:
    - URL: `https://<your-app>.onrender.com/api/cron/tick`
+   - Request method: **POST** (the endpoint refuses GET)
    - Schedule: every 1 minute
    - Advanced → Headers: `Authorization: Bearer <CRON_SECRET>`
 

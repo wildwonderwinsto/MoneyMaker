@@ -72,17 +72,26 @@ describe("no ADMIN_PASSWORD", () => {
 describe("no CRON_SECRET", () => {
   it("rejects cron calls when the database is not PGlite (even in development)", async () => {
     await withEnv({ DATABASE_URL: REMOTE, NODE_ENV: "development", ADMIN_PASSWORD: "a-long-pass" });
-    const { GET } = await import("@/app/api/cron/tick/route");
-    const res = await GET(new Request("http://localhost/api/cron/tick"));
+    const { POST } = await import("@/app/api/cron/tick/route");
+    const res = await POST(new Request("http://localhost/api/cron/tick", { method: "POST" }));
     expect(res.status).toBe(503);
     expect(runTick).not.toHaveBeenCalled();
   });
 
   it("stays open for local development on PGlite", async () => {
     await withEnv({ DATABASE_URL: "pglite:memory", NODE_ENV: "development" });
-    const { GET } = await import("@/app/api/cron/tick/route");
-    const res = await GET(new Request("http://localhost/api/cron/tick"));
+    const { POST } = await import("@/app/api/cron/tick/route");
+    const res = await POST(new Request("http://localhost/api/cron/tick", { method: "POST" }));
     expect(res.status).toBe(200);
     expect(runTick).toHaveBeenCalledOnce();
+  });
+});
+
+describe("cron endpoint", () => {
+  it("only accepts POST (a GET link or prefetch can't run a tick)", async () => {
+    await withEnv({ DATABASE_URL: "pglite:memory", NODE_ENV: "development" });
+    const route = await import("@/app/api/cron/tick/route");
+    expect("GET" in route).toBe(false);
+    expect(typeof route.POST).toBe("function");
   });
 });
