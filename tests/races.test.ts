@@ -10,7 +10,14 @@ import { applyBuy, applySell, ensureDefaultAccount, settlePosition } from "@/lib
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { simulateSell } from "@/lib/copy/fillSim";
 import { EngineRunner } from "@/lib/copy/runner";
-import { exitTrader, LEASE, LEASE_TTL_MS, runStreamBatch, runTick } from "@/lib/copy/tick";
+import {
+  executeHedge,
+  exitTrader,
+  LEASE,
+  LEASE_TTL_MS,
+  runStreamBatch,
+  runTick,
+} from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
 import { cursors, follows, paperAccounts, paperFills, paperPositions } from "@/lib/db/schema";
 import { acquireLease } from "@/lib/lease";
@@ -412,4 +419,55 @@ describe("selling from a stale position row (#6)", () => {
     expect(await cash()).toBeCloseTo(acct.cash - 50 + 100 * 0.6, 6);
     expect(fills.filter((f) => f.kind === "settlement")).toEqual([]);
   });
+});
+
+describe("buying a hedge re-checks the copy in its own transaction (#6)", () => {
+  const cfg = { ...DEFAULT_RISK_CONFIG, hedgeMaxCostPct: 1 };
+
+  it("doesn't buy a hedge for a copy that closed after the quote", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 15) * 1000);
+    const [p] = await open();
+    const release = holdBook(NO);
+    const hedge = executeHedge(db, p.accountId, p.id, "lock", cfg, { maxCost: Infinity });
+    await settle();
+    // Meanwhile the copy is sold out (any writer that skipped the lease).
+    const sell = simulateSell([{ price: 0.49, size: 1000 }], p.shares, 0);
+    await db.transaction((tx) =>
+      applySell(tx, p, { ...rowsAsTrade(p), id: "out", side: "SELL" as const }, sell),
+    );
+    release();
+    expect((await hedge).ok).toBe(false);
+    expect(await open()).toEqual([]);
+  });
+
+  it("buys it once when two purchases race", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 15) * 1000);
+    const [p] = await open();
+    const release = holdBook(NO);
+    const both = [
+      executeHedge(db, p.accountId, p.id, "lock", cfg, { maxCost: Infinity }),
+      executeHedge(db, p.accountId, p.id, "lock", cfg, { maxCost: Infinity }),
+    ];
+    await settle();
+    release();
+    expect((await Promise.all(both)).map((r) => r.ok).sort()).toEqual([false, true]);
+    const hedges = (await open()).filter((h) => h.kind === "hedge");
+    expect(hedges).toHaveLength(1);
+    expect(hedges[0].shares).toBeCloseTo(p.shares, 6);
+  });
+});
+
+const rowsAsTrade = (p: { sourceWallet: string; conditionId: string; tokenId: string }) => ({
+  wallet: p.sourceWallet,
+  ts: t0,
+  conditionId: p.conditionId,
+  tokenId: p.tokenId,
+  price: 0.49,
+  size: 0,
+  usdc: 0,
+  outcome: "Yes",
+  title: null,
+  slug: null,
 });

@@ -1304,7 +1304,18 @@ export async function executeHedge(
   const p = q.position;
   const market = (await getMarketInfo(db, [p.conditionId])).get(p.conditionId)!;
   const fill = quote.fill;
-  await db.transaction(async (tx) => {
+  const bought = await db.transaction(async (tx) => {
+    // Re-check under a row lock: the copy may have closed, or been hedged, since the quote.
+    const [copy] = await tx
+      .select()
+      .from(paperPositions)
+      .where(eq(paperPositions.id, p.id))
+      .for("update");
+    const [hedged] = await tx
+      .select({ id: paperPositions.id })
+      .from(paperPositions)
+      .where(and(eq(paperPositions.hedgeOf, p.id), eq(paperPositions.status, "open")));
+    if (copy?.status !== "open" || hedged) return false;
     await applyBuy(
       tx,
       accountId,
@@ -1327,7 +1338,9 @@ export async function executeHedge(
       fill,
       { kind: "hedge", hedgeOf: p.id, outcome: q.opposite!.outcome },
     );
+    return true;
   });
+  if (!bought) return { ok: false, message: "The position changed; quote the hedge again" };
   return {
     ok: true,
     message: `Hedged: bought ${quote.shares.toFixed(1)} ${q.opposite.outcome ?? "opposite"} shares for $${quote.cost.toFixed(2)}`,
