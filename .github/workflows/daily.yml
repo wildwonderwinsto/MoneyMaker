@@ -4,11 +4,16 @@ name: Daily trader scoring
 # Runs on GitHub's free runners so the heavy work never touches the free Render instance.
 on:
   schedule:
-    # 10:00 UTC daily (5:00 AM ET / 2:00 AM PT in winter):
+    # Main run ~10:17 UTC (4:17 AM CT / 5:17 AM ET in winter):
     # - after the 00:00 UTC daily PnL rollover, so yesterday's data is complete
     # - after late US games (~06:00 UTC) clear Polymarket's ~2h resolution window
-    # - low US trading activity (GitHub may start top-of-hour runs a few minutes late)
-    - cron: "0 10 * * *"
+    # - low US trading activity
+    # Off the top of the hour: GitHub delays (or drops) scheduled runs under load, worst at
+    # :00. One run on Nov 4 started ~8h late; Nov 5's never ran. The two backups below
+    # exit in seconds if today's run already succeeded (--skip-if-done-today).
+    - cron: "17 10 * * *"
+    - cron: "47 13 * * *"
+    - cron: "37 17 * * *"
   workflow_dispatch:
     inputs:
       limit:
@@ -41,4 +46,7 @@ jobs:
           LIMIT: ${{ inputs.limit || '150' }} # via env, never inlined into the script
         run: |
           [[ "$LIMIT" =~ ^[0-9]+$ ]] || { echo "limit must be a number"; exit 1; }
-          npm run job -- daily --limit "$LIMIT"
+          # Scheduled runs skip if today's run already succeeded; manual runs always run.
+          SKIP=""
+          [[ "$GITHUB_EVENT_NAME" == "schedule" ]] && SKIP="--skip-if-done-today"
+          npm run job -- daily --limit "$LIMIT" $SKIP

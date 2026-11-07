@@ -5,6 +5,7 @@
  *   npm run job -- score
  *   npm run job -- backtest [--months 6] [--top 10]
  *   npm run job -- daily [--limit 300] # discover → backfill → resolve → score → record picks → backtest → prune
+ *       [--skip-if-done-today]          # (scheduled backups) exit if today's daily run already succeeded
  *   npm run job -- follow <wallet>     # follow a trader (paper copy)
  *   npm run job -- tick                # run one copy-engine tick locally
  */
@@ -25,7 +26,7 @@ import {
 import { backtestJob, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
 import { DEFAULT_DISCOVER, discoverCandidates } from "@/lib/jobs/discover";
 import { DEFAULT_SCORE, scoreAll } from "@/lib/jobs/score";
-import { mapPool, runJob } from "@/lib/jobs/util";
+import { mapPool, runJob, succeededToday } from "@/lib/jobs/util";
 import { DEFAULT_BACKTEST } from "@/lib/scoring/backtest";
 import { getScoringConfig } from "@/lib/settings";
 
@@ -37,6 +38,7 @@ const { positionals, values } = parseArgs({
     months: { type: "string" },
     top: { type: "string" },
     "no-prune": { type: "boolean", default: false },
+    "skip-if-done-today": { type: "boolean", default: false },
   },
 });
 const num = (v: string | undefined, fallback: number) => (v === undefined ? fallback : Number(v));
@@ -101,6 +103,10 @@ async function main() {
       await runJob(db, "backtest", (log) => backtestJob(db, cfg, backtestOpts, log));
       break;
     case "daily":
+      if (values["skip-if-done-today"] && (await succeededToday(db, "daily"))) {
+        console.log("[daily] already succeeded today (UTC); skipping this backup run");
+        break;
+      }
       await runJob(db, "daily", async (log) => {
         const discovered = await discoverCandidates(db, cfg, discoverOpts, log);
         // Traders picked in recorded months are judged by the backtest, and followed traders

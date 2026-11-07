@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { jobRuns } from "@/lib/db/schema";
@@ -26,6 +26,21 @@ export async function runJob<T extends Record<string, unknown>>(
       .where(eq(jobRuns.id, run.id));
     throw err;
   }
+}
+
+/**
+ * True if `job` already finished successfully today (UTC calendar day). Lets backup
+ * schedules skip when the main run went through; a run from yesterday never counts, even
+ * if it started late in the day.
+ */
+export async function succeededToday(db: Db, job: string, now = new Date()): Promise<boolean> {
+  const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const [row] = await db
+    .select({ id: jobRuns.id })
+    .from(jobRuns)
+    .where(and(eq(jobRuns.job, job), eq(jobRuns.status, "ok"), gte(jobRuns.startedAt, midnight)))
+    .limit(1);
+  return !!row;
 }
 
 /** Map with bounded concurrency, preserving input order. */

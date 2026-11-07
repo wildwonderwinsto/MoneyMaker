@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
 import {
+  jobRuns,
   leaderboardSnapshots,
   markets,
   monthlySelections,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/db/schema";
 import { backfillTrader, cleanupStorage, prunePositions, typicalStake } from "@/lib/jobs/backfill";
 import { loadRecordedPicks, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
+import { succeededToday } from "@/lib/jobs/util";
 import * as data from "@/lib/polymarket/data";
 
 import { createTestDb } from "./helpers/db";
@@ -280,5 +282,25 @@ describe("monthly selections (point-in-time picks)", () => {
       baseline: ["0xtop1", "0xtop2"],
       from: day.getTime() / 1000,
     });
+  });
+});
+
+describe("succeededToday", () => {
+  it("counts only a successful run that started today (UTC)", async () => {
+    const now = new Date("2026-11-05T16:00:00Z");
+    expect(await succeededToday(db, "daily-test", now)).toBe(false);
+    // Yesterday late (a delayed run) and a failed run today don't count.
+    await db.insert(jobRuns).values([
+      { job: "daily-test", status: "ok", startedAt: new Date("2026-11-04T23:30:00Z") },
+      { job: "daily-test", status: "error", startedAt: new Date("2026-11-05T10:20:00Z") },
+      { job: "score", status: "ok", startedAt: new Date("2026-11-05T10:20:00Z") },
+    ]);
+    expect(await succeededToday(db, "daily-test", now)).toBe(false);
+    await db
+      .insert(jobRuns)
+      .values({ job: "daily-test", status: "ok", startedAt: new Date("2026-11-05T10:25:00Z") });
+    expect(await succeededToday(db, "daily-test", now)).toBe(true);
+    // The next UTC day starts fresh.
+    expect(await succeededToday(db, "daily-test", new Date("2026-11-06T10:00:00Z"))).toBe(false);
   });
 });
