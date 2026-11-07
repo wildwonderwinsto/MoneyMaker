@@ -272,3 +272,49 @@ describe("hedging", () => {
     expect(sells.every((f) => typeof f.realizedPnl === "number")).toBe(true);
   });
 });
+
+describe("a real partial exit", () => {
+  // Its own database, so the shared one's history (used by the tests above) is untouched.
+  let shared: { db: Db; close: () => Promise<void> };
+  beforeAll(async () => {
+    shared = { db, close };
+    ({ db, close } = await createTestDb());
+    await db.insert(follows).values({ wallet: LEADER });
+    await db.insert(cursors).values({ wallet: LEADER, lastTs: t0 - 60 });
+    await db.insert(appSettings).values({
+      key: "risk",
+      value: { ...DEFAULT_RISK_CONFIG, sizingMode: "fixed", fixedUsd: 20, minLeaderUsd: 25 },
+    });
+  });
+  afterAll(async () => {
+    await close();
+    ({ db, close } = shared);
+  });
+
+  it("leader holds 260 and sells 200: we sell 200/260 of our copy", async () => {
+    // Same buys as above: 30 + 30 (one order) and 200, each copied for $20 at 50¢.
+    await runStreamBatch(
+      db,
+      [
+        streamTrade({ id: "0xs1:111:BUY:30", size: 30, usdc: 15 }),
+        streamTrade({ id: "0xs1:111:BUY:30#2", size: 30, usdc: 15 }),
+      ],
+      (t0 + 2) * 1000,
+    );
+    await runStreamBatch(
+      db,
+      [streamTrade({ id: "0xs2:111:BUY:200", size: 200, usdc: 100, ts: t0 + 30 })],
+      (t0 + 31) * 1000,
+    );
+    const before = (await openCopy()).shares;
+    expect(before).toBeCloseTo(80, 6);
+    vi.mocked(data.getPositions).mockResolvedValue(page([])); // /positions lags
+    const s = await runStreamBatch(
+      db,
+      [streamTrade({ id: "0xs3:111:SELL:200", side: "SELL", size: 200, usdc: 100, ts: t0 + 80 })],
+      (t0 + 81) * 1000,
+    );
+    expect(s.closed).toBe(1);
+    expect((await openCopy()).shares).toBeCloseTo(before * (60 / 260), 6); // ≈77% sold
+  });
+});
