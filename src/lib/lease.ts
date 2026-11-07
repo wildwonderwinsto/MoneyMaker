@@ -4,6 +4,8 @@ import { sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
 /** Identifies this process as a lease owner. */
 export const PROCESS_ID: string = randomUUID();
 
@@ -49,28 +51,83 @@ export async function renewLease(
   return resultRows(rows).length > 0;
 }
 
+export class LeaseLostError extends Error {}
+
 export interface HeldLease {
   release(): Promise<void>;
+  /**
+   * `db` for this run's writes. Writes are refused once the lease might lapse (no renewal
+   * confirmed for `ttl − ttl/3`), and each write transaction first checks, inside the
+   * transaction, that this run still holds it and locks the lease row, so no other run can
+   * take over until that transaction ends. Two runs therefore never write at once.
+   */
+  guard(db: Db): Db;
 }
 
 /**
  * Take a lease for one run and keep renewing it until released, so a slow run (API
  * retries, long Retry-After waits) is never overlapped by the next one; it lapses only if
- * this process dies. Each call has its own owner token, so a run can only ever release its
- * own lease, never one a later run in the same process took after it lapsed.
+ * this process dies or can't renew, and then `guard` stops the run's writes first. Each call
+ * has its own owner token, so a run can only ever release its own lease, never one a later
+ * run in the same process took after it lapsed.
  */
 export async function holdLease(db: Db, name: string, ttlMs: number): Promise<HeldLease | null> {
   const owner = randomUUID();
+  const key = `lease:${name}`;
+  const started = Date.now();
   if (!(await acquireLease(db, name, ttlMs, owner))) return null;
+  /** The lease is ours at least until then (from just before the last confirmed write). */
+  let confirmedUntil = started + ttlMs;
   const timer = setInterval(() => {
-    void renewLease(db, name, ttlMs, owner).catch(() => undefined);
-  }, ttlMs / 3);
+    const t = Date.now();
+    void renewLease(db, name, ttlMs, owner)
+      .then((ok) => {
+        if (ok) confirmedUntil = t + ttlMs;
+      })
+      .catch(() => undefined);
+  }, ttlMs / 4);
   timer.unref?.();
+  const check = () => {
+    if (Date.now() >= confirmedUntil - ttlMs / 3) {
+      throw new LeaseLostError(`The ${name} lease could not be renewed; stopped writing`);
+    }
+  };
+  type Fn = (...args: unknown[]) => unknown;
   return {
     release: async () => {
       clearInterval(timer);
       await releaseLease(db, name, owner);
     },
+    guard: (target) =>
+      new Proxy(target, {
+        get(obj, prop) {
+          const value = Reflect.get(obj, prop, obj) as unknown;
+          if (prop === "transaction") {
+            return (fn: (tx: Tx) => Promise<unknown>, config?: unknown) => {
+              check();
+              return obj.transaction(async (tx) => {
+                const rows = await tx.execute(sql`
+                  select 1 from app_settings
+                  where key = ${key} and value->>'owner' = ${owner}
+                    and (value->>'until')::bigint > ${Date.now()}
+                  for share
+                `);
+                if (resultRows(rows).length === 0) {
+                  throw new LeaseLostError(`Lost the ${name} lease; stopped writing`);
+                }
+                return fn(tx);
+              }, config as never);
+            };
+          }
+          if (prop === "insert" || prop === "update" || prop === "delete" || prop === "execute") {
+            return (...args: unknown[]) => {
+              check();
+              return (value as Fn).apply(obj, args);
+            };
+          }
+          return typeof value === "function" ? (value as Fn).bind(obj) : value;
+        },
+      }),
   };
 }
 

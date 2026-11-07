@@ -195,11 +195,11 @@ async function waitForLease(db: Db, attempts: number): Promise<HeldLease | null>
  * Run admin work that changes the paper account (manual hedge, reset) under the engine
  * lease, so it never interleaves with a run deciding from the state it would change.
  */
-export async function withEngineLease<T>(db: Db, fn: () => Promise<T>): Promise<T> {
+export async function withEngineLease<T>(db: Db, fn: (db: Db) => Promise<T>): Promise<T> {
   const lease = await waitForLease(db, 30);
   if (!lease) throw new Error("The copy engine is busy; try again in a moment.");
   try {
-    return await fn();
+    return await fn(lease.guard(db));
   } finally {
     await lease.release();
   }
@@ -233,7 +233,7 @@ export interface TickPhases {
  * The runner calls the two phases separately so real-time copies can slip in between.
  */
 export async function runTick(
-  db: Db,
+  rawDb: Db,
   nowMs = Date.now(),
   phases: TickPhases = {},
 ): Promise<TickStats> {
@@ -241,8 +241,9 @@ export async function runTick(
   const doHousekeeping = phases.housekeeping ?? true;
   const started = Date.now();
   const stats = newStats("poll");
-  const lease = await holdLease(db, LEASE, LEASE_TTL_MS);
+  const lease = await holdLease(rawDb, LEASE, LEASE_TTL_MS);
   if (!lease) return { ...stats, skipped: "Another engine run is in progress" };
+  const db = lease.guard(rawDb);
   try {
     const cfg = await getRiskConfig(db);
     const account = await ensureDefaultAccount(db);
@@ -302,14 +303,15 @@ export async function runTick(
  * up after that: the next poll picks the trades up anyway (ids keep it idempotent).
  */
 export async function runStreamBatch(
-  db: Db,
+  rawDb: Db,
   trades: LeaderTrade[],
   nowMs = Date.now(),
 ): Promise<TickStats> {
   const started = Date.now();
   const stats = newStats("stream");
-  const lease = await waitForLease(db, 10);
+  const lease = await waitForLease(rawDb, 10);
   if (!lease) return { ...stats, skipped: "Engine busy; the next poll will pick these up" };
+  const db = lease.guard(rawDb);
   try {
     const wallets = [...new Set(trades.map((t) => t.wallet))];
     const leaders = await db
@@ -1349,10 +1351,15 @@ export interface ExitResult {
  * right now. Used when the admin hides a trader. Anything that can't be sold stays open:
  * the engine keeps mirroring the trader's sells for it, and settlement pays it out otherwise.
  */
-export async function exitTrader(db: Db, wallet: string, nowMs = Date.now()): Promise<ExitResult> {
+export async function exitTrader(
+  rawDb: Db,
+  wallet: string,
+  nowMs = Date.now(),
+): Promise<ExitResult> {
   const out: ExitResult = { sold: 0, left: 0, proceeds: 0, pnl: 0 };
-  const lease = await waitForLease(db, 30);
+  const lease = await waitForLease(rawDb, 30);
   if (!lease) return { ...out, skipped: "Engine busy" };
+  const db = lease.guard(rawDb);
   try {
     const [cfg, account] = await Promise.all([getRiskConfig(db), ensureDefaultAccount(db)]);
     const open = await db

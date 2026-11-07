@@ -212,6 +212,22 @@ describe("the engine lease (#6)", () => {
     expect(s2.skipped).toBe("Another engine run is in progress");
   });
 
+  it("a run whose renewals fail stops writing before its lease could lapse", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    rows = [act({ transaction_hash: "0xbuy" })];
+    const release = holdBook(YES);
+    const run = runTick(db, (t0 + 20) * 1000, { housekeeping: false });
+    await settle();
+    // The database stops answering lease renewals (they're the only raw `execute` calls).
+    const renew = vi.spyOn(db, "execute").mockRejectedValue(new Error("connection reset"));
+    await vi.advanceTimersByTimeAsync(LEASE_TTL_MS - 15_000); // 45 s: not yet expired
+    renew.mockRestore();
+    release();
+    const stats = await run.catch((err: Error) => ({ errors: [err.message] }));
+    expect(await open()).toEqual([]); // nothing written after the lease became uncertain
+    expect(stats.errors.join(" ")).toMatch(/lease/i);
+  });
+
   it("is released only by the run that took it, never by a later run in the same process", async () => {
     rows = [act({ transaction_hash: "0xbuy" })];
     await runTick(db, (t0 + 15) * 1000); // a copy to exit later
