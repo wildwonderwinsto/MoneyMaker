@@ -490,7 +490,8 @@ export function leaderSoldFraction(
   });
   for (const m of same.slice(idx + 1)) size += m.side === "SELL" ? m.size : -m.size;
   size = Math.max(0, size);
-  return trade.size / (size + trade.size);
+  // A 0-share sell sold nothing (and 0 / 0 would be NaN).
+  return size + trade.size > 0 ? trade.size / (size + trade.size) : 0;
 }
 
 async function mapSettled<K, V>(keys: K[], fn: (k: K) => Promise<V>): Promise<Map<K, V | null>> {

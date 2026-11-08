@@ -78,6 +78,14 @@ describe("leaderSoldFraction", () => {
     const sell = trade({ side: "SELL", size: 50 });
     expect(leaderSoldFraction(sell, [sell], undefined)).toBe(1);
   });
+
+  it("a 0-share sell is a 0 fraction, never NaN", () => {
+    // Regression (C-F13): 0 / (0 + 0) = NaN, which passed every check in decideSell and
+    // wrote NaN shares and cash to the database.
+    const sell = trade({ side: "SELL", size: 0, usdc: 0 });
+    expect(leaderSoldFraction(sell, [sell], undefined)).toBe(0);
+    expect(leaderSoldFraction(sell, [sell], { size: 0, lastEventAt: 50 })).toBe(0);
+  });
 });
 
 const feed = (payload: Record<string, unknown>) =>

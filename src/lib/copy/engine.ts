@@ -241,7 +241,10 @@ export function decideSell(ctx: SellContext): Decision {
   if (!book || book.bids.length === 0) return skip("No buyers in the order book", "no_buyers");
 
   const fraction = ctx.leaderSoldFraction >= 0.98 ? 1 : Math.max(0, ctx.leaderSoldFraction);
-  if (fraction <= 0) return skip("Leader's sell size is unknown", "sell_size_unknown");
+  // NaN slips past every comparison, so check finiteness: it would become NaN cash.
+  if (!Number.isFinite(ctx.leaderSoldFraction) || fraction <= 0) {
+    return skip("Leader's sell size is unknown", "sell_size_unknown");
+  }
   const shares = ctx.ourShares * fraction;
   // By default exits take whatever the book offers: getting out matters more than the
   // price. With a floor, shares that would sell too far below the trader's price are held.

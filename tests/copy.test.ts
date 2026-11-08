@@ -211,6 +211,14 @@ describe("decideSell", () => {
     if (d.action === "sell") expect(d.fill.shares).toBeCloseTo(50);
   });
 
+  it("never sells on a fraction that isn't a positive number (NaN, Infinity)", () => {
+    // Regression (C-F13): a NaN fraction became a "sell" with NaN shares and notional.
+    for (const f of [NaN, Infinity, -Infinity]) {
+      const d = decideSell({ trade, ourShares: 100, leaderSoldFraction: f, book, cfg });
+      expect(d).toMatchObject({ action: "skip", code: "sell_size_unknown" });
+    }
+  });
+
   it("closes everything when the leader (almost) fully exits", () => {
     const d = decideSell({ trade, ourShares: 100, leaderSoldFraction: 0.99, book, cfg });
     if (d.action === "sell") expect(d.fill.shares).toBeCloseTo(100);
