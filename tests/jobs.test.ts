@@ -1,4 +1,6 @@
-import { eq, inArray } from "drizzle-orm";
+import { readFileSync } from "node:fs";
+
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
@@ -18,6 +20,7 @@ import {
 } from "@/lib/db/schema";
 import { backfillTrader, cleanupStorage, prunePositions, typicalStake } from "@/lib/jobs/backfill";
 import { loadRecordedPicks, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
+import { loadInputs } from "@/lib/jobs/score";
 import { succeededToday } from "@/lib/jobs/util";
 import * as data from "@/lib/polymarket/data";
 
@@ -287,6 +290,71 @@ beforeAll(async () => {
   ({ db, close } = await createTestDb());
 });
 afterAll(async () => close());
+
+describe("unknown-cost positions", () => {
+  // Owner decision (2026-11-08), after checking live: the API's realized P&L on positions
+  // whose shares came from splits/conversions (no recorded cost) doesn't reconcile with the
+  // wallet's activity. Live: $33,415 "realized" on one neg-risk position, while every
+  // dollar the wallet received from that whole event was $17,617. So they aren't scored.
+  const W = "0xunknowncost";
+  const row = (tokenId: string, over: Partial<typeof traderPositions.$inferInsert>) => ({
+    wallet: W,
+    conditionId: `c-${tokenId}`,
+    tokenId,
+    status: "CLOSED",
+    avgPrice: 0.5,
+    size: 0,
+    sharesBought: 100,
+    totalCost: 50,
+    realizedPnl: 10,
+    ...over,
+  });
+
+  it("are left out of scoring entirely (ROI, total P&L, luck tests)", async () => {
+    await db.insert(traders).values({ wallet: W, lastBackfillAt: new Date() });
+    await db.insert(traderPositions).values([
+      row("known", {}),
+      row("split", {
+        avgPrice: 0.9808,
+        size: 0.0048,
+        sharesBought: null,
+        totalCost: null,
+        realizedPnl: 33_415,
+      }),
+    ]);
+    const { inputs } = await loadInputs(db, [W], Math.floor(Date.now() / 1000));
+    expect(inputs.get(W)!.positions.map((p) => p.tokenId)).toEqual(["known"]);
+    await prunePositions(db, [W]); // isolation
+  });
+
+  it("migration 0010 turns legacy $0-cost rows into the same shape new backfills store", async () => {
+    // Rows written before f15d2c3 stored shares_bought 0 / total_cost 0 for split shares.
+    await db.insert(traderPositions).values([
+      row("legacy-closed", { sharesBought: 0, totalCost: 0, size: 0.0048 }),
+      row("legacy-open", {
+        status: "REDEEMABLE",
+        sharesBought: 0,
+        totalCost: 0,
+        size: 224.27,
+        avgPrice: 0.0537,
+      }),
+      row("legacy-gone", { status: "REDEEMABLE", sharesBought: 0, totalCost: 0, size: 0 }),
+      row("normal", {}),
+    ]);
+    const migration = readFileSync("drizzle/0010_unknown_position_cost.sql", "utf8");
+    for (const stmt of migration.split("--> statement-breakpoint")) {
+      if (stmt.trim()) await db.execute(sql.raw(stmt));
+    }
+    const rows = await db.select().from(traderPositions).where(eq(traderPositions.wallet, W));
+    const by = new Map(rows.map((r) => [r.tokenId, r]));
+    expect(by.get("legacy-closed")).toMatchObject({ sharesBought: null, totalCost: null });
+    expect(by.get("legacy-open")!.sharesBought).toBe(224.27);
+    expect(by.get("legacy-open")!.totalCost).toBeCloseTo(224.27 * 0.0537, 6);
+    expect(by.get("legacy-gone")).toMatchObject({ sharesBought: null, totalCost: null });
+    expect(by.get("normal")).toMatchObject({ sharesBought: 100, totalCost: 50 });
+    await db.delete(traderPositions).where(eq(traderPositions.wallet, W));
+  });
+});
 
 describe("typicalStake", () => {
   const now = 1_800_000_000;

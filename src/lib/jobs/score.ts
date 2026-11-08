@@ -147,6 +147,10 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
       for (const m of rows) settled.set(m.id, toEpoch(m.at));
     }
     for (const r of positions) {
+      // Unknown cost (shares from splits/conversions, see backfill): the API's realized P&L on
+      // these doesn't reconcile with the wallet's own activity (live: $33.4k claimed on an
+      // event that paid the wallet $17.6k in all), so they aren't scored at all.
+      if (r.sharesBought === null) continue;
       inputs.get(r.wallet)?.positions.push({
         ...toPositionRecord(r),
         resolvedAt: settled.get(r.conditionId) ?? null,
