@@ -49,7 +49,9 @@ export function typicalStake(
 }
 
 function positionRow(p: Position): typeof traderPositions.$inferInsert {
-  const sharesBought = p.total_size ?? p.current_size;
+  // total_size counts bought shares only: it is 0 (not null) when they came from a split.
+  // Then the shares still held are the best known lower bound; with none, cost is unknown.
+  const sharesBought = p.total_size || p.current_size || null;
   return {
     wallet: p.proxy_wallet.toLowerCase(),
     conditionId: p.condition_id,
@@ -60,7 +62,7 @@ function positionRow(p: Position): typeof traderPositions.$inferInsert {
     avgPrice: p.avg_price,
     size: p.current_size,
     sharesBought,
-    totalCost: sharesBought * p.avg_price,
+    totalCost: sharesBought === null ? null : sharesBought * p.avg_price,
     realizedPnl: p.realized_pnl,
     unrealizedPnl: p.unrealized_pnl ?? 0,
     currentValue: p.current_value ?? 0,

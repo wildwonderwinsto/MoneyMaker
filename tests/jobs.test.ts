@@ -144,6 +144,40 @@ describe("backfillTrader", () => {
     expect(row.pnl).toBe(-40);
     await db.delete(traderPnlDaily).where(eq(traderPnlDaily.wallet, "0xmaker")); // isolation
   });
+
+  it("treats total_size 0 (shares from a split, none bought) as unknown, not as free", async () => {
+    // Regression (live, Nov 2026): the API answers total_size 0.0, not null, when the shares
+    // came from splitting USDC rather than buying, so `?? current_size` never fired and
+    // the position was stored as costing $0 while its PnL still counted.
+    const pos = (token: string, current: number, status: string) =>
+      ({
+        proxy_wallet: "0xsplit",
+        token_id: token,
+        condition_id: `c-${token}`,
+        current_size: current,
+        avg_price: 0.0537,
+        total_size: 0,
+        realized_pnl: -0.57,
+        status,
+      }) as data.Position;
+    vi.mocked(data.getPositions).mockImplementation(async ({ status }) => ({
+      data: status === "OPEN" ? [pos("held", 224.27, "REDEEMABLE")] : [pos("gone", 0, "CLOSED")],
+      pagination: { has_more: false, next_cursor: null },
+    }));
+    vi.mocked(data.getUserPnl).mockResolvedValue([]);
+    await db.insert(traders).values({ wallet: "0xsplit" }).onConflictDoNothing();
+    await backfillTrader(db, "0xsplit", { maxPositionsPerStatus: 10 });
+    const rows = await db
+      .select()
+      .from(traderPositions)
+      .where(eq(traderPositions.wallet, "0xsplit"));
+    const held = rows.find((r) => r.tokenId === "held")!;
+    expect(held.sharesBought).toBe(224.27); // what it still holds: at least that was paid for
+    expect(held.totalCost).toBeCloseTo(224.27 * 0.0537, 6);
+    const gone = rows.find((r) => r.tokenId === "gone")!;
+    expect(gone.sharesBought).toBeNull(); // nothing to go on
+    expect(gone.totalCost).toBeNull();
+  });
 });
 
 let db: Db;
