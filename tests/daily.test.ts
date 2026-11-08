@@ -102,6 +102,36 @@ describe("daily job health", () => {
     expect(await succeededToday(db, "daily")).toBe(false);
   });
 
+  const failFirst = (n: number) =>
+    vi.mocked(backfill.backfillTrader).mockImplementation(async (_db, wallet) => {
+      if (WALLETS.indexOf(wallet) < n) throw new Error("HTTP 503");
+      return { positions: 1, pnlPoints: 1 };
+    });
+  const lastRun = async () => (await db.select().from(jobRuns)).at(-1)!;
+
+  it("fails when more than half the backfills failed, and still records the counts", async () => {
+    // Owner decision (2026-11-08): over 50% failed = no picks, backups retry.
+    failFirst(4);
+    await expect(runJob(db, "daily", (log) => dailyJob(db, cfg, opts, log))).rejects.toThrow(
+      /4 of 6 backfills failed/,
+    );
+    expect(score.scoreAll).not.toHaveBeenCalled();
+    expect(backtest.recordMonthlySelections).not.toHaveBeenCalled();
+    expect(backfill.prunePositions).not.toHaveBeenCalled();
+    const run = await lastRun();
+    expect(run.status).toBe("error");
+    expect(run.stats).toMatchObject({ backfill: { traders: 6, failed: 4 } });
+    expect(await succeededToday(db, "daily")).toBe(false);
+  });
+
+  it("exactly half failing is still a run (failures listed in the stats)", async () => {
+    failFirst(3);
+    await runJob(db, "daily", (log) => dailyJob(db, cfg, opts, log));
+    expect((await lastRun()).stats).toMatchObject({ backfill: { traders: 6, failed: 3 } });
+    expect(backtest.recordMonthlySelections).toHaveBeenCalledTimes(1);
+    expect(await succeededToday(db, "daily")).toBe(true);
+  });
+
   it("a shrunken run (--limit 5, --per-board, --top) doesn't count as today's run or record picks", async () => {
     // Regression (J5): a quick local `daily --limit 5` made the scheduled run skip all day
     // and recorded the month's picks from a 5-trader pool.

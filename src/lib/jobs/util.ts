@@ -3,6 +3,17 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "@/lib/db/client";
 import { jobRuns } from "@/lib/db/schema";
 
+/** A job failure that still records what was done (e.g. how many backfills failed). */
+export class JobFailure extends Error {
+  constructor(
+    message: string,
+    readonly stats: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "JobFailure";
+  }
+}
+
 /** Run `fn` while recording a job_runs row (status, stats, error) for the dashboard. */
 export async function runJob<T extends Record<string, unknown>>(
   db: Db,
@@ -22,7 +33,12 @@ export async function runJob<T extends Record<string, unknown>>(
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
     await db
       .update(jobRuns)
-      .set({ status: "error", finishedAt: new Date(), error: message.slice(0, 4000) })
+      .set({
+        status: "error",
+        finishedAt: new Date(),
+        error: message.slice(0, 4000),
+        ...(err instanceof JobFailure && { stats: err.stats }),
+      })
       .where(eq(jobRuns.id, run.id));
     throw err;
   }

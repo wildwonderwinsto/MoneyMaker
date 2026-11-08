@@ -19,7 +19,7 @@ import {
 import { backtestJob, recordedWallets, recordMonthlySelections } from "./backtest";
 import { DEFAULT_DISCOVER, discoverCandidates, type DiscoverOptions } from "./discover";
 import { DEFAULT_SCORE, scoreAll } from "./score";
-import { mapPool } from "./util";
+import { JobFailure, mapPool } from "./util";
 
 export async function backfillMany(db: Db, wallets: string[], log: (m: string) => void) {
   let done = 0;
@@ -67,10 +67,13 @@ export async function dailyJob(
   }
   const wallets = [...new Set([...discovered.wallets, ...recorded, ...followed])];
   const backfill = await backfillMany(db, wallets, log);
-  // Nothing fresh to score: re-scoring yesterday's history, recording picks and pruning
-  // would look like a good run and make the backup runs skip.
-  if (wallets.length > 0 && backfill.failed >= wallets.length) {
-    throw new Error(`${backfill.failed} of ${wallets.length} backfills failed; nothing to score`);
+  // Mostly stale history (more than half failed, owner's cut-off): scoring it, recording
+  // picks and pruning would look like a good run and make the backup runs skip.
+  if (wallets.length > 0 && backfill.failed * 2 > wallets.length) {
+    throw new JobFailure(
+      `${backfill.failed} of ${wallets.length} backfills failed (more than half); nothing scored`,
+      { discovered: discovered.kept, backfill },
+    );
   }
   const { rejected, ...score } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
   // A shrunken run (e.g. a quick local --limit 5) must not stand in for the real one: it
