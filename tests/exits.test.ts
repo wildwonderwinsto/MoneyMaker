@@ -288,6 +288,23 @@ describe("leader's position can't be loaded", () => {
   });
 });
 
+describe("market info missing", () => {
+  it("a buy skipped because Gamma didn't return the market is copied once it does", async () => {
+    // Regression (C-F10): an empty Gamma answer made the buy a no_market skip that was
+    // never re-checked, so the trade was lost for good.
+    vi.mocked(gamma.getMarketsByConditionIds).mockResolvedValue([]);
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    expect((await signalOf("0xbuy"))?.reasonCode).toBe("no_market");
+    expect(await openShares()).toEqual([]);
+
+    vi.mocked(gamma.getMarketsByConditionIds).mockResolvedValue([market]);
+    await runTick(db, (t0 + 40) * 1000);
+    expect((await signalOf("0xbuy"))?.decision).toBe("copied");
+    expect((await openShares())[0]).toBeCloseTo(40, 6);
+  });
+});
+
 describe("a skipped exit is re-checked", () => {
   it("sells once buyers are back after an order-book failure", async () => {
     rows = [act({ transaction_hash: "0xbuy" })];

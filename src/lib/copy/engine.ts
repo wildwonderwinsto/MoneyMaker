@@ -83,11 +83,15 @@ export const skip = (reason: string, code: ReasonCode, details?: Details): Decis
   details,
 });
 
-/** Codes worth re-checking later: the market may come back within our limits. */
+/**
+ * Codes worth re-checking later: the market may come back within our limits, or (no_market)
+ * Gamma may answer next time.
+ */
 export const RETRYABLE_CODES: ReadonlySet<ReasonCode> = new Set([
   "price_moved",
   "no_sellers",
   "no_liquidity",
+  "no_market",
 ]);
 
 /**

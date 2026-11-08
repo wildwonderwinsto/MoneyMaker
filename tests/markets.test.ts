@@ -52,3 +52,27 @@ describe("getMarketsByConditionIds", () => {
     expect(info.get("0xflip")?.winnerIndex).toBe(0);
   });
 });
+
+describe("getMarketInfo", () => {
+  it("uses the cached row when Gamma's answer leaves a stale market out", async () => {
+    // Regression (C-F10): a cached market past its refresh age was discarded when Gamma
+    // answered without it, so the trade was skipped as no_market despite known info.
+    await db.insert(markets).values({
+      conditionId: "0xcached",
+      question: "cached?",
+      closed: false,
+      outcomes: ["Yes", "No"],
+      tokenIds: ["0xcached-yes", "0xcached-no"],
+      takerFeeRate: 0.05,
+      updatedAt: new Date(Date.now() - 3_600_000),
+    });
+    const fetchMock = stubGamma(() => []);
+    const info = await getMarketInfo(db, ["0xcached"]);
+    expect(fetchMock).toHaveBeenCalled(); // it did try to refresh
+    expect(info.get("0xcached")).toMatchObject({
+      question: "cached?",
+      tokenIds: ["0xcached-yes", "0xcached-no"],
+      takerFeeRate: 0.05,
+    });
+  });
+});

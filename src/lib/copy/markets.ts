@@ -68,7 +68,16 @@ export async function getMarketInfo(
   if (stale.length === 0) return out;
 
   const fetched = await getMarketsByConditionIds(stale);
-  if (fetched.length === 0) return out;
+  // Gamma sometimes answers without a market we know: keep using the cached row (its
+  // tokens and fee rate don't change) rather than skip the trade as "no market".
+  const fallback = () => {
+    for (const id of stale) {
+      const row = cachedById.get(id);
+      if (row && !out.has(id)) out.set(id, toInfo(row));
+    }
+    return out;
+  };
+  if (fetched.length === 0) return fallback();
   const rows = fetched.map((m) => {
     const winner = winnerIndex(m);
     const payouts = resolvedPayouts(m);
@@ -113,5 +122,5 @@ export async function getMarketInfo(
     })
     .returning();
   for (const m of saved) out.set(m.conditionId, toInfo(m));
-  return out;
+  return fallback();
 }
