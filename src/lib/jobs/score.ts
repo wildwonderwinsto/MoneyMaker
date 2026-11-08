@@ -65,9 +65,13 @@ export const DEFAULT_SCORE: ScoreOptions = {
 
 type PositionRow = typeof traderPositions.$inferSelect;
 
-/** DB row → scoring record. A position is finished once resolved or fully exited. */
+/**
+ * DB row → scoring record. A position is finished once resolved or fully exited. The API's
+ * CLOSED status counts as exited: it often leaves dust (a few hundredths of a share) that
+ * would otherwise keep a large realized loss out of the score until the market ends.
+ */
 export function toPositionRecord(r: PositionRow): PositionRecord {
-  const finished = r.won !== null || (r.size ?? 0) < 1e-6;
+  const finished = r.won !== null || r.status === "CLOSED" || (r.size ?? 0) < 1e-6;
   return {
     conditionId: r.conditionId,
     tokenId: r.tokenId,

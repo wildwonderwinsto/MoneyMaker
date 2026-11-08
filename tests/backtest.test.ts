@@ -225,6 +225,30 @@ describe("toPositionRecord", () => {
     expect(p.realizedPnl).toBe(-10);
     expect(p.unrealizedPnl).toBe(-560);
   });
+
+  it("counts a CLOSED position with leftover dust as finished, so its realized loss is scored", () => {
+    // Regression (live, Nov 2026): the API lists a sold-out position as CLOSED but often
+    // leaves a few hundredths of a share. Judged by size alone it stayed "open", which kept
+    // a -$30.5k realized loss out of ROI and total PnL until the market ends in 2027.
+    const dust = {
+      ...row,
+      status: "CLOSED",
+      outcomeIndex: 1,
+      avgPrice: 0.7566,
+      size: 0.18,
+      sharesBought: 449_999.88,
+      totalCost: 340_469,
+      realizedPnl: -30_499.68,
+      unrealizedPnl: 0.02,
+      endDate: new Date("2027-01-01"),
+      won: null,
+    };
+    const p = toPositionRecord(dust);
+    expect(p.closed).toBe(true);
+    expect(p.realizedPnl).toBeCloseTo(-30_499.66, 2);
+    const m = computeMetrics({ ...steadyGrinder(), positions: [p] }, cfg);
+    expect(m.totalPnl).toBeCloseTo(-30_499.66, 2);
+  });
 });
 
 describe("leaderExits", () => {
