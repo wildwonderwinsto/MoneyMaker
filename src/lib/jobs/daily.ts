@@ -67,6 +67,11 @@ export async function dailyJob(
   }
   const wallets = [...new Set([...discovered.wallets, ...recorded, ...followed])];
   const backfill = await backfillMany(db, wallets, log);
+  // Nothing fresh to score: re-scoring yesterday's history, recording picks and pruning
+  // would look like a good run and make the backup runs skip.
+  if (wallets.length > 0 && backfill.failed >= wallets.length) {
+    throw new Error(`${backfill.failed} of ${wallets.length} backfills failed; nothing to score`);
+  }
   const { rejected, ...score } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
   const selections = await recordMonthlySelections(db, opts.backtest.topK, log);
   const backtest = await backtestJob(db, cfg, opts.backtest, log);

@@ -179,7 +179,17 @@ export async function discoverCandidates(
 
   // Pre-filter with lifetime stats.
   const candidates = [...pool.values()];
-  const stats = await mapPool(candidates, 6, (c) => getUserStats(c.wallet).catch(() => null));
+  let statsFailed = 0;
+  const stats = await mapPool(candidates, 6, (c) =>
+    getUserStats(c.wallet).catch(() => {
+      statsFailed++;
+      return null;
+    }),
+  );
+  // An outage, not a pool of unqualified wallets: fail rather than report 0 candidates.
+  if (candidates.length > 0 && statsFailed === candidates.length) {
+    throw new Error(`user-stats failed for all ${candidates.length} candidates`);
+  }
   const now = Date.now() / 1000;
 
   const kept: Array<{ c: Candidate; score: number }> = [];

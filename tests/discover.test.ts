@@ -113,4 +113,23 @@ describe("discoverCandidates", () => {
     // Steady (3 windows, 15%) ahead of the whale (1 window, 2%) despite rank 250 vs 1.
     expect(res.wallets.indexOf(STEADY)).toBeLessThan(res.wallets.indexOf(WHALE));
   });
+
+  it("fails instead of finding 0 candidates when every user-stats lookup fails", async () => {
+    // Regression (J4): a user-stats outage turned every candidate into "no stats", so the
+    // run kept 0 wallets and was still recorded as a success; backups then skipped.
+    vi.mocked(data.getLeaderboard).mockResolvedValue({
+      data: [entry(WHALE, 1, 2_000_000), entry(STEADY, 2, 40_000)],
+      pagination: { has_more: false, next_cursor: null },
+    });
+    vi.mocked(gamma.getTopMarkets).mockResolvedValue([]);
+    vi.mocked(data.getUserStats).mockRejectedValue(new Error("HTTP 503"));
+    await expect(
+      discoverCandidates(
+        db,
+        cfg,
+        { ...DEFAULT_DISCOVER, categories: ["overall"], timePeriods: ["week"] },
+        () => {},
+      ),
+    ).rejects.toThrow(/user-stats/);
+  });
 });
