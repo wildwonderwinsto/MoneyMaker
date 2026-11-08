@@ -43,6 +43,30 @@ describe("fetchJson", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("caps a huge Retry-After at 30 s, for the request and the shared limiter", async () => {
+    // Regression (A4): Retry-After was honored as sent; one 429 asking for an hour stalled
+    // the request and paused the limiter shared by every other call for that hour.
+    vi.useFakeTimers();
+    try {
+      const limiter = new RateLimiter(4, 0);
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(
+          new Response("slow down", { status: 429, headers: { "retry-after": "3600" } }),
+        )
+        .mockImplementation(async () => Response.json({ ok: true }));
+      let first = false;
+      void fetchJson("https://x.test/a", { schema, limiter }).then(() => (first = true));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(first).toBe(true);
+      let second = false;
+      void fetchJson("https://x.test/b", { schema, limiter }).then(() => (second = true));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(second).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry 4xx client errors", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

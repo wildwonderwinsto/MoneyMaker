@@ -94,6 +94,11 @@ export interface FetchJsonOptions<S extends z.ZodType> {
 }
 
 const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
+/**
+ * Longest single wait between retries, also for a server's Retry-After: a 429 asking for an
+ * hour would otherwise stall the request and pause the shared limiter for that hour.
+ */
+const MAX_WAIT_MS = 30_000;
 const USER_AGENT = "MoneyMaker/0.1 (+copy-trading research)";
 
 export async function fetchJson<S extends z.ZodType>(
@@ -129,7 +134,10 @@ export async function fetchJson<S extends z.ZodType>(
     if (!RETRYABLE.has(res.status) || attempt >= retries) {
       throw new HttpError(res.status, url, body);
     }
-    const wait = retryAfterMs(res.headers.get("retry-after")) ?? backoffMs(attempt);
+    const wait = Math.min(
+      MAX_WAIT_MS,
+      retryAfterMs(res.headers.get("retry-after")) ?? backoffMs(attempt),
+    );
     limiter?.pause(wait);
     attempt++;
     await sleep(wait);
@@ -147,7 +155,7 @@ export function retryAfterMs(header: string | null): number | undefined {
 
 /** Exponential backoff with full jitter, capped at 30s. */
 export function backoffMs(attempt: number): number {
-  const cap = Math.min(30_000, 500 * 2 ** attempt);
+  const cap = Math.min(MAX_WAIT_MS, 500 * 2 ** attempt);
   return Math.round(cap / 2 + Math.random() * (cap / 2));
 }
 
