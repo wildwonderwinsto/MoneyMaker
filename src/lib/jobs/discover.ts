@@ -10,7 +10,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
-import { leaderboardSnapshots, traders } from "@/lib/db/schema";
+import { hiddenTraders, leaderboardSnapshots, traders } from "@/lib/db/schema";
 import {
   getHolders,
   getLeaderboard,
@@ -177,8 +177,14 @@ export async function discoverCandidates(
 
   for (const part of chunk(snapshots, 1000)) await db.insert(leaderboardSnapshots).values(part);
 
+  // Traders the admin hid can't be copied: don't spend a candidate slot on them. (They stay
+  // in the leaderboard snapshots above, which record the board as it was.)
+  const hidden = new Set(
+    (await db.select({ w: hiddenTraders.wallet }).from(hiddenTraders)).map((r) => r.w),
+  );
+
   // Pre-filter with lifetime stats.
-  const candidates = [...pool.values()];
+  const candidates = [...pool.values()].filter((c) => !hidden.has(c.wallet));
   let statsFailed = 0;
   const stats = await mapPool(candidates, 6, (c) =>
     getUserStats(c.wallet).catch(() => {

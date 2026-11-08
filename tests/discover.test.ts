@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
+import { hiddenTraders } from "@/lib/db/schema";
 import { DEFAULT_DISCOVER, discoverCandidates, discoveryScore } from "@/lib/jobs/discover";
 import * as data from "@/lib/polymarket/data";
 import * as gamma from "@/lib/polymarket/gamma";
@@ -131,5 +132,29 @@ describe("discoverCandidates", () => {
         () => {},
       ),
     ).rejects.toThrow(/user-stats/);
+  });
+
+  it("leaves out traders the admin hid, so they don't take a candidate slot", async () => {
+    // Regression (J7): a hidden trader was still discovered, backfilled and scored, using
+    // one of the capped slots that should have gone to someone who can be copied.
+    await db.insert(hiddenTraders).values({ wallet: WHALE });
+    vi.mocked(data.getLeaderboard).mockResolvedValue({
+      data: [entry(WHALE, 1, 2_000_000), entry(STEADY, 2, 40_000)],
+      pagination: { has_more: false, next_cursor: null },
+    });
+    vi.mocked(gamma.getTopMarkets).mockResolvedValue([]);
+    vi.mocked(data.getUserStats).mockReset();
+    vi.mocked(data.getUserStats).mockImplementation(async (wallet) =>
+      wallet === WHALE ? stats(wallet, 9_000_000, 10_000_000) : stats(wallet, 120_000, 800_000),
+    );
+    const res = await discoverCandidates(
+      db,
+      cfg,
+      { ...DEFAULT_DISCOVER, maxCandidates: 1, categories: ["overall"], timePeriods: ["week"] },
+      () => {},
+    );
+    expect(res.wallets).toEqual([STEADY]);
+    expect(vi.mocked(data.getUserStats).mock.calls.map((c) => c[0])).not.toContain(WHALE);
+    await db.delete(hiddenTraders);
   });
 });
