@@ -178,6 +178,59 @@ describe("backfillTrader", () => {
     expect(gone.sharesBought).toBeNull(); // nothing to go on
     expect(gone.totalCost).toBeNull();
   });
+
+  it("keeps stored history when the API answers empty for a wallet it had data for", async () => {
+    // Regression: an empty-but-valid answer (transient glitch) deleted every position and
+    // PnL point, nulled the usual stake used for sizing, and stamped the wallet as freshly
+    // backfilled. Closed positions never disappear, so empty here means the fetch failed.
+    const W = "0xglitch";
+    const now = Math.floor(Date.now() / 1000);
+    const pos = (i: number) =>
+      ({
+        proxy_wallet: W,
+        token_id: `g${i}`,
+        condition_id: `cg${i}`,
+        current_size: 0,
+        avg_price: 0.5,
+        total_size: 200,
+        realized_pnl: 1,
+        status: "CLOSED",
+        first_entry_at: now - 86_400,
+        last_event_at: now - 3600,
+      }) as data.Position;
+    vi.mocked(data.getPositions).mockImplementation(async ({ status }) => ({
+      data: status === "CLOSED" ? Array.from({ length: 8 }, (_, i) => pos(i)) : [],
+      pagination: { has_more: false, next_cursor: null },
+    }));
+    vi.mocked(data.getUserPnl).mockResolvedValue([{ timestamp: now - 86_400, position_pnl: 5 }]);
+    await db.insert(traders).values({ wallet: W }).onConflictDoNothing();
+    await backfillTrader(db, W, { maxPositionsPerStatus: 1000 });
+    const [before] = await db.select().from(traders).where(eq(traders.wallet, W));
+    expect(before.typicalStakeUsd).toBe(100);
+
+    const empty = { data: [], pagination: { has_more: false, next_cursor: null } };
+    const count = async () => ({
+      positions: (await db.select().from(traderPositions).where(eq(traderPositions.wallet, W)))
+        .length,
+      pnl: (await db.select().from(traderPnlDaily).where(eq(traderPnlDaily.wallet, W))).length,
+    });
+    // Empty positions, PnL still there.
+    vi.mocked(data.getPositions).mockResolvedValue(empty);
+    await expect(backfillTrader(db, W, { maxPositionsPerStatus: 1000 })).rejects.toThrow(/empty/);
+    // Positions there, PnL empty.
+    vi.mocked(data.getPositions).mockImplementation(async ({ status }) => ({
+      data: status === "CLOSED" ? Array.from({ length: 8 }, (_, i) => pos(i)) : [],
+      pagination: { has_more: false, next_cursor: null },
+    }));
+    vi.mocked(data.getUserPnl).mockResolvedValue([]);
+    await expect(backfillTrader(db, W, { maxPositionsPerStatus: 1000 })).rejects.toThrow(/empty/);
+
+    expect(await count()).toEqual({ positions: 8, pnl: 1 });
+    const [after] = await db.select().from(traders).where(eq(traders.wallet, W));
+    expect(after.typicalStakeUsd).toBe(100);
+    expect(after.lastBackfillAt).toEqual(before.lastBackfillAt);
+    await prunePositions(db, [W]); // isolation
+  });
 });
 
 let db: Db;

@@ -94,6 +94,18 @@ export async function backfillTrader(
     getUserPnl({ user: wallet, interval: "all", fidelity: "1d" }),
   ]);
 
+  // Closed positions and past PnL never disappear: an empty answer for a wallet we hold
+  // history for is a failed fetch. Keep what's stored rather than wiping it.
+  const stored = async (table: typeof traderPositions | typeof traderPnlDaily) =>
+    (await db.select({ w: table.wallet }).from(table).where(eq(table.wallet, wallet)).limit(1))
+      .length > 0;
+  if (closed.length + open.length === 0 && (await stored(traderPositions))) {
+    throw new Error(`empty positions answer for ${wallet}; kept the stored history`);
+  }
+  if (pnl.length === 0 && (await stored(traderPnlDaily))) {
+    throw new Error(`empty PnL answer for ${wallet}; kept the stored history`);
+  }
+
   // Both lists come newest-first by last event. A list that hit the cap only reaches back
   // to its oldest row, while the other may go back years (e.g. unclaimed losers with no
   // matching winners), which skews win rates. Keep both to the window complete for both.
