@@ -8,11 +8,6 @@ const reqHeaders = new Map<string, string>();
 const jar = new Map<string, string>();
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ refresh: () => {} }));
-// No request scope under vitest; in Next it just marks the route as per-request.
-vi.mock("next/server", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("next/server")>()),
-  connection: async () => {},
-}));
 vi.mock("next/headers", () => ({
   headers: async () => ({ get: (k: string) => reqHeaders.get(k.toLowerCase()) ?? null }),
   cookies: async () => ({
@@ -61,6 +56,40 @@ describe("password guessing (#11)", () => {
     expect(results.slice(0, 5).every((m) => m === "Wrong password")).toBe(true);
     expect(results[6]).toMatch(/Too many/);
   });
+
+  // Headers as received on Render (checked 2026-11-08): Cloudflare sets CF-Connecting-IP and
+  // rejects requests that send their own; the right-most X-Forwarded-For entry is whichever
+  // Render load balancer handled the request.
+  const viaRender = (client: string, lb: number, forged = "6.6.6.6") => {
+    reqHeaders.set("cf-connecting-ip", client);
+    reqHeaders.set("x-forwarded-for", `${forged},${client}, 172.69.59.122, 10.27.210.${lb}`);
+  };
+  const attempt = async (password: string) => {
+    const { unlockAction } = await import("@/app/actions");
+    const f = new FormData();
+    f.set("password", password);
+    return (await unlockAction(null, f)).message;
+  };
+
+  it("on Render, limits one guesser even when requests land on different load balancers", async () => {
+    await fresh();
+    const results: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      viaRender("24.144.35.220", i, `6.6.6.${i}`);
+      results.push(await attempt(`guess ${i}`));
+    }
+    expect(results[6]).toMatch(/Too many/);
+  });
+
+  it("on Render, someone else's wrong guesses don't lock the owner out", async () => {
+    await fresh();
+    for (let i = 0; i < 6; i++) {
+      viaRender("198.51.100.9", 178);
+      await attempt(`guess ${i}`);
+    }
+    viaRender("24.144.35.220", 178);
+    expect(await attempt("correct horse")).toBe("Unlocked");
+  });
 });
 
 describe("the admin cookie (UI-03)", () => {
@@ -90,35 +119,5 @@ describe("the admin cookie (UI-03)", () => {
     expect(forged).not.toBe(value);
     jar.set(ADMIN_COOKIE, forged);
     expect(await isAdmin()).toBe(false);
-  });
-});
-
-describe("temporary X-Forwarded-For check (#11)", () => {
-  const call = async () => {
-    const { GET } = await import("@/app/api/admin/forwarded/route");
-    return GET(
-      new Request("http://localhost/api/admin/forwarded", {
-        headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.7", "x-real-ip": "203.0.113.7" },
-      }),
-    );
-  };
-
-  it("is admin-only", async () => {
-    await fresh();
-    expect((await call()).status).toBe(401);
-  });
-
-  it("shows the client-IP headers as received and the key the limiter uses", async () => {
-    await fresh();
-    const { unlockAction } = await import("@/app/actions");
-    const f = new FormData();
-    f.set("password", "correct horse");
-    expect((await unlockAction(null, f)).ok).toBe(true);
-    const body = (await (await call()).json()) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      "x-forwarded-for": "6.6.6.6, 203.0.113.7",
-      "x-real-ip": "203.0.113.7",
-      limiterKey: "203.0.113.7",
-    });
   });
 });

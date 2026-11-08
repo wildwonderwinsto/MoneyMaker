@@ -22,12 +22,16 @@ export function allowAttempt(key: string, now = Date.now(), max = MAX_ATTEMPTS):
 }
 
 /**
- * The client address for the password limiter: the right-most X-Forwarded-For entry, the
- * one appended by the proxy in front of us. Entries to its left are whatever the client
- * sent, so keying on the first one gave a guesser fresh attempts with every request.
- * (Pending: confirm on Render with /api/admin/forwarded, then remove that check.)
+ * The client address for the password limiter. On Render, requests pass through Cloudflare,
+ * which sets CF-Connecting-IP to the real client address and rejects requests that send
+ * their own (checked on the live service, 2026-11-08). X-Forwarded-For is no good there:
+ * its left entries are whatever the client sent, and the right-most is whichever Render load
+ * balancer handled the request. Without CF-Connecting-IP (e.g. local), fall back to the
+ * right-most X-Forwarded-For entry, which a client can't write.
  */
 export function limiterKey(h: { get(name: string): string | null }): string {
+  const cloudflare = h.get("cf-connecting-ip")?.trim();
+  if (cloudflare) return cloudflare;
   const forwarded = (h.get("x-forwarded-for") ?? "")
     .split(",")
     .map((s) => s.trim())
