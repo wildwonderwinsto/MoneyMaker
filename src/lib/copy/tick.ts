@@ -105,7 +105,9 @@ export function toLeaderTrade(a: Activity, id = tradeId(a)): LeaderTrade | null 
     side: a.side,
     price: a.price,
     size: a.size,
-    usdc: a.usdc_size,
+    // Not usdc_size: that includes the leader's taker fee, which the real-time feed can't
+    // see. Both paths must size the same trade the same (minLeaderUsd, conviction).
+    usdc: a.price * a.size,
     outcome: a.outcome ?? null,
     title: a.title ?? null,
     slug: a.slug ?? null,

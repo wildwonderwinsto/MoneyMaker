@@ -5,7 +5,7 @@ import { DEFAULT_RISK_CONFIG, RiskConfigSchema } from "@/lib/copy/config";
 import { mergeFills, type LeaderTrade } from "@/lib/copy/engine";
 import { oppositeToken, planHedge } from "@/lib/copy/hedge";
 import { parseFeedMessage, TradeStream } from "@/lib/copy/stream";
-import { leaderSoldFraction } from "@/lib/copy/tick";
+import { leaderSoldFraction, toLeaderTrade } from "@/lib/copy/tick";
 import { parseSetting } from "@/lib/settings";
 
 const trade = (over: Partial<LeaderTrade>): LeaderTrade => ({
@@ -106,6 +106,28 @@ describe("real-time feed", () => {
       usdc: 10,
       icon: "https://x/y.png",
     });
+  });
+
+  it("sizes the leader's trade the same from the feed and from the Data API (no fee)", () => {
+    // Regression (A3, live Nov 2026): the Data API's usdc_size includes the leader's taker
+    // fee (BUY 2000 @ 0.11647 = $232.94, usdc_size $247.35), the feed has only price and
+    // size. The same trade could pass minLeaderUsd on one path and fail it on the other.
+    const live = { ...payload, price: 0.11647, size: 2000 };
+    const fromFeed = parseFeedMessage(feed(live))!;
+    const fromApi = toLeaderTrade({
+      proxy_wallet: live.proxyWallet,
+      timestamp: live.timestamp,
+      condition_id: live.conditionId,
+      type: "TRADE",
+      size: live.size,
+      usdc_size: 247.34666,
+      transaction_hash: live.transactionHash,
+      price: live.price,
+      token_id: live.asset,
+      side: "BUY",
+    })!;
+    expect(fromApi.usdc).toBeCloseTo(232.94, 6);
+    expect(fromApi.usdc).toBeCloseTo(fromFeed.usdc, 9);
   });
 
   it("ignores everything that is not a trade", () => {

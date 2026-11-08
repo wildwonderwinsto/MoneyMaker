@@ -237,10 +237,18 @@ describe("leader's position can't be loaded", () => {
   });
 
   it("an unlisted position also counts the leader's buys we skipped before our copy opened", async () => {
-    // A $10 buy (under the $25 minimum, skipped; 40 s before the next, so not merged with
-    // it), then a $50 buy we copy (40 shares). They
+    // A $10 buy (100 @ 10¢: under the $25 minimum, skipped; 40 s before the next, so not
+    // merged with it), then a $50 buy we copy (40 shares). They
     // hold 200 when they sell 20 with /positions lagging: 10%, not 20%.
-    rows = [act({ transaction_hash: "0xsmall", usdc_size: 10, size: 100, timestamp: t0 - 30 })];
+    rows = [
+      act({
+        transaction_hash: "0xsmall",
+        price: 0.1,
+        usdc_size: 10,
+        size: 100,
+        timestamp: t0 - 30,
+      }),
+    ];
     rows.push(act({ transaction_hash: "0xbuy", size: 100, usdc_size: 50 }));
     await runTick(db, (t0 + 20) * 1000);
     expect((await signalOf("0xsmall"))?.decision).toBe("skipped");
