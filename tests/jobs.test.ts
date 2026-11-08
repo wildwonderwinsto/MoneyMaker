@@ -200,7 +200,10 @@ describe("backfillTrader", () => {
         status,
       }) as data.Position;
     vi.mocked(data.getPositions).mockImplementation(async ({ status }) => ({
-      data: status === "OPEN" ? [pos("held", 224.27, "REDEEMABLE")] : [pos("gone", 0, "CLOSED")],
+      data:
+        status === "OPEN"
+          ? [pos("held", 224.27, "REDEEMABLE")]
+          : [pos("gone", 0, "CLOSED"), pos("dust", 0.0048, "CLOSED")],
       pagination: { has_more: false, next_cursor: null },
     }));
     vi.mocked(data.getUserPnl).mockResolvedValue([]);
@@ -216,6 +219,11 @@ describe("backfillTrader", () => {
     const gone = rows.find((r) => r.tokenId === "gone")!;
     expect(gone.sharesBought).toBeNull(); // nothing to go on
     expect(gone.totalCost).toBeNull();
+    // Live: CLOSED, 0.0048 shares left, $33.4k realized. Leftover dust says nothing about
+    // what was paid; stored as $0.005 it showed on the trader page as a 7-million-% bet.
+    const dust = rows.find((r) => r.tokenId === "dust")!;
+    expect(dust.sharesBought).toBeNull();
+    expect(dust.totalCost).toBeNull();
   });
 
   it("keeps stored history when the API answers empty for a wallet it had data for", async () => {
