@@ -1,4 +1,4 @@
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { jobRuns } from "@/lib/db/schema";
@@ -31,14 +31,22 @@ export async function runJob<T extends Record<string, unknown>>(
 /**
  * True if `job` already finished successfully today (UTC calendar day). Lets backup
  * schedules skip when the main run went through; a run from yesterday never counts, even
- * if it started late in the day.
+ * if it started late in the day, and neither does a run that marked itself `full: false`
+ * (a shrunken daily run).
  */
 export async function succeededToday(db: Db, job: string, now = new Date()): Promise<boolean> {
   const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const [row] = await db
     .select({ id: jobRuns.id })
     .from(jobRuns)
-    .where(and(eq(jobRuns.job, job), eq(jobRuns.status, "ok"), gte(jobRuns.startedAt, midnight)))
+    .where(
+      and(
+        eq(jobRuns.job, job),
+        eq(jobRuns.status, "ok"),
+        gte(jobRuns.startedAt, midnight),
+        sql`coalesce(${jobRuns.stats}->>'full', 'true') <> 'false'`,
+      ),
+    )
     .limit(1);
   return !!row;
 }

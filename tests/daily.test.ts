@@ -101,4 +101,25 @@ describe("daily job health", () => {
     expect(backfill.prunePositions).not.toHaveBeenCalled();
     expect(await succeededToday(db, "daily")).toBe(false);
   });
+
+  it("a shrunken run (--limit 5, --per-board, --top) doesn't count as today's run or record picks", async () => {
+    // Regression (J5): a quick local `daily --limit 5` made the scheduled run skip all day
+    // and recorded the month's picks from a 5-trader pool.
+    const small = [
+      { ...opts, discover: { ...opts.discover, maxCandidates: 5 } },
+      { ...opts, discover: { ...opts.discover, perBoard: 10 } },
+      { ...opts, backtest: { ...opts.backtest, topK: 3 } },
+    ];
+    const runs = [];
+    for (const o of small) runs.push(await runJob(db, "daily", (log) => dailyJob(db, cfg, o, log)));
+    expect(await succeededToday(db, "daily")).toBe(false);
+    expect(backtest.recordMonthlySelections).not.toHaveBeenCalled();
+    expect(runs.map((r) => r.full)).toEqual([false, false, false]);
+    // A bigger-than-default pool is still a full run.
+    await runJob(db, "daily", (log) =>
+      dailyJob(db, cfg, { ...opts, discover: { ...opts.discover, maxCandidates: 300 } }, log),
+    );
+    expect(backtest.recordMonthlySelections).toHaveBeenCalledTimes(1);
+    expect(await succeededToday(db, "daily")).toBe(true);
+  });
 });

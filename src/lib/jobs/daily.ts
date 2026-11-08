@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { follows, traders } from "@/lib/db/schema";
-import type { BacktestParams } from "@/lib/scoring/backtest";
+import { DEFAULT_BACKTEST, type BacktestParams } from "@/lib/scoring/backtest";
 import type { ScoringConfig } from "@/lib/scoring/config";
 
 import {
@@ -17,7 +17,7 @@ import {
   resolveMarkets,
 } from "./backfill";
 import { backtestJob, recordedWallets, recordMonthlySelections } from "./backtest";
-import { discoverCandidates, type DiscoverOptions } from "./discover";
+import { DEFAULT_DISCOVER, discoverCandidates, type DiscoverOptions } from "./discover";
 import { DEFAULT_SCORE, scoreAll } from "./score";
 import { mapPool } from "./util";
 
@@ -73,7 +73,14 @@ export async function dailyJob(
     throw new Error(`${backfill.failed} of ${wallets.length} backfills failed; nothing to score`);
   }
   const { rejected, ...score } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
-  const selections = await recordMonthlySelections(db, opts.backtest.topK, log);
+  // A shrunken run (e.g. a quick local --limit 5) must not stand in for the real one: it
+  // records no picks, and `full: false` keeps it from counting as today's run.
+  const full =
+    opts.discover.maxCandidates >= DEFAULT_DISCOVER.maxCandidates &&
+    opts.discover.perBoard >= DEFAULT_DISCOVER.perBoard &&
+    opts.backtest.topK === DEFAULT_BACKTEST.topK;
+  const selections = full ? await recordMonthlySelections(db, opts.backtest.topK, log) : null;
+  if (!full) log("smaller than a default run: this month's picks not recorded");
   const backtest = await backtestJob(db, cfg, opts.backtest, log);
   const pruned = opts.prune ? await prunePositions(db, rejected) : 0;
   log(`pruned ${pruned} position rows of ${rejected.length} rejected traders`);
@@ -82,6 +89,7 @@ export async function dailyJob(
     `removed ${cleaned.markets} orphan markets, ${cleaned.trades} old trades, ${cleaned.snapshots} old leaderboard rows`,
   );
   return {
+    full,
     discovered: discovered.kept,
     backfill,
     score,
