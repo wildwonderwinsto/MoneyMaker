@@ -11,22 +11,16 @@
  */
 import { parseArgs } from "node:util";
 
-import { and, eq, isNull, lt, or } from "drizzle-orm";
+import { and, isNull, lt, or } from "drizzle-orm";
 
 import { closeDb, getDb, type Db } from "@/lib/db/client";
 import { runTick } from "@/lib/copy/tick";
 import { follows, traders } from "@/lib/db/schema";
-import {
-  backfillTrader,
-  DEFAULT_BACKFILL,
-  cleanupStorage,
-  prunePositions,
-  resolveMarkets,
-} from "@/lib/jobs/backfill";
-import { backtestJob, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
+import { backtestJob } from "@/lib/jobs/backtest";
+import { backfillMany, dailyJob } from "@/lib/jobs/daily";
 import { DEFAULT_DISCOVER, discoverCandidates } from "@/lib/jobs/discover";
 import { DEFAULT_SCORE, scoreAll } from "@/lib/jobs/score";
-import { mapPool, runJob, succeededToday } from "@/lib/jobs/util";
+import { runJob, succeededToday } from "@/lib/jobs/util";
 import { DEFAULT_BACKTEST } from "@/lib/scoring/backtest";
 import { getScoringConfig } from "@/lib/settings";
 
@@ -42,24 +36,6 @@ const { positionals, values } = parseArgs({
   },
 });
 const num = (v: string | undefined, fallback: number) => (v === undefined ? fallback : Number(v));
-
-async function backfillMany(db: Db, wallets: string[], log: (m: string) => void) {
-  let done = 0;
-  let failed = 0;
-  let positions = 0;
-  await mapPool(wallets, 3, async (wallet) => {
-    try {
-      const r = await backfillTrader(db, wallet, DEFAULT_BACKFILL);
-      positions += r.positions;
-    } catch (err) {
-      failed++;
-      log(`backfill failed for ${wallet}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (++done % 25 === 0) log(`backfilled ${done}/${wallets.length}`);
-  });
-  const resolved = await resolveMarkets(db, log);
-  return { traders: wallets.length, failed, positions, ...resolved };
-}
 
 async function staleWallets(db: Db): Promise<string[]> {
   const cutoff = new Date(Date.now() - 20 * 3600 * 1000);
@@ -107,42 +83,14 @@ async function main() {
         console.log("[daily] already succeeded today (UTC); skipping this backup run");
         break;
       }
-      await runJob(db, "daily", async (log) => {
-        const discovered = await discoverCandidates(db, cfg, discoverOpts, log);
-        // Traders picked in recorded months are judged by the backtest, and followed traders
-        // need a fresh usual stake for sizing: keep both backfilled too.
-        const recorded = await recordedWallets(db, backtestOpts.months);
-        // Only traders being copied: paused ones don't need fresh history every day.
-        const followed = (
-          await db.select({ wallet: follows.wallet }).from(follows).where(eq(follows.enabled, true))
-        ).map((f) => f.wallet);
-        if (followed.length) {
-          await db
-            .insert(traders)
-            .values(followed.map((wallet) => ({ wallet })))
-            .onConflictDoNothing();
-        }
-        const wallets = [...new Set([...discovered.wallets, ...recorded, ...followed])];
-        const backfill = await backfillMany(db, wallets, log);
-        const { rejected, ...score } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
-        const selections = await recordMonthlySelections(db, backtestOpts.topK, log);
-        const backtest = await backtestJob(db, cfg, backtestOpts, log);
-        const pruned = values["no-prune"] ? 0 : await prunePositions(db, rejected);
-        log(`pruned ${pruned} position rows of ${rejected.length} rejected traders`);
-        const cleaned = await cleanupStorage(db);
-        log(
-          `removed ${cleaned.markets} orphan markets, ${cleaned.trades} old trades, ${cleaned.snapshots} old leaderboard rows`,
-        );
-        return {
-          discovered: discovered.kept,
-          backfill,
-          score,
-          selections,
-          backtest,
-          pruned,
-          cleaned,
-        };
-      });
+      await runJob(db, "daily", (log) =>
+        dailyJob(
+          db,
+          cfg,
+          { discover: discoverOpts, backtest: backtestOpts, prune: !values["no-prune"] },
+          log,
+        ),
+      );
       break;
     case "follow": {
       const wallet = positionals[1]?.toLowerCase();
