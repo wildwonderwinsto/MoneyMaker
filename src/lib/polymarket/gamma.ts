@@ -65,7 +65,9 @@ const CHUNK = 50;
 export async function getMarketsByConditionIds(conditionIds: string[]): Promise<GammaMarket[]> {
   // An empty id makes Gamma reject the whole request (HTTP 422).
   const unique = [...new Set(conditionIds.filter(Boolean))];
-  const out: GammaMarket[] = [];
+  // Keyed by id: a market that closes between the two requests comes back in both (one
+  // upsert can't touch a row twice). The closed answer is pushed last, so it wins.
+  const out = new Map<string, GammaMarket>();
   for (let i = 0; i < unique.length; i += CHUNK) {
     const ids = unique.slice(i, i + CHUNK);
     // Open and closed markets need separate requests; run them together (copy speed).
@@ -80,9 +82,9 @@ export async function getMarketsByConditionIds(conditionIds: string[]): Promise<
         ),
       ),
     );
-    for (const res of pages) out.push(...res.markets);
+    for (const res of pages) for (const m of res.markets) out.set(m.conditionId, m);
   }
-  return out;
+  return [...out.values()];
 }
 
 /**
