@@ -105,6 +105,42 @@ describe("backfillTrader", () => {
     expect(rows.map((r) => r.t).sort()).toEqual(["l1", "w1", "w2", "w3"]); // l2 is too old
   });
 
+  it("treats a 0 timestamp as unknown, not as 1970 (kept, like a missing one)", async () => {
+    // Regression (A7): the API sends 0, not null, when a time wasn't recorded. As a real
+    // time, 0 fell before the window cutoff, so the row was silently dropped.
+    const pos = (token: string, lastEvent: number, status: string) =>
+      data.Position.parse({
+        proxy_wallet: "0xzero",
+        token_id: token,
+        condition_id: `c-${token}`,
+        current_size: 0,
+        avg_price: 0.5,
+        total_size: 10,
+        realized_pnl: 1,
+        status,
+        first_entry_at: lastEvent,
+        last_event_at: lastEvent,
+      });
+    vi.mocked(data.getPositions).mockImplementation(async ({ status }) => ({
+      data:
+        status === "CLOSED"
+          ? [pos("z1", 300, "CLOSED"), pos("z2", 200, "CLOSED")]
+          : [pos("z0", 0, "REDEEMABLE")],
+      pagination: { has_more: false, next_cursor: null },
+    }));
+    vi.mocked(data.getUserPnl).mockResolvedValue([]);
+    await db.insert(traders).values({ wallet: "0xzero" }).onConflictDoNothing();
+    await backfillTrader(db, "0xzero", { maxPositionsPerStatus: 2 });
+    const rows = await db
+      .select()
+      .from(traderPositions)
+      .where(eq(traderPositions.wallet, "0xzero"));
+    expect(rows.map((r) => r.tokenId).sort()).toEqual(["z0", "z1", "z2"]);
+    const z0 = rows.find((r) => r.tokenId === "z0")!;
+    expect(z0.firstEntryAt).toBeNull();
+    expect(z0.lastActivityAt).toBeNull();
+  });
+
   it("records the last real trade from the trade count, not claims", async () => {
     vi.mocked(data.getPositions).mockResolvedValue({
       data: [],

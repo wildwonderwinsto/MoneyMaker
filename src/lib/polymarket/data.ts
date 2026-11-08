@@ -14,6 +14,8 @@ export const dataLimiter = new RateLimiter(4, 125);
 
 const str = z.string().nullish();
 const num = z.number().nullish();
+/** Epoch seconds; the API sends 0 (not null) when a time wasn't recorded. */
+const epoch = num.transform((v) => (v ? v : null));
 
 const Pagination = z.object({
   has_more: z.boolean().optional().default(false),
@@ -138,9 +140,9 @@ export const Position = z.object({
   outcome: str,
   outcome_index: num,
   end_date: str,
-  /** Epoch seconds. */
-  first_entry_at: num,
-  last_event_at: num,
+  /** Epoch seconds, or null when unknown. */
+  first_entry_at: epoch,
+  last_event_at: epoch,
 });
 export type Position = z.infer<typeof Position>;
 

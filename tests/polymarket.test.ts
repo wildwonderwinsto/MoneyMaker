@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { normalizeBook, priceAtOrAfter } from "@/lib/polymarket/clob";
-import { legacyTradeId, tradeId, tradeIds } from "@/lib/polymarket/data";
+import { legacyTradeId, Position, tradeId, tradeIds } from "@/lib/polymarket/data";
 import {
   categoryFromTags,
   DEFAULT_TAKER_FEE_RATE,
@@ -128,6 +128,28 @@ describe("tradeId", () => {
   it("still recognizes ids written before fills were told apart", () => {
     expect(legacyTradeId({ transaction_hash: "0xh", token_id: "9", side: "BUY" })).toBe(
       "0xh:9:BUY",
+    );
+  });
+});
+
+describe("Position parsing", () => {
+  it("reads a 0 entry/last-event time as unknown (null), like a missing one", () => {
+    // Regression (A7): the Data API sends 0 for unrecorded times; the copy engine read
+    // lastEventAt 0 as "nothing applied yet" and re-applied trades the position included.
+    const base = {
+      proxy_wallet: "0xw",
+      token_id: "t",
+      condition_id: "c",
+      current_size: 1,
+      avg_price: 0.5,
+      realized_pnl: 0,
+      status: "OPEN",
+    };
+    const p = Position.parse({ ...base, first_entry_at: 0, last_event_at: 0 });
+    expect(p.first_entry_at).toBeNull();
+    expect(p.last_event_at).toBeNull();
+    expect(Position.parse({ ...base, last_event_at: 1_794_000_000 }).last_event_at).toBe(
+      1_794_000_000,
     );
   });
 });
