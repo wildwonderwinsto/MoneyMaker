@@ -10,8 +10,10 @@ import { and, eq, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "dr
 
 import type { Db } from "@/lib/db/client";
 import {
+  follows,
   leaderboardSnapshots,
   markets,
+  paperPositions,
   traderPnlDaily,
   traderPositions,
   traders,
@@ -269,11 +271,23 @@ export async function resolveMarkets(
 /**
  * Remove bulky history for wallets that were rejected. Their score row stays (so the UI
  * can explain why), and `lastBackfillAt` is cleared so later scoring runs skip them
- * instead of re-scoring an empty history.
+ * instead of re-scoring an empty history. Followed traders (paused too) and traders whose
+ * copy we still hold are never pruned: their page and sizing need that history.
  */
 export async function prunePositions(db: Db, wallets: string[]): Promise<number> {
+  const [followed, held] = await Promise.all([
+    db.select({ w: follows.wallet }).from(follows),
+    db
+      .selectDistinct({ w: paperPositions.sourceWallet })
+      .from(paperPositions)
+      .where(eq(paperPositions.status, "open")),
+  ]);
+  const keep = new Set([...followed, ...held].map((r) => r.w));
   let removed = 0;
-  for (const part of chunk(wallets, 500)) {
+  for (const part of chunk(
+    wallets.filter((w) => !keep.has(w)),
+    500,
+  )) {
     const res = await db
       .delete(traderPositions)
       .where(inArray(traderPositions.wallet, part))

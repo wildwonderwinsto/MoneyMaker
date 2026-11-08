@@ -1,12 +1,15 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
 import {
+  follows,
   jobRuns,
   leaderboardSnapshots,
   markets,
   monthlySelections,
+  paperAccounts,
+  paperPositions,
   traderPnlDaily,
   traderPositions,
   traders,
@@ -307,6 +310,65 @@ describe("storage maintenance", () => {
     expect(cleaned).toEqual({ markets: 1, trades: 1, snapshots: 0 });
     const left = await db.select({ id: markets.conditionId }).from(markets);
     expect(left.map((m) => m.id)).toEqual(["c-keep"]);
+  });
+
+  it("never prunes a trader who is followed (even paused) or whose copy we still hold", async () => {
+    // Regression: a rejected trader's history was deleted even while followed or copied,
+    // leaving the trader page empty and the next scoring run skipping them.
+    const [acct] = await db
+      .insert(paperAccounts)
+      .values({ name: "Prune", startingBalance: 1000, cash: 1000 })
+      .returning();
+    await db.insert(traders).values(
+      ["0xpfollow", "0xppaused", "0xpheld", "0xpclosed", "0xprej"].map((wallet) => ({
+        wallet,
+        lastBackfillAt: new Date(),
+      })),
+    );
+    await db
+      .insert(follows)
+      .values([{ wallet: "0xpfollow" }, { wallet: "0xppaused", enabled: false }]);
+    await db.insert(paperPositions).values([
+      { accountId: acct.id, sourceWallet: "0xpheld", conditionId: "c", tokenId: "t", shares: 5 },
+      {
+        accountId: acct.id,
+        sourceWallet: "0xpclosed",
+        conditionId: "c",
+        tokenId: "t",
+        status: "closed",
+      },
+    ]);
+    const wallets = ["0xpfollow", "0xppaused", "0xpheld", "0xpclosed", "0xprej"];
+    await db
+      .insert(traderPositions)
+      .values(
+        wallets.map((wallet) => ({ wallet, conditionId: "c", tokenId: "t", status: "OPEN" })),
+      );
+    await db
+      .insert(traderPnlDaily)
+      .values(wallets.map((wallet) => ({ wallet, day: "2026-10-01", pnl: 1 })));
+
+    expect(await prunePositions(db, wallets)).toBe(2);
+    const kept = await db
+      .select({ w: traderPositions.wallet })
+      .from(traderPositions)
+      .where(inArray(traderPositions.wallet, wallets));
+    expect(kept.map((r) => r.w).sort()).toEqual(["0xpfollow", "0xpheld", "0xppaused"]);
+    const pnlKept = await db
+      .select({ w: traderPnlDaily.wallet })
+      .from(traderPnlDaily)
+      .where(inArray(traderPnlDaily.wallet, wallets));
+    expect(pnlKept.map((r) => r.w).sort()).toEqual(["0xpfollow", "0xpheld", "0xppaused"]);
+    const stamped = await db
+      .select({ w: traders.wallet, at: traders.lastBackfillAt })
+      .from(traders)
+      .where(inArray(traders.wallet, wallets));
+    expect(
+      stamped
+        .filter((r) => r.at === null)
+        .map((r) => r.w)
+        .sort(),
+    ).toEqual(["0xpclosed", "0xprej"]);
   });
 });
 
