@@ -138,8 +138,20 @@ export function asOf(input: MetricsInput, at: number): MetricsInput {
     // Re-derived picks are formed at `at` from earlier data only; the live forward holdout
     // (bets since a wallet's first check, which is after `at`) doesn't apply here.
     holdoutFrom: null,
-    // Today's last-trade time would leak the future; fall back to positions.
-    activity: { ...input.activity, lastTradeAt: null },
+    // Today's last-trade time would leak the future; fall back to positions. The lifetime
+    // trade count would too (B6): scale it to the share of positions opened before `at`.
+    activity: {
+      ...input.activity,
+      lastTradeAt: null,
+      tradeCount:
+        input.activity.tradeCount === null || input.positions.length === 0
+          ? input.activity.tradeCount
+          : Math.round(
+              (input.activity.tradeCount *
+                input.positions.filter((p) => (p.firstEntryAt ?? Infinity) < at).length) /
+                input.positions.length,
+            ),
+    },
     // Known by `at` once the trader's last event on it (sell, claim, settlement) came
     // before `at`. Market end dates are unreliable (placeholders, or before entry).
     positions: input.positions

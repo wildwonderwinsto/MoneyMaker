@@ -515,3 +515,14 @@ describe("B4: the backtest copies only what the copy engine would copy", () => {
     expect(r.months[0].strategyReturn).toBe(0);
   });
 });
+
+describe("B6: trades a day at formation don't include later trades", () => {
+  it("scales today's lifetime trade count to the positions opened before the formation date", () => {
+    const t = steadyGrinder(); // 160 positions over 240 days
+    const at = Math.min(...t.positions.map((p) => p.firstEntryAt!)) + 24 * 86_400;
+    const before = t.positions.filter((p) => p.firstEntryAt! < at).length;
+    const past = asOf({ ...t, activity: { ...t.activity, tradeCount: 1600 } }, at);
+    expect(before).toBeGreaterThan(0);
+    expect(past.activity.tradeCount).toBe(Math.round((1600 * before) / t.positions.length));
+  });
+});
