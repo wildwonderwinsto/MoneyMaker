@@ -8,14 +8,7 @@
 import { and, gte, inArray, isNotNull, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
-import {
-  markets,
-  traderPnlDaily,
-  traderPositions,
-  traders,
-  traderScores,
-  traderTrades,
-} from "@/lib/db/schema";
+import { markets, traderPnlDaily, traderPositions, traders, traderScores } from "@/lib/db/schema";
 import { getMidpoints, getPriceHistory, type PricePoint } from "@/lib/polymarket/clob";
 import { collect, getActivity, paginate, tradeIds, type Activity } from "@/lib/polymarket/data";
 import {
@@ -50,9 +43,6 @@ export interface ScoreOptions {
    */
   maxReplayTrades: number;
 }
-
-/** Raw trades kept per shortlisted trader (profile page); bounds Supabase storage. */
-const STORED_TRADES = 2000;
 
 export const DEFAULT_SCORE: ScoreOptions = {
   shortlistSize: 60,
@@ -168,7 +158,7 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
   return { inputs, meta };
 }
 
-async function buildCopyReplays(
+export async function buildCopyReplays(
   db: Db,
   wallet: string,
   cfg: ScoringConfig,
@@ -182,7 +172,8 @@ async function buildCopyReplays(
     }),
   );
 
-  // Keep the shortlisted trader's raw trades (used by the profile page and backtests).
+  // The raw trades are only used here, not stored: trader_trades was written but never read
+  // (owner, 2026-11-09: 53% of live data in a local run).
   const valid = trades.filter(
     (t) => t.token_id && t.side && t.price !== null && t.price !== undefined,
   );
@@ -203,10 +194,6 @@ async function buildCopyReplays(
     slug: t.slug ?? null,
     transactionHash: t.transaction_hash ?? null,
   }));
-  // Newest first, so this keeps the most recent trades.
-  for (const part of chunk(rows.slice(0, STORED_TRADES), 500))
-    await db.insert(traderTrades).values(part).onConflictDoNothing();
-
   // Only trades the copy engine would actually copy: big enough, sensible price, old
   // enough that the delayed entry price exists.
   const buys = rows.filter(

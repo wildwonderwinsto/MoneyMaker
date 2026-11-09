@@ -15,7 +15,7 @@ import type { StorageStats } from "@/lib/queries";
 const TOP = 6;
 
 const LABELS: Record<string, [string, string]> = {
-  trader_trades: ["Trader trades", "Every trade of tracked traders (kept 120 days)"],
+  trader_trades: ["Trader trades", "No longer written (nothing read it); empty after cleanup"],
   trader_positions: ["Trader positions", "Open and closed positions per trader"],
   leaderboard_snapshots: ["Leaderboard history", "Daily leaderboard snapshots (kept 90 days)"],
   signals: ["Signals", "Every followed trade the engine saw, with its decision"],
