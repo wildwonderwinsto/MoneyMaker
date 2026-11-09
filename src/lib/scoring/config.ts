@@ -51,6 +51,12 @@ export const ScoringConfigSchema = z.object({
    * bets can dominate the average, so it is noisy.
    */
   copyRoiZ: z.number().min(0).max(3).default(1.28),
+  /**
+   * Hard guard (owner decision 2026-11-09): Rejected when copying clearly loses money — the
+   * stake-weighted copy return plus this many standard errors is still below 0. The skill
+   * test counts bets, not dollars, so this is what catches "many small wins, big losses".
+   */
+  copyLossZ: z.number().min(0).max(4).default(2),
   /** Fewer replayed copies than this = not enough evidence; the copy check can't pass. */
   minCopyReplays: z.number().int().min(1).default(25),
   /** Replay only leader buys at least this big (the copy engine ignores smaller ones). */

@@ -318,3 +318,29 @@ describe("sequential skill test (owner decision 2026-11-09, S2; audit R2, R6)", 
     expect(r.checks.find((c) => c.code === "no_edge")?.ok).toBe(false);
   });
 });
+
+describe("copy-return guard (owner decision 2026-11-09)", () => {
+  it("REJECTS a trader who wins many small copied bets but loses a few big ones", () => {
+    // The skill test counts bets, not dollars: 140 small wins + 10 big losses look skilled.
+    // Copying them, sized like the leader, loses money — the hard guard must reject.
+    const t = steadyGrinder();
+    t.copyReplays = [
+      ...Array.from({ length: 140 }, () => ({ delayedPrice: 0.51, exitValue: 1, weight: 10 })),
+      ...Array.from({ length: 10 }, () => ({ delayedPrice: 0.51, exitValue: 0, weight: 2000 })),
+    ];
+    const m = computeMetrics(t, cfg);
+    const r = scoreTrader(m, cfg, ctx);
+    expect(r.checks.find((c) => c.code === "skill")?.ok).toBe(true);
+    expect(r.tier).toBe("rejected");
+    expect(failedCodes(r)).toContain("copy_loss");
+    expect(m.copyRoiUpper!).toBeLessThan(0);
+  });
+
+  it("does not reject when the copy return is just uncertain, or not measured", () => {
+    const t = steadyGrinder(); // its replays are profitable
+    const r = scoreTrader(computeMetrics(t, cfg), cfg, ctx);
+    expect(r.checks.find((c) => c.code === "copy_loss")?.ok).toBe(true);
+    const unmeasured = scoreTrader(computeMetrics({ ...t, copyReplays: null }, cfg), cfg, ctx);
+    expect(unmeasured.checks.find((c) => c.code === "copy_loss")?.ok).toBe(true);
+  });
+});

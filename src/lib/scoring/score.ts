@@ -34,6 +34,7 @@ const HARD_CHECKS = new Set([
   "skill",
   "no_edge",
   "candidate_age",
+  "copy_loss",
 ]);
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -144,6 +145,14 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
             : ""),
       m.copyAdjRoi,
       cfg.minCopyAdjRoi + Number.EPSILON,
+    ),
+    // Hard: copying clearly loses money (not measured = no verdict; copy_roi still has to pass).
+    atLeast(
+      "copy_loss",
+      `Doesn't clearly lose money when copied (copy return + ${cfg.copyLossZ} standard errors ≥ 0)`,
+      m.copyRoiUpper,
+      0,
+      true,
     ),
     atLeast(
       "recent",

@@ -104,6 +104,8 @@ export interface TraderMetrics {
   copyAdjRoi: number | null;
   /** Plain stake-weighted average return of the replayed copies. */
   copyAdjRoiMean: number | null;
+  /** Optimistic copy return (mean + copyLossZ standard errors); below 0 = clearly loses. */
+  copyRoiUpper: number | null;
   /** Replays weighted by stake count like this many equal bets (Kish). */
   copyEffectiveN: number | null;
   /** Days between the first and last replayed trade. */
@@ -485,6 +487,7 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     oosPnl: latest && atCutoff ? latest.pnl - atCutoff.pnl : null,
     copyAdjRoi: copy && copy.se !== null ? copy.mean - cfg.copyRoiZ * copy.se : null,
     copyAdjRoiMean: copy?.mean ?? null,
+    copyRoiUpper: copy && copy.se !== null ? copy.mean + cfg.copyLossZ * copy.se : null,
     copyEffectiveN: copy?.nEff ?? null,
     copyReplayDays: replaySpanDays(replays),
     copyOpenReplays: replays?.filter((r) => r.open).length ?? 0,

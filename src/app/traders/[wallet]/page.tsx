@@ -46,6 +46,7 @@ const PCT_CHECKS = new Set([
   "profitable_months",
   "both_sides",
   "copy_roi",
+  "copy_loss",
   "recent",
 ]);
 
