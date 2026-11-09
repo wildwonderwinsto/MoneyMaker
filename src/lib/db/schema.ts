@@ -52,6 +52,14 @@ export const traders = pgTable("traders", {
   leaderboardCategory: text(),
   firstSeenAt: createdAt(),
   lastBackfillAt: tsz(),
+  /** First full check (scoring). Skill is tested only on bets opened after it (holdout). */
+  firstCheckedAt: tsz(),
+  /** Last full check: drives the rotation's re-check cadence and 30-day cool-down. */
+  lastCheckedAt: tsz(),
+  /** Distinct markets traded (user-stats `trades`), refreshed by every discovery run. */
+  marketsTraded: integer(),
+  /** `marketsTraded` at the last full check: +N since then ends a cool-down early. */
+  marketsAtCheck: integer(),
   /** Day of the last real trade (trade count went up); claims and settlements don't count. */
   lastTradeAt: tsz(),
   /** Median dollars they put into one market (recent positions); sizes copies by conviction. */
@@ -179,7 +187,8 @@ export const traderPnlDaily = pgTable(
   (t) => [primaryKey({ columns: [t.wallet, t.day] })],
 ).enableRLS();
 
-export type ScoreTier = "elite" | "verified" | "watchlist" | "rejected";
+/** candidate = passes every check but hasn't made enough bets since first picked (holdout). */
+export type ScoreTier = "elite" | "verified" | "candidate" | "watchlist" | "rejected";
 
 export interface ScoreCheck {
   code: string;

@@ -185,6 +185,17 @@ describe("copy replay helpers", () => {
   });
 });
 
+describe("asOf and the forward holdout", () => {
+  it("re-derived months ignore the live holdout start (it is after the formation date)", () => {
+    // Regression: loadInputs sets holdoutFrom = first check (recent); copied into a past
+    // formation date it left no bets to test, turning every re-derived pick into a Candidate.
+    const t = { ...steadyGrinder(), holdoutFrom: NOW };
+    const m = computeMetrics(asOf(t, NOW - 30 * 86_400), cfg);
+    expect(m.nHoldout).toBeNull();
+    expect(m.zSkill).not.toBeNull();
+  });
+});
+
 describe("toPositionRecord", () => {
   const row = {
     id: 1,

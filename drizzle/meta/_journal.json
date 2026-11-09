@@ -78,6 +78,13 @@
       "when": 1794178759115,
       "tag": "0010_unknown_position_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794181279374,
+      "tag": "0011_rotation_and_holdout",
+      "breakpoints": true
     }
   ]
 }

@@ -77,6 +77,8 @@ export interface TraderMetrics {
   edgePerBet: number | null;
   /** Dollar-weighted Monte Carlo p-value: P(random outcomes ≥ actual PnL). */
   mcPValue: number | null;
+  /** Resolved bets the skill tests used under the forward holdout; null = no holdout. */
+  nHoldout: number | null;
   roi: number | null;
   roiShrunk: number | null;
   topMarketShare: number | null;
@@ -308,6 +310,12 @@ export interface MetricsInput {
   copyReplays: CopyReplay[] | null;
   /** Epoch seconds; injectable for tests. */
   now: number;
+  /**
+   * Forward holdout: epoch seconds the trader was first picked. The skill tests (z and the
+   * luck test) then count only bets opened at or after it, because the pick itself was
+   * based on the earlier profits. Omitted = all bets (backtest re-derivations).
+   */
+  holdoutFrom?: number | null;
 }
 
 export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderMetrics {
@@ -321,7 +329,12 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
   const nClosed = closed.length;
   const winners = closed.filter((p) => p.realizedPnl > 0).length;
 
-  const skill = skillZ(positions, cfg);
+  const holdoutFrom = input.holdoutFrom ?? null;
+  const tested =
+    holdoutFrom === null
+      ? positions
+      : positions.filter((p) => p.firstEntryAt !== null && p.firstEntryAt >= holdoutFrom);
+  const skill = skillZ(tested, cfg);
   const conc = concentration(closed);
   const months = monthlyPnl(pnlSeries);
   const activeMonths = months.filter((m) => Math.abs(m.pnl) > 1e-6);
@@ -371,7 +384,8 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     expectedWinRate: skill.n ? skill.expectedWins / skill.n : null,
     zSkill: skill.z,
     edgePerBet: skill.edgePerBet,
-    mcPValue: monteCarloPValue(positions, cfg, input.wallet),
+    mcPValue: monteCarloPValue(tested, cfg, input.wallet),
+    nHoldout: holdoutFrom === null ? null : skill.n,
     roi,
     roiShrunk: roi === null ? null : roi * (nClosed / (nClosed + cfg.roiShrinkK)),
     topMarketShare: conc.topMarketShare,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { codeFromReason, explain } from "@/lib/explain";
+import { codeFromReason, explain, positionsNote } from "@/lib/explain";
 
 describe("explain", () => {
   it("explains a price-moved skip with the real numbers, including old signals", () => {
@@ -42,5 +42,15 @@ describe("explain", () => {
     expect(codeFromReason("Already copied 2 buys into this position")).toBe("buy_limit");
     expect(codeFromReason("Best bid 1.0¢ is below your sell floor")).toBe("sell_floor");
     expect(explain({ reason: "Daily loss limit hit (10.5%)" }).body[0]).toContain("10.5%");
+  });
+});
+
+describe("candidate history note", () => {
+  it("tells the viewer a Candidate's history reloads at its next check", () => {
+    // Owner request: candidates keep no position history between checks; the page must
+    // say so instead of looking empty or broken.
+    expect(positionsNote("candidate", 0)).toMatch(/reloads at the next check/);
+    expect(positionsNote("rejected", 0)).toMatch(/only kept for/);
+    expect(positionsNote("candidate", 12)).toBeNull();
   });
 });

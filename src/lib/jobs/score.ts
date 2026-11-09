@@ -5,7 +5,7 @@
  * Stage 2: for the shortlist only (expensive), replay recent BUYs as if copied
  *          `copyDelaySeconds` late using minute price history → copy-adjusted ROI.
  */
-import { inArray, isNotNull, sql } from "drizzle-orm";
+import { and, gte, inArray, isNotNull, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import {
@@ -135,6 +135,9 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
         },
         copyReplays: null,
         now,
+        // Forward holdout: skill counts only bets opened since the first check (today, for a
+        // wallet checked for the first time, so it starts as a Candidate).
+        holdoutFrom: toEpoch(p.firstCheckedAt) ?? now,
       });
     }
     // When each market actually settled (the backtest must not know outcomes early).
@@ -341,30 +344,79 @@ function scoreRow(wallet: string, m: TraderMetrics, r: ScoreResult, category: st
   };
 }
 
+/** Days of earlier checks the luck test is pooled over (owner decision 2026-11-08). */
+const POOLED_BH_DAYS = 30;
+
+/**
+ * Luck-test p-values of wallets tested in the window (enough post-pick bets), except those
+ * re-checked now. Testing more wallets means more lucky passes, so Benjamini–Hochberg is
+ * applied over everyone tested recently, not just today's batch.
+ */
+export async function recentTestedPValues(
+  db: Db,
+  since: Date,
+  exclude: ReadonlySet<string>,
+  minResolved: number,
+): Promise<number[]> {
+  const rows = await db
+    .select({ wallet: traderScores.wallet, metrics: traderScores.metrics })
+    .from(traderScores)
+    .where(gte(traderScores.computedAt, since));
+  return rows
+    .filter((r) => !exclude.has(r.wallet))
+    .map((r) => r.metrics as { mcPValue?: number | null; nHoldout?: number | null })
+    .filter((m) => typeof m.mcPValue === "number" && (m.nHoldout ?? 0) >= minResolved)
+    .map((m) => m.mcPValue as number);
+}
+
 export async function scoreAll(
   db: Db,
   baseCfg: ScoringConfig,
   opts: ScoreOptions,
   log: (m: string) => void,
-): Promise<{ scored: number; shortlisted: number; verified: number; rejected: string[] }> {
+  /** Wallets checked this run (the daily rotation). Omitted: every backfilled wallet. */
+  only?: string[],
+): Promise<{
+  scored: number;
+  shortlisted: number;
+  verified: number;
+  rejected: string[];
+  candidates: string[];
+}> {
   const now = Math.floor(Date.now() / 1000);
   const walletRows = await db
     .select({ wallet: traders.wallet })
     .from(traders)
-    .where(isNotNull(traders.lastBackfillAt));
+    .where(
+      only
+        ? and(isNotNull(traders.lastBackfillAt), inArray(traders.wallet, only.length ? only : [""]))
+        : isNotNull(traders.lastBackfillAt),
+    );
   const wallets = walletRows.map((r) => r.wallet);
   const { inputs, meta } = await loadInputs(db, wallets, now);
+  const earlier = await recentTestedPValues(
+    db,
+    new Date((now - POOLED_BH_DAYS * 86_400) * 1000),
+    new Set(wallets),
+    baseCfg.minResolved,
+  );
   const cfg = {
     ...baseCfg,
-    simulations: simulationsFor(inputs.size, baseCfg.fdrQ, baseCfg.simulations),
+    // Enough draws that the smallest p-value can clear the pooled correction.
+    simulations: simulationsFor(inputs.size + earlier.length, baseCfg.fdrQ, baseCfg.simulations),
   };
 
   // Stage 1
   const metrics = new Map<string, TraderMetrics>();
   for (const [wallet, input] of inputs) metrics.set(wallet, computeMetrics(input, cfg));
-  const pValues = [...metrics.values()]
-    .map((m) => m.mcPValue)
-    .filter((p): p is number => p !== null);
+  // Only wallets with enough post-pick bets are tested; the rest are Candidates.
+  const pValues = [
+    ...[...metrics.values()]
+      .filter((m) => (m.nHoldout ?? Infinity) >= cfg.minResolved)
+      .map((m) => m.mcPValue)
+      .filter((p): p is number => p !== null),
+    ...earlier,
+  ];
   const ctx = {
     mcPThreshold: benjaminiHochbergThreshold(pValues, cfg.fdrQ),
     candidates: pValues.length,
@@ -374,11 +426,12 @@ export async function scoreAll(
   const prelim = new Map<string, ScoreResult>();
   for (const [wallet, m] of metrics) prelim.set(wallet, scoreTrader(m, cfg, ctx));
 
-  // Stage 2: shortlist = everyone who would pass or be watchlisted apart from copy ROI.
+  // Stage 2: shortlist = everyone who would pass, be a Candidate or be watchlisted apart
+  // from copy ROI.
   const shortlist = [...prelim.entries()]
     .filter(([, r]) => {
       const failed = r.checks.filter((c) => !c.ok && c.code !== "copy_roi");
-      return failed.length === 0 || r.tier === "watchlist";
+      return failed.length === 0 || r.tier === "watchlist" || r.tier === "candidate";
     })
     .sort((a, b) => b[1].score - a[1].score)
     .slice(0, opts.shortlistSize)
@@ -417,6 +470,20 @@ export async function scoreAll(
       });
   }
 
+  // When each wallet was checked: the first check starts its holdout (kept once set), the
+  // last one drives the rotation's re-check cadence and cool-down.
+  const checked = new Date(now * 1000);
+  for (const part of chunk(wallets, 500)) {
+    await db
+      .update(traders)
+      .set({
+        firstCheckedAt: sql`coalesce(${traders.firstCheckedAt}, ${checked.toISOString()}::timestamptz)`,
+        lastCheckedAt: checked,
+        marketsAtCheck: sql`${traders.marketsTraded}`,
+      })
+      .where(inArray(traders.wallet, part));
+  }
+
   const tiers = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.tier] = (acc[r.tier] ?? 0) + 1;
     return acc;
@@ -427,5 +494,6 @@ export async function scoreAll(
     shortlisted: shortlist.length,
     verified: (tiers.verified ?? 0) + (tiers.elite ?? 0),
     rejected: rows.filter((r) => r.tier === "rejected").map((r) => r.wallet),
+    candidates: rows.filter((r) => r.tier === "candidate").map((r) => r.wallet),
   };
 }

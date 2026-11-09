@@ -58,6 +58,7 @@ beforeEach(async () => {
   await db.delete(jobRuns);
   vi.mocked(discover.discoverCandidates).mockResolvedValue({
     wallets: WALLETS,
+    ranked: WALLETS,
     boards: 1,
     seen: WALLETS.length,
     kept: WALLETS.length,
@@ -72,6 +73,7 @@ beforeEach(async () => {
     shortlisted: 0,
     verified: 0,
     rejected: [],
+    candidates: [],
   });
   vi.mocked(backtest.recordMonthlySelections).mockResolvedValue({
     month: "2026-11",
@@ -100,6 +102,21 @@ describe("daily job health", () => {
     expect(backtest.recordMonthlySelections).not.toHaveBeenCalled();
     expect(backfill.prunePositions).not.toHaveBeenCalled();
     expect(await succeededToday(db, "daily")).toBe(false);
+  });
+
+  it("scores only today's rotation picks, and prunes Candidates along with rejected traders", async () => {
+    // Designs #3/#8: candidates keep no position history between checks (storage).
+    vi.mocked(score.scoreAll).mockResolvedValue({
+      scored: 6,
+      shortlisted: 0,
+      verified: 0,
+      rejected: [WALLETS[0]],
+      candidates: [WALLETS[1]],
+    });
+    const stats = await runJob(db, "daily", (log) => dailyJob(db, cfg, opts, log));
+    expect(vi.mocked(score.scoreAll).mock.calls[0][4]).toEqual(WALLETS);
+    expect(backfill.prunePositions).toHaveBeenCalledWith(db, [WALLETS[0], WALLETS[1]]);
+    expect(stats.rotation).toMatchObject({ fresh: 6, recheck: 0 });
   });
 
   const failFirst = (n: number) =>

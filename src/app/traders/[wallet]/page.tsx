@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { ScoreCheck } from "@/lib/db/schema";
+import { positionsNote } from "@/lib/explain";
 import {
   cents,
   num,
@@ -246,7 +247,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
             <CardContent className="px-4 sm:px-6">
               {positions.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
-                  Position history is only kept for shortlisted traders.
+                  {positionsNote(score?.tier, positions.length)}
                 </p>
               ) : (
                 <Table className="sm:min-w-[640px]">

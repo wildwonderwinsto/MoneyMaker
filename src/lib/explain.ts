@@ -291,3 +291,16 @@ export function explain(opts: {
       return { title: "Decision", body: [opts.reason] };
   }
 }
+
+/**
+ * What the trader page says when it has no positions to show. Candidates and rejected
+ * traders keep no position history between checks (storage); it's downloaded again at
+ * their next check. Null when there are positions.
+ */
+export function positionsNote(tier: string | null | undefined, positions: number): string | null {
+  if (positions > 0) return null;
+  if (tier === "candidate") {
+    return "Candidate: history isn't stored between checks; it reloads at the next check (about weekly).";
+  }
+  return "Position history is only kept for followed, Verified, Elite and Watchlist traders.";
+}

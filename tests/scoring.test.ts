@@ -170,3 +170,40 @@ describe("verification of fixture traders", () => {
     expect(scoreTrader(a, cfg, ctx).score).toBe(scoreTrader(b, cfg, ctx).score);
   });
 });
+
+describe("forward holdout (owner decision 2026-11-08, design #8)", () => {
+  // Skill is tested only on bets opened after the trader was first picked: selection used
+  // their earlier profits, so testing those again lets plain luck look like skill.
+  it("tests skill only on bets opened at or after the first check", () => {
+    const t = steadyGrinder();
+    const entries = t.positions.map((p) => p.firstEntryAt!).sort((a, b) => a - b);
+    const from = entries[Math.floor(entries.length / 2)];
+    const later = t.positions.filter((p) => p.firstEntryAt! >= from);
+    const m = computeMetrics({ ...t, holdoutFrom: from }, cfg);
+    const expected = skillZ(later, cfg);
+    expect(m.nHoldout).toBe(expected.n);
+    expect(m.zSkill).toBeCloseTo(expected.z!, 10);
+    expect(computeMetrics(t, cfg).nHoldout).toBeNull(); // no holdout = old behaviour
+  });
+
+  it("a trader passing everything but without enough post-pick bets is a Candidate", () => {
+    const t = steadyGrinder();
+    const m = computeMetrics({ ...t, holdoutFrom: t.now }, cfg); // first picked today
+    const r = scoreTrader(m, cfg, ctx);
+    expect(m.nHoldout).toBe(0);
+    expect(r.checks.find((c) => c.code === "holdout_sample")).toMatchObject({
+      ok: false,
+      value: 0,
+      threshold: cfg.minResolved,
+    });
+    expect(r.tier).toBe("candidate");
+    expect(r.passed).toBe(false);
+  });
+
+  it("with enough post-pick bets the normal tiers apply again", () => {
+    const t = steadyGrinder();
+    const r = scoreTrader(computeMetrics({ ...t, holdoutFrom: 0 }, cfg), cfg, ctx);
+    expect(["verified", "elite"]).toContain(r.tier);
+    expect(r.checks.find((c) => c.code === "holdout_sample")?.ok).toBe(true);
+  });
+});

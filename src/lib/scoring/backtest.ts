@@ -105,6 +105,9 @@ export function asOf(input: MetricsInput, at: number): MetricsInput {
     ...input,
     now: at,
     copyReplays: null,
+    // Re-derived picks are formed at `at` from earlier data only; the live forward holdout
+    // (bets since a wallet's first check, which is after `at`) doesn't apply here.
+    holdoutFrom: null,
     // Today's last-trade time would leak the future; fall back to positions.
     activity: { ...input.activity, lastTradeAt: null },
     // Known by `at` once the trader's last event on it (sell, claim, settlement) came

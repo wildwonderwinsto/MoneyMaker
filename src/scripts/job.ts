@@ -67,12 +67,15 @@ async function main() {
       await runJob(db, "discover", (log) => discoverCandidates(db, cfg, discoverOpts, log));
       break;
     case "backfill":
-      await runJob(db, "backfill", async (log) => backfillMany(db, await staleWallets(db), log));
+      await runJob(db, "backfill", async (log) => {
+        const { succeeded, ...stats } = await backfillMany(db, await staleWallets(db), log);
+        return { ...stats, succeeded: succeeded.size };
+      });
       break;
     case "score":
       await runJob(db, "score", async (log) => {
-        const { rejected, ...stats } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
-        return { ...stats, rejected: rejected.length };
+        const { rejected, candidates, ...stats } = await scoreAll(db, cfg, DEFAULT_SCORE, log);
+        return { ...stats, rejected: rejected.length, candidates: candidates.length };
       });
       break;
     case "backtest":

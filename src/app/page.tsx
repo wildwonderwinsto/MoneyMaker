@@ -13,6 +13,7 @@ import { getJobRuns, getTierCounts, getTraderList, type TierFilter } from "@/lib
 const CATEGORIES = ["all", "politics", "sports", "crypto", "economics", "tech", "culture"];
 const TIERS: Array<{ value: TierFilter; label: string; adminOnly?: boolean }> = [
   { value: "verified", label: "Verified" },
+  { value: "candidate", label: "Candidates" },
   { value: "watchlist", label: "Watchlist" },
   { value: "followed", label: "Following" },
   { value: "all", label: "Everyone" },
@@ -97,6 +98,7 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
               >
                 {t.label}
                 {t.value === "verified" && ` (${verifiedCount})`}
+                {t.value === "candidate" && ` (${counts.candidate ?? 0})`}
                 {t.value === "watchlist" && ` (${counts.watchlist ?? 0})`}
                 {t.value === "hidden" && ` (${hidden})`}
               </NavTab>

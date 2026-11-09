@@ -152,8 +152,22 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
       m.daysSinceTrade,
       cfg.maxDaysSinceTrade,
     ),
+    // Forward holdout: skill is tested only on bets placed after the trader was first picked.
+    ...(m.nHoldout === null || m.nHoldout === undefined
+      ? []
+      : [
+          atLeast(
+            "holdout_sample",
+            `At least ${cfg.minResolved} resolved bets since first picked (skill is tested on these only)`,
+            m.nHoldout,
+            cfg.minResolved,
+          ),
+        ]),
   ];
 }
+
+/** Skill checks that wait for enough post-pick bets (they can't count against the tier yet). */
+const PENDING_WITHOUT_HOLDOUT = new Set(["holdout_sample", "skill_z", "skill_luck"]);
 
 /** Weighted composite (0–100). Higher = stronger, more reliable edge. */
 export function compositeScore(m: TraderMetrics): number {
@@ -175,9 +189,14 @@ export function scoreTrader(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
   const passed = failed.length === 0;
   const score = compositeScore(m);
 
+  // Too few bets since first picked: the skill checks are pending, judged on the rest.
+  const pending = failed.some((c) => c.code === "holdout_sample");
+  const counted = pending ? failed.filter((c) => !PENDING_WITHOUT_HOLDOUT.has(c.code)) : failed;
+
   let tier: ScoreTier;
   if (passed) tier = score >= cfg.eliteScore ? "elite" : "verified";
-  else if (failed.length <= 3 && !failed.some((c) => HARD_CHECKS.has(c.code))) tier = "watchlist";
+  else if (pending && counted.length === 0) tier = "candidate";
+  else if (counted.length <= 3 && !counted.some((c) => HARD_CHECKS.has(c.code))) tier = "watchlist";
   else tier = "rejected";
 
   return { tier, score, passed, checks };

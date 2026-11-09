@@ -1,6 +1,6 @@
 /** Small presentational building blocks shared by every page. */
 import { cn } from "cn";
-import { BadgeCheck, CircleSlash, Crown, Eye } from "lucide-react";
+import { BadgeCheck, CircleSlash, Crown, Eye, Hourglass } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import type { ScoreTier } from "@/lib/db/schema";
@@ -30,6 +30,7 @@ export function PageHeader({
 const TIER_META: Record<ScoreTier, { label: string; icon: typeof Crown; className: string }> = {
   elite: { label: "Elite", icon: Crown, className: "bg-primary/10 text-primary" },
   verified: { label: "Verified", icon: BadgeCheck, className: "bg-yes/10 text-yes" },
+  candidate: { label: "Candidate", icon: Hourglass, className: "bg-muted text-foreground" },
   watchlist: { label: "Watchlist", icon: Eye, className: "bg-muted text-muted-foreground" },
   rejected: { label: "Rejected", icon: CircleSlash, className: "bg-no/10 text-no" },
 };

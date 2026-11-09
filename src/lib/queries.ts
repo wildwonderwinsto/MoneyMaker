@@ -41,7 +41,7 @@ import { getRiskConfig, getScoringConfig } from "@/lib/settings";
 
 export type TierFilter = ScoreTier | "all" | "followed" | "hidden";
 
-const TIER_ORDER = sql`case ${traderScores.tier} when 'elite' then 0 when 'verified' then 1 when 'watchlist' then 2 else 3 end`;
+const TIER_ORDER = sql`case ${traderScores.tier} when 'elite' then 0 when 'verified' then 1 when 'candidate' then 2 when 'watchlist' then 3 else 4 end`;
 
 export async function getTraderList(opts: {
   tier?: TierFilter;

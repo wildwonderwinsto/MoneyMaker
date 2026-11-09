@@ -97,7 +97,10 @@ export async function discoverCandidates(
   opts: DiscoverOptions,
   log: (m: string) => void,
 ): Promise<{
+  /** Top `maxCandidates` by quality (the standalone `discover` command). */
   wallets: string[];
+  /** Every qualified wallet, best first: the daily rotation picks from this. */
+  ranked: string[];
   boards: number;
   seen: number;
   kept: number;
@@ -222,6 +225,7 @@ export async function discoverCandidates(
       xUsername: c.xUsername,
       verifiedBadge: c.verified,
       tradeCount,
+      marketsTraded: s.trades,
       joinedAt: toDate(joinDate),
       bestRank: c.bestRank,
       leaderboardCategory: c.category,
@@ -250,6 +254,7 @@ export async function discoverCandidates(
           xUsername: sql`excluded.x_username`,
           verifiedBadge: sql`excluded.verified_badge`,
           tradeCount: sql`excluded.trade_count`,
+          marketsTraded: sql`excluded.markets_traded`,
           joinedAt: sql`excluded.joined_at`,
           bestRank: sql`excluded.best_rank`,
           leaderboardCategory: sql`coalesce(excluded.leaderboard_category, ${traders.leaderboardCategory})`,
@@ -262,5 +267,6 @@ export async function discoverCandidates(
   log(
     `pre-filter kept ${kept.length}/${candidates.length}; using top ${wallets.length} by quality`,
   );
-  return { wallets, boards, seen: pool.size, kept: wallets.length, fromHolders };
+  const ranked = kept.map((k) => k.c.wallet);
+  return { wallets, ranked, boards, seen: pool.size, kept: wallets.length, fromHolders };
 }
