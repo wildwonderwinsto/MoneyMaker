@@ -20,25 +20,36 @@ import { backtestJob, recordedWallets, recordMonthlySelections } from "./backtes
 import { DEFAULT_DISCOVER, discoverCandidates, type DiscoverOptions } from "./discover";
 import { DEFAULT_ROTATION, pickDailyWallets } from "./rotation";
 import { DEFAULT_SCORE, scoreAll } from "./score";
+import { httpStats } from "@/lib/http";
+
 import { JobFailure, mapPool } from "./util";
 
-export async function backfillMany(db: Db, wallets: string[], log: (m: string) => void) {
+type Step = <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+
+export async function backfillMany(
+  db: Db,
+  wallets: string[],
+  log: (m: string) => void,
+  step: Step = (_name, fn) => fn(),
+) {
   let done = 0;
   let failed = 0;
   let positions = 0;
   const succeeded = new Set<string>();
-  await mapPool(wallets, 3, async (wallet) => {
-    try {
-      const r = await backfillTrader(db, wallet, DEFAULT_BACKFILL);
-      positions += r.positions;
-      succeeded.add(wallet);
-    } catch (err) {
-      failed++;
-      log(`backfill failed for ${wallet}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (++done % 25 === 0) log(`backfilled ${done}/${wallets.length}`);
-  });
-  const resolved = await resolveMarkets(db, log);
+  await step("backfill", () =>
+    mapPool(wallets, 3, async (wallet) => {
+      try {
+        const r = await backfillTrader(db, wallet, DEFAULT_BACKFILL);
+        positions += r.positions;
+        succeeded.add(wallet);
+      } catch (err) {
+        failed++;
+        log(`backfill failed for ${wallet}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (++done % 25 === 0) log(`backfilled ${done}/${wallets.length}`);
+    }),
+  );
+  const resolved = await step("market resolution", () => resolveMarkets(db, log));
   return { traders: wallets.length, failed, positions, ...resolved, succeeded };
 }
 
@@ -54,7 +65,38 @@ export async function dailyJob(
   opts: DailyOptions,
   log: (m: string) => void,
 ) {
-  const discovered = await discoverCandidates(db, cfg, opts.discover, log);
+  // Per-step wall time and API traffic, logged and kept in the run's stats.
+  const timings: Record<
+    string,
+    {
+      seconds: number;
+      requests: number;
+      rateLimited: number;
+      retries: number;
+      retryWaitSeconds: number;
+    }
+  > = {};
+  const step = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+    const t0 = Date.now();
+    const h0 = httpStats();
+    try {
+      return await fn();
+    } finally {
+      const h = httpStats();
+      const t = {
+        seconds: Math.round((Date.now() - t0) / 100) / 10,
+        requests: h.requests - h0.requests,
+        rateLimited: h.rateLimited - h0.rateLimited,
+        retries: h.retries - h0.retries,
+        retryWaitSeconds: Math.round((h.retryWaitMs - h0.retryWaitMs) / 100) / 10,
+      };
+      timings[name] = t;
+      log(
+        `⏱ ${name}: ${t.seconds}s, ${t.requests} API calls, ${t.rateLimited} × 429, ${t.retries} retries (${t.retryWaitSeconds}s waiting)`,
+      );
+    }
+  };
+  const discovered = await step("discovery", () => discoverCandidates(db, cfg, opts.discover, log));
   // Followed traders need a fresh usual stake for sizing; the rotation always includes them.
   const followed = (
     await db.select({ wallet: follows.wallet }).from(follows).where(eq(follows.enabled, true))
@@ -77,7 +119,7 @@ export async function dailyJob(
   // Traders picked in recorded months are judged by the backtest: keep them backfilled.
   const recorded = await recordedWallets(db, opts.backtest.months);
   const wallets = [...new Set([...rotation.wallets, ...recorded])];
-  const { succeeded, ...backfill } = await backfillMany(db, wallets, log);
+  const { succeeded, ...backfill } = await backfillMany(db, wallets, log, step);
   // Mostly stale history (more than half failed, owner's cut-off): scoring it, recording
   // picks and pruning would look like a good run and make the backup runs skip.
   if (wallets.length > 0 && backfill.failed * 2 > wallets.length) {
@@ -87,12 +129,14 @@ export async function dailyJob(
     );
   }
   // Only today's checks with fresh history are scored (J1: no re-scoring frozen history).
-  const { rejected, candidates, ...score } = await scoreAll(
-    db,
-    cfg,
-    DEFAULT_SCORE,
-    log,
-    rotation.wallets.filter((w) => succeeded.has(w)),
+  const { rejected, candidates, ...score } = await step("scoring", () =>
+    scoreAll(
+      db,
+      cfg,
+      DEFAULT_SCORE,
+      log,
+      rotation.wallets.filter((w) => succeeded.has(w)),
+    ),
   );
   // A shrunken run (e.g. a quick local --limit 5) must not stand in for the real one: it
   // records no picks, and `full: false` keeps it from counting as today's run.
@@ -102,7 +146,7 @@ export async function dailyJob(
     opts.backtest.topK === DEFAULT_BACKTEST.topK;
   const selections = full ? await recordMonthlySelections(db, opts.backtest.topK, log) : null;
   if (!full) log("smaller than a default run: this month's picks not recorded");
-  const backtest = await backtestJob(db, cfg, opts.backtest, log);
+  const backtest = await step("backtest", () => backtestJob(db, cfg, opts.backtest, log));
   // Candidates keep no history between checks either (storage); it reloads when due.
   const pruned = opts.prune ? await prunePositions(db, [...rejected, ...candidates]) : 0;
   log(
@@ -113,6 +157,7 @@ export async function dailyJob(
     `removed ${cleaned.markets} orphan markets, ${cleaned.trades} old trades, ${cleaned.snapshots} old leaderboard rows`,
   );
   return {
+    timings,
     full,
     discovered: discovered.ranked.length,
     rotation: { recheck: rotation.recheck, followed: rotation.followed, fresh: rotation.fresh },

@@ -93,6 +93,10 @@ export interface FetchJsonOptions<S extends z.ZodType> {
   timeoutMs?: number;
 }
 
+/** Process-wide request counters (daily job timing logs). */
+const stats = { requests: 0, rateLimited: 0, retries: 0, retryWaitMs: 0 };
+export const httpStats = () => ({ ...stats });
+
 const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
 /**
  * Longest single wait between retries, also for a server's Retry-After: a 429 asking for an
@@ -115,11 +119,15 @@ export async function fetchJson<S extends z.ZodType>(
       });
 
     let res: Response;
+    stats.requests++;
     try {
       res = limiter ? await limiter.run(doFetch) : await doFetch();
     } catch (err) {
       if (attempt >= retries) throw err;
-      await sleep(backoffMs(attempt++));
+      const wait = backoffMs(attempt++);
+      stats.retries++;
+      stats.retryWaitMs += wait;
+      await sleep(wait);
       continue;
     }
 
@@ -140,6 +148,9 @@ export async function fetchJson<S extends z.ZodType>(
     );
     limiter?.pause(wait);
     attempt++;
+    stats.retries++;
+    stats.retryWaitMs += wait;
+    if (res.status === 429) stats.rateLimited++;
     await sleep(wait);
   }
 }

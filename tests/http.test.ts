@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { buildUrl, fetchJson, HttpError, RateLimiter, retryAfterMs, SchemaError } from "@/lib/http";
+import {
+  buildUrl,
+  fetchJson,
+  HttpError,
+  httpStats,
+  RateLimiter,
+  retryAfterMs,
+  SchemaError,
+} from "@/lib/http";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -65,6 +73,22 @@ describe("fetchJson", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("counts requests, 429s, retries and time spent waiting (daily job timing logs)", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "retry-after": "0" } }),
+      )
+      .mockResolvedValueOnce(new Response("oops", { status: 503, headers: { "retry-after": "0" } }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    const before = httpStats();
+    await fetchJson("https://x.test/a", { schema });
+    const after = httpStats();
+    expect(after.requests - before.requests).toBe(3);
+    expect(after.rateLimited - before.rateLimited).toBe(1);
+    expect(after.retries - before.retries).toBe(2);
+    expect(after.retryWaitMs - before.retryWaitMs).toBeGreaterThanOrEqual(0);
   });
 
   it("does not retry 4xx client errors", async () => {
