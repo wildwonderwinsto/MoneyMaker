@@ -135,9 +135,9 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
         },
         copyReplays: null,
         now,
-        // Forward holdout: skill counts only bets opened since the first check (today, for a
-        // wallet checked for the first time, so it starts as a Candidate).
-        holdoutFrom: toEpoch(p.firstCheckedAt) ?? now,
+        // Forward holdout: skill counts only bets opened since the first check, or since the
+        // wallet was re-selected (today, for a first check, so it starts as a Candidate).
+        holdoutFrom: toEpoch(p.holdoutFrom ?? p.firstCheckedAt) ?? now,
       });
     }
     // When each market actually settled (the backtest must not know outcomes early).

@@ -114,7 +114,7 @@ export async function dailyJob(
     earlyReturnMarkets: cfg.minResolved,
   });
   log(
-    `rotation: ${rotation.recheck} re-checks (${rotation.followed} followed) + ${rotation.fresh} new`,
+    `rotation: ${rotation.recheck} re-checks (${rotation.followed} followed) + ${rotation.fresh} new (${rotation.returning} returning, fresh holdout)`,
   );
   // Traders picked in recorded months are judged by the backtest: keep them backfilled.
   const recorded = await recordedWallets(db, opts.backtest.months);

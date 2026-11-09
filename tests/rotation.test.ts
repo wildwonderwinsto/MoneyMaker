@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { Db } from "@/lib/db/client";
-import { follows, hiddenTraders, traders, traderScores } from "@/lib/db/schema";
+import { follows, hiddenTraders, traderPositions, traders, traderScores } from "@/lib/db/schema";
 import { DEFAULT_DISCOVER } from "@/lib/jobs/discover";
 import { DEFAULT_ROTATION, pickDailyWallets } from "@/lib/jobs/rotation";
 import { DEFAULT_SCORE, recentTestedEValues, scoreAll } from "@/lib/jobs/score";
@@ -22,7 +22,8 @@ beforeAll(async () => {
 });
 afterAll(async () => close());
 beforeEach(async () => {
-  for (const t of [traderScores, follows, hiddenTraders, traders]) await db.delete(t);
+  for (const t of [traderScores, traderPositions, follows, hiddenTraders, traders])
+    await db.delete(t);
 });
 
 const NOW = new Date("2026-11-08T10:00:00Z");
@@ -74,6 +75,44 @@ describe("pickDailyWallets", () => {
   it("defaults: 120 re-checks in 210 daily slots (owner, 2026-11-09)", () => {
     expect(DEFAULT_ROTATION.recheckCap).toBe(120);
     expect(DEFAULT_DISCOVER.maxCandidates).toBe(210);
+  });
+
+  it("a re-selected wallet's holdout starts at re-selection, not its first check (R3)", async () => {
+    // Checked 60 days ago, rejected, back after the 30-day cool-down. The bets since its
+    // first check are what got it re-picked, so they can't be its holdout.
+    const now = Date.now();
+    const ago = (d: number) => new Date(now - d * 86_400_000);
+    await db.insert(traders).values({
+      wallet: "0xreturn",
+      firstCheckedAt: ago(60),
+      lastCheckedAt: ago(40),
+      lastBackfillAt: ago(0),
+      marketsTraded: 100,
+      marketsAtCheck: 100,
+    });
+    await db.insert(traderPositions).values(
+      Array.from({ length: 80 }, (_, i) => ({
+        wallet: "0xreturn",
+        conditionId: `c${i}`,
+        tokenId: `t${i}`,
+        status: "CLOSED",
+        avgPrice: 0.5,
+        size: 0,
+        sharesBought: 100,
+        realizedPnl: i % 2 ? 50 : -50,
+        won: i % 2 === 1,
+        firstEntryAt: ago(50 - i * 0.5),
+        lastActivityAt: ago(49 - i * 0.5),
+      })),
+    );
+    const r = await pickDailyWallets(db, ["0xreturn"], opts, new Date(now));
+    expect(r.wallets).toEqual(["0xreturn"]);
+    await scoreAll(db, { ...cfg, simulations: 100 }, DEFAULT_SCORE, () => {}, ["0xreturn"]);
+    const [row] = await db.select().from(traderScores).where(eq(traderScores.wallet, "0xreturn"));
+    // Fresh holdout: none of the 80 earlier bets count (with the first check: all 80 did).
+    expect((row.metrics as { nHoldout: number }).nHoldout).toBe(0);
+    const [t] = await db.select().from(traders).where(eq(traders.wallet, "0xreturn"));
+    expect(t.firstCheckedAt!.getTime()).toBe(ago(60).getTime()); // first check kept
   });
 
   it("never drops a followed trader, even past the cap", async () => {

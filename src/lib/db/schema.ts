@@ -54,6 +54,12 @@ export const traders = pgTable("traders", {
   lastBackfillAt: tsz(),
   /** First full check (scoring). Skill is tested only on bets opened after it (holdout). */
   firstCheckedAt: tsz(),
+  /**
+   * Start of the current holdout when the wallet was re-selected by discovery after a
+   * cool-down (audit R3): the bets that got it picked again can't be its test. Null = the
+   * holdout starts at `firstCheckedAt`.
+   */
+  holdoutFrom: tsz(),
   /** Last full check: drives the rotation's re-check cadence and 30-day cool-down. */
   lastCheckedAt: tsz(),
   /** Distinct markets traded (user-stats `trades`), refreshed by every discovery run. */

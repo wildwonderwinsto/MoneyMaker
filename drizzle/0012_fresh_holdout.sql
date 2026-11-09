@@ -1,0 +1,1 @@
+ALTER TABLE "traders" ADD COLUMN "holdout_from" timestamp with time zone;

@@ -8,7 +8,8 @@
  * 2. The rest of the `slots` go to the best-ranked wallets from today's discovery that
  *    haven't been checked, or whose 30-day cool-down ended, or who traded at least
  *    `earlyReturnMarkets` new markets since their last check (a fresh sample that could
- *    change the verdict).
+ *    change the verdict). A wallet picked here that was checked before is re-selected: its
+ *    holdout restarts today (audit R3), so the bets that got it re-picked aren't its test.
  */
 import { desc, eq, inArray } from "drizzle-orm";
 
@@ -45,7 +46,13 @@ export async function pickDailyWallets(
   ranked: string[],
   opts: RotationOptions,
   now = new Date(),
-): Promise<{ wallets: string[]; followed: number; recheck: number; fresh: number }> {
+): Promise<{
+  wallets: string[];
+  followed: number;
+  recheck: number;
+  fresh: number;
+  returning: number;
+}> {
   const hidden = new Set(
     (await db.select({ w: hiddenTraders.wallet }).from(hiddenTraders)).map((r) => r.w),
   );
@@ -106,6 +113,7 @@ export async function pickDailyWallets(
     ).map((r) => [r.w, r]),
   );
   const cooled = now.getTime() - opts.cooldownDays * DAY_MS;
+  const returning: string[] = [];
   for (const w of ranked) {
     if (picked.length >= opts.slots) break;
     if (hidden.has(w) || picked.includes(w)) continue;
@@ -114,7 +122,22 @@ export async function pickDailyWallets(
       !t?.checked ||
       t.checked.getTime() < cooled ||
       (t.markets ?? 0) - (t.atCheck ?? t.markets ?? 0) >= opts.earlyReturnMarkets;
-    if (eligible) take(w);
+    if (eligible) {
+      take(w);
+      if (t?.checked) returning.push(w);
+    }
   }
-  return { wallets: picked, followed: followed.length, recheck, fresh: picked.length - recheck };
+  for (let i = 0; i < returning.length; i += 500) {
+    await db
+      .update(traders)
+      .set({ holdoutFrom: now })
+      .where(inArray(traders.wallet, returning.slice(i, i + 500)));
+  }
+  return {
+    wallets: picked,
+    followed: followed.length,
+    recheck,
+    fresh: picked.length - recheck,
+    returning: returning.length,
+  };
 }
