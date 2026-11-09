@@ -37,8 +37,14 @@ A walk-forward **backtest** asks: "if I had picked traders this way each month, 
 what was known then, how would copying them have done?" It compares against simply copying
 last month's top earners. Past months re-derived from today's leaderboards only contain
 traders who survived, so each month's real picks (top Verified traders and the month
-leaderboard's top earners) are also **recorded as they happen**. Recorded months replace the
-re-derived ones, building a track record with no survivorship bias.
+leaderboard's top earners, bots left out) are also **recorded as they happen**. Recorded
+months replace the re-derived ones; once a month is over, each pick's month is rebuilt from
+their own activity. That removes survivorship from the picks, but it is still an estimate:
+pick-months cut short by the 6,000-row cap are left out (and counted on the page), shares
+still held are valued once at rebuild time, each bet is booked in the month it was opened,
+and the copy delay is modelled as slippage. Re-derived months are weaker still: survivorship
+can favour the strategy and the baseline differently, so even the gap between them is only
+a rough guide.
 
 ## How copying works (paper)
 

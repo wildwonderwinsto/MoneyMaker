@@ -191,11 +191,13 @@ async function BacktestContent() {
           <p>
             For months not marked <em>recorded</em>, the traders tested come from{" "}
             <em>today&apos;s</em> leaderboards, so everyone in the pool is someone who survived
-            (survivorship bias). That inflates both lines; the useful signal is the{" "}
-            <strong>gap between them</strong>, plus how often the strategy sat in cash. Months
-            marked <em>recorded</em> use the picks saved at the time (the top Verified traders and
-            the month leaderboard&apos;s top earners), so they have no such bias. Paper trading
-            forward is the other real test.
+            (survivorship bias). That inflates both lines, and not necessarily equally, so even the
+            gap between them is only a rough guide. Months marked <em>recorded</em> use the picks
+            saved at the time (the top Verified traders and the month leaderboard&apos;s top
+            earners, bots left out), rebuilt from their own activity once the month is over — free
+            of survivorship in the picks, but still estimates (partial months left out, held shares
+            valued at rebuild time, bets booked in the month opened). Paper trading forward is the
+            real test.
           </p>
         </div>
       </div>

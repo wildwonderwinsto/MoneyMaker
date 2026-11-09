@@ -8,9 +8,11 @@
  * Baseline: the naive approach — copy last month's top-K by realized profit.
  *
  * Known bias (disclosed in the UI): for months nobody recorded, the candidate pool is
- * today's leaderboard, which favors traders who survived. Strategy and baseline share that
- * bias, so the comparison between them is the meaningful number, not the absolute return.
- * Months whose picks were recorded at the time (monthlySelections) have no such bias.
+ * today's leaderboard, which favors traders who survived — not necessarily equally for the
+ * strategy and the baseline, so even the gap between them is only a rough guide (B10).
+ * Months whose picks were recorded at the time (monthlySelections) avoid that selection
+ * bias but remain estimates: partial pick-months are left out, held shares are valued at
+ * rebuild time, bets are booked in the month they were opened, delay is modelled as slippage.
  */
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { DEFAULT_TAKER_FEE_RATE } from "@/lib/polymarket/gamma";
