@@ -19,7 +19,7 @@ on:
       limit:
         description: "Daily full checks (re-checks + new wallets)"
         required: false
-        default: "210"
+        default: "150" # 210 once production storage is freed (owner, 2026-11-09)
 
 concurrency:
   group: daily-scoring
@@ -43,7 +43,7 @@ jobs:
       - run: npm run db:migrate
       - name: Run daily pipeline
         env:
-          LIMIT: ${{ inputs.limit || '210' }} # via env, never inlined into the script
+          LIMIT: ${{ inputs.limit || '150' }} # via env, never inlined into the script
         run: |
           [[ "$LIMIT" =~ ^[0-9]+$ ]] || { echo "limit must be a number"; exit 1; }
           # Scheduled runs skip if today's run already succeeded; manual runs always run.

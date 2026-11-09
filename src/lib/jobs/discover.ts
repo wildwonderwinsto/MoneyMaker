@@ -37,9 +37,9 @@ export interface DiscoverOptions {
 
 export const DEFAULT_DISCOVER: DiscoverOptions = {
   perBoard: 300,
-  // Daily full checks (re-checks + new wallets). 210 = 120 re-checks + 90 new (owner,
-  // 2026-11-09); Candidates' and rejected wallets' positions are pruned after scoring.
-  maxCandidates: 210,
+  // Daily full checks (re-checks + new wallets). 210 = 120 re-checks + 90 new is approved
+  // (owner, 2026-11-09) but held at 150 until production storage is freed and confirmed.
+  maxCandidates: 150,
   timePeriods: ["week", "month", "all"],
   categories: ["overall", "politics", "sports", "crypto", "economics", "tech", "culture"],
   holderMarkets: 40,

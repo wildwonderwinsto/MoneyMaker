@@ -33,7 +33,9 @@ export interface RotationOptions {
  * 2.5 weeks; 60 would be every ~5 weeks.
  */
 export const DEFAULT_ROTATION: Omit<RotationOptions, "earlyReturnMarkets"> = {
-  slots: 210,
+  // 210 approved; held at 150 until production storage is freed and confirmed (owner,
+  // 2026-11-09). With 150, a full re-check queue leaves 30 new wallets a day.
+  slots: 150,
   recheckCap: 120,
   cooldownDays: 30,
   candidateEveryDays: 7,
