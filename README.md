@@ -17,16 +17,18 @@ with fake money first to prove it works.
 The daily job pulls Polymarket's leaderboards (week / month / all-time × categories). It
 downloads each candidate's full position history and runs 16 checks:
 
-| Question            | Check                                                                                                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Real skill or luck? | Wins vs. the win rate their entry prices implied (z-score), plus a Monte Carlo test that re-draws every outcome at random. It's corrected for testing hundreds of traders at once (Benjamini–Hochberg). |
-| One-hit wonder?     | Biggest single win ≤ 25% of all profits, top 3 ≤ 50%                                                                                                                                                    |
-| Consistent?         | ≥ 60% profitable months, profit ≥ 2× worst drawdown, ≥ 50 markets across ≥ 25 events                                                                                                                    |
-| Copyable?           | Still profitable when copied 2 minutes late with slippage; not a bot or market maker; holds long enough                                                                                                 |
-| Still good?         | Profitable in the last 60 days, traded in the last 14 days                                                                                                                                              |
+| Question            | Check                                                                                                                                                                                                                                                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Real skill or luck? | Wins vs. the win rate their entry prices implied, tested only on bets placed **after** the trader was first picked, each event counted once. The test is sequential: it stays valid however often a trader is re-checked, and it's corrected for testing hundreds of traders at once (e-BH, pooled over the last 30 days). |
+| One-hit wonder?     | Biggest single win ≤ 25% of all profits, top 3 ≤ 50%                                                                                                                                                                                                                                                                       |
+| Consistent?         | ≥ 60% profitable months, profit ≥ 2× worst drawdown, ≥ 50 markets across ≥ 25 events                                                                                                                                                                                                                                       |
+| Copyable?           | Still profitable when copied 2 minutes late with slippage; not a bot or market maker; holds long enough                                                                                                                                                                                                                    |
+| Still good?         | Profitable in the last 60 days, traded in the last 14 days                                                                                                                                                                                                                                                                 |
 
-Traders who pass everything are **Verified** (or **Elite** when the score is ≥ 70). Near
-misses go on the **Watchlist**. Each trader's page shows every check and why it passed or
+Traders who pass everything are **Verified** (or **Elite** when the score is ≥ 70). A newly
+picked trader who passes everything else is a **Candidate** while evidence on their new bets
+builds; they're rejected once those bets show an edge below 5 points, or after 180 days
+without proof. Near misses go on the **Watchlist**. Each trader's page shows every check and why it passed or
 failed. All thresholds can be changed in **Settings**.
 
 A walk-forward **backtest** asks: "if I had picked traders this way each month, using only

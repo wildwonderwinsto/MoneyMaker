@@ -4,8 +4,8 @@
  * A seeded population with NO skill at all (every bet wins exactly as often as its price
  * says) is picked the way discovery picks: by profit on leaderboard-like windows at the
  * moment of first check. Each picked wallet is then scored the production way: skill tested
- * only on bets opened after that first check (forward holdout), luck test judged with
- * Benjamini–Hochberg over everyone tested, all 16 checks, copy delay and fees included.
+ * only on bets opened after that first check (forward holdout), sequential skill test judged
+ * with e-BH over everyone tested, all checks, copy delay and fees included.
  * Any zero-skill trader reaching Verified/Elite is a false positive.
  *
  * Without the holdout this population produced 17–23 zero-skill Verified/Elite out of 150
@@ -21,7 +21,7 @@ import {
   type PositionRecord,
 } from "@/lib/scoring/metrics";
 import { scoreTrader } from "@/lib/scoring/score";
-import { benjaminiHochbergThreshold, seededRandom, simulationsFor } from "@/lib/scoring/stats";
+import { eBenjaminiHochbergThreshold, seededRandom, simulationsFor } from "@/lib/scoring/stats";
 
 import {
   PIPELINE_DEFAULTS,
@@ -137,11 +137,11 @@ describe("zero-skill traders don't become Verified/Elite", () => {
     const picked = pick(zeroSkillPopulation(6000, seed), PICKED_AT, 200);
     const cfg = { ...base, simulations: simulationsFor(picked.length, base.fdrQ, 2000) };
     const metrics = picked.map((t) => computeMetrics({ ...t, holdoutFrom: PICKED_AT }, cfg));
-    // Pooled: everyone tested (enough post-pick bets) counts toward the BH correction.
+    // Pooled: everyone tested (enough post-pick bets) counts toward the e-BH correction.
     // (A wallet with too few post-pick bets isn't tested yet, so it isn't counted.)
     const tested = metrics.filter((m) => !((m.nHoldout ?? Infinity) < cfg.minResolved));
-    const ps = tested.map((m) => m.mcPValue).filter((p): p is number => p !== null);
-    const ctx = { mcPThreshold: benjaminiHochbergThreshold(ps, cfg.fdrQ), candidates: ps.length };
+    const es = tested.map((m) => m.eSkill);
+    const ctx = { eThreshold: eBenjaminiHochbergThreshold(es, cfg.fdrQ), candidates: es.length };
     const passed = metrics.filter((m) => scoreTrader(m, cfg, ctx).passed).length;
     expect(picked.length).toBe(200);
     expect(passed).toBeLessThanOrEqual(MAX_FALSE_POSITIVES);
@@ -155,13 +155,12 @@ describe("zero-skill traders don't become Verified/Elite", () => {
  * picked on day 0 and checked on the rotation's schedule. A Rejected trader isn't assumed
  * to be picked again (that needs discovery to rank them into a free slot).
  *
- * Bar (proposed 2026-11-09, owner to confirm): within 180 days at least 50% of the +8
+ * Bar (owner-approved 2026-11-09): within 180 days at least 50% of the +8
  * traders and 25% of the +5 traders reach Verified/Elite. The lowest activity level can't
  * build enough bets in 180 days under any valid test, so 75% is the practical ceiling.
  *
- * KNOWN FAILURE until the skill test is redesigned (audit R2: skill_z rejects at 50 post-pick
- * bets; a +5 edge needs ~320 for z = 2). Today: +5 → 2/40, +8 → 8/40. `it.fails` keeps the
- * check green and turns red the moment the bar is met — then change it to `it`.
+ * Before the sequential skill test (audit R2: skill_z rejected at 50 post-pick bets; a +5
+ * edge needs ~320 for z = 2) only +5 → 2/40 and +8 → 8/40 got through.
  */
 describe("skilled traders can reach Verified/Elite", () => {
   const DAY0 = Date.UTC(2026, 4, 1) / 1000;
@@ -186,7 +185,7 @@ describe("skilled traders can reach Verified/Elite", () => {
     expect(results.every((r) => r.checks > 0)).toBe(true);
   });
 
-  it.fails.each([0.05, 0.08] as const)("+%s edge: enough are found within 180 days", (edge) => {
+  it.each([0.05, 0.08] as const)("+%s edge: enough are found within 180 days", (edge) => {
     const group = results.filter((r) => r.edge === edge);
     const found = group.filter((r) => r.foundDay !== null && r.foundDay <= HORIZON).length;
     expect(found / group.length).toBeGreaterThanOrEqual(MIN_FOUND[edge]);

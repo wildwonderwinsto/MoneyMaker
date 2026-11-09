@@ -51,11 +51,12 @@ const PCT_CHECKS = new Set([
 
 function checkValue(c: ScoreCheck): string {
   if (c.value === null) return "not measured";
-  if (c.code === "skill_luck") return `p = ${c.value.toExponential(1)}`;
+  if (c.code === "skill" || c.code === "no_edge") return `evidence ×${num(c.value, 1)}`;
+  if (c.code === "candidate_age") return `${num(c.value, 0)} days`;
   if (c.code === "hold_time") return `${num(c.value, 1)} h`;
   if (c.code === "active") return `${num(c.value, 1)} days ago`;
   if (PCT_CHECKS.has(c.code)) return pct(c.value, 1);
-  return num(c.value, c.code === "skill_z" || c.code === "recovery" ? 2 : 0);
+  return num(c.value, c.code === "recovery" ? 2 : 0);
 }
 
 export default function TraderPage({ params }: PageProps<"/traders/[wallet]">) {

@@ -5,13 +5,16 @@
 import type { ScoreCheck, ScoreTier } from "@/lib/db/schema";
 
 import type { ScoringConfig } from "./config";
-import type { TraderMetrics } from "./metrics";
+import { NO_EDGE_EVIDENCE, type TraderMetrics } from "./metrics";
 import { clamp, normalCdf } from "./stats";
 
 export interface ScoreContext {
-  /** Benjamini–Hochberg p-value threshold for this scoring run (0 = nothing significant). */
-  mcPThreshold: number;
-  /** Number of traders tested in this run (shown in the label). */
+  /**
+   * e-BH bar on the sequential skill evidence across everyone tested (pooled over the
+   * last 30 days in the daily job); Infinity = nobody passes.
+   */
+  eThreshold: number;
+  /** Number of traders tested (shown in the label). */
   candidates: number;
 }
 
@@ -23,7 +26,15 @@ export interface ScoreResult {
 }
 
 /** Failing any of these is disqualifying even for the watchlist. */
-const HARD_CHECKS = new Set(["top_market", "bot_activity", "both_sides", "hold_time", "skill_z"]);
+const HARD_CHECKS = new Set([
+  "top_market",
+  "bot_activity",
+  "both_sides",
+  "hold_time",
+  "skill",
+  "no_edge",
+  "candidate_age",
+]);
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
@@ -65,18 +76,12 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
       m.nEvents,
       cfg.minEvents,
     ),
-    atLeast(
-      "skill_z",
-      `Wins more often than prices predicted (z ≥ ${cfg.minZ})`,
-      m.zSkill,
-      cfg.minZ,
-    ),
     {
-      code: "skill_luck",
-      label: `Profit beats random luck after testing ${ctx.candidates} traders (FDR ${pct(cfg.fdrQ)})`,
-      value: m.mcPValue,
-      threshold: ctx.mcPThreshold,
-      ok: m.mcPValue !== null && ctx.mcPThreshold > 0 && m.mcPValue <= ctx.mcPThreshold,
+      code: "skill",
+      label: `Wins more often than prices predicted, each event counted once (sequential test over ${ctx.candidates} traders, FDR ${pct(cfg.fdrQ)})`,
+      value: m.eSkill,
+      threshold: Number.isFinite(ctx.eThreshold) ? ctx.eThreshold : null,
+      ok: (m.nHoldout ?? Infinity) >= cfg.minResolved && m.eSkill >= ctx.eThreshold,
     },
     atLeast(
       "roi",
@@ -162,12 +167,28 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
             m.nHoldout,
             cfg.minResolved,
           ),
+          // A Candidate stays one while evidence builds; these two end it (audit R2, R6).
+          atMost(
+            "no_edge",
+            `Not shown to have an edge below ${Math.round(cfg.minEdge * 100)} points (95% confident)`,
+            m.eNoEdge,
+            NO_EDGE_EVIDENCE,
+          ),
+          {
+            code: "candidate_age",
+            label: `Skill proven within ${cfg.maxCandidateDays} days of being picked`,
+            value: m.holdoutDays,
+            threshold: cfg.maxCandidateDays,
+            ok:
+              (m.holdoutDays ?? 0) < cfg.maxCandidateDays ||
+              ((m.nHoldout ?? 0) >= cfg.minResolved && m.eSkill >= ctx.eThreshold),
+          },
         ]),
   ];
 }
 
-/** Skill checks that wait for enough post-pick bets (they can't count against the tier yet). */
-const PENDING_WITHOUT_HOLDOUT = new Set(["holdout_sample", "skill_z", "skill_luck"]);
+/** Skill checks that are still building evidence (they can't count against the tier yet). */
+const PENDING_SKILL = new Set(["holdout_sample", "skill"]);
 
 /** Weighted composite (0–100). Higher = stronger, more reliable edge. */
 export function compositeScore(m: TraderMetrics): number {
@@ -189,9 +210,14 @@ export function scoreTrader(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
   const passed = failed.length === 0;
   const score = compositeScore(m);
 
-  // Too few bets since first picked: the skill checks are pending, judged on the rest.
-  const pending = failed.some((c) => c.code === "holdout_sample");
-  const counted = pending ? failed.filter((c) => !PENDING_WITHOUT_HOLDOUT.has(c.code)) : failed;
+  // Skill not proven yet, but not disproven or timed out either: the skill checks are
+  // pending (Candidate), and the tier is judged on the rest.
+  const pending =
+    m.nHoldout !== null &&
+    m.nHoldout !== undefined &&
+    failed.some((c) => PENDING_SKILL.has(c.code)) &&
+    !failed.some((c) => c.code === "no_edge" || c.code === "candidate_age");
+  const counted = pending ? failed.filter((c) => !PENDING_SKILL.has(c.code)) : failed;
 
   let tier: ScoreTier;
   if (passed) tier = score >= cfg.eliteScore ? "elite" : "verified";

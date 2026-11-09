@@ -68,7 +68,10 @@ export function seriesFromPositions(positions: PositionRecord[], start: number):
 }
 
 /** Bets near 50/50 and wins 68% of the time, every month, small even sizes. */
-export const steadyGrinder = (seed = 7) => {
+// Seed 1 realizes the intended ~+17-point edge (z 4.4). Seed 7 realized only +10 over 160
+// bets, which the sequential skill test (2026-11-09) doesn't yet call proven; see
+// "an unlucky draw of a skilled trader stays a Candidate" in tests/scoring.test.ts.
+export const steadyGrinder = (seed = 1) => {
   const t = generateTrader({
     wallet: "0xgrinder",
     n: 160,

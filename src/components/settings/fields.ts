@@ -497,14 +497,6 @@ export const SCORING_GROUPS: Group[] = [
     fields: [
       {
         kind: "number",
-        name: "minZ",
-        label: "Skill score (z)",
-        help: "How many standard deviations their win rate beats what prices implied. 2 ≈ only a 2.5% chance of luck.",
-        unit: "number",
-        step: 0.1,
-      },
-      {
-        kind: "number",
         name: "fdrQ",
         label: "False-discovery rate",
         help: "When testing hundreds of traders, some look skilled by chance. This caps that share among those who pass.",
@@ -515,13 +507,22 @@ export const SCORING_GROUPS: Group[] = [
       },
       {
         kind: "number",
-        name: "simulations",
-        label: "Luck simulations",
-        help: "Random re-draws of every outcome used to measure luck. More is more precise but slower.",
+        name: "minEdge",
+        label: "Smallest edge worth copying",
+        help: "Win-rate points above what prices implied. A Candidate whose bets since being picked show (95% confident) a smaller edge is rejected.",
+        unit: "pct",
+        min: 1,
+        max: 30,
+        step: 1,
+      },
+      {
+        kind: "number",
+        name: "maxCandidateDays",
+        label: "Longest wait as a Candidate",
+        help: "Days a picked trader has to prove their skill on new bets before they are rejected.",
         unit: "number",
-        min: 100,
-        max: 20000,
-        step: 100,
+        min: 30,
+        step: 1,
       },
       {
         kind: "number",

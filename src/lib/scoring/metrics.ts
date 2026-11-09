@@ -79,6 +79,12 @@ export interface TraderMetrics {
   mcPValue: number | null;
   /** Resolved bets the skill tests used under the forward holdout; null = no holdout. */
   nHoldout: number | null;
+  /** Sequential skill evidence on the same bets, each event once (see skillEvidence). */
+  eSkill: number;
+  /** Sequential evidence that the edge is below minEdge. */
+  eNoEdge: number;
+  /** Days since the holdout began; null = no holdout. */
+  holdoutDays: number | null;
   roi: number | null;
   roiShrunk: number | null;
   topMarketShare: number | null;
@@ -143,6 +149,74 @@ export function skillZ(positions: PositionRecord[], cfg: ScoringConfig): SkillRe
     expectedWins,
     z: variance > 0 ? (wins - expectedWins) / Math.sqrt(variance) : null,
     edgePerBet: bets.length ? mean(bets.map((p) => (p.won ? 1 : 0) - p.avgPrice)) : null,
+  };
+}
+
+/** Edges (win-probability points) the sequential skill test looks for, equally weighted. */
+const SKILL_EDGES = [0.03, 0.05, 0.08, 0.12];
+/** Bets of one event that settle within this long of its first settlement count together. */
+const EVENT_WINDOW = DAY;
+/** Confidence that the edge is below `minEdge` before a Candidate is Rejected (1 / 0.05). */
+export const NO_EDGE_EVIDENCE = 20;
+
+export interface SkillEvidence {
+  /** Evidence of skill (≥ 1 favours skill); anytime-valid, so re-checking doesn't inflate it. */
+  eSkill: number;
+  /** Evidence that the edge is below `minEdge` (≥ NO_EDGE_EVIDENCE → Rejected). */
+  eNoEdge: number;
+  /** Events counted (each event once). */
+  events: number;
+}
+
+/**
+ * Sequential skill test (owner decision 2026-11-09, design S2; audit R2).
+ *
+ * For each bet at price p, how much likelier its result was if the trader wins p + δ of
+ * the time than if they win p (no skill): q/p for a win, (1−q)/(1−p) for a loss. Under no
+ * skill each ratio averages exactly 1, so the running product (averaged over several δ)
+ * stays below 1/α with probability ≥ 1−α however often it is checked — unlike a z-score,
+ * which a weekly re-check would eventually push over any fixed bar by luck.
+ *
+ * Bets in one event can move together (same game, one winner of many), so each event
+ * counts once: its factor is the average of its bets' ratios, which still averages 1 under
+ * no skill whatever the dependence. An event's factor is fixed once it has settled for
+ * EVENT_WINDOW (later bets on it are ignored), so the evidence only grows by new events.
+ * `eNoEdge` is the mirror test of "the edge is at least minEdge" against "no edge".
+ */
+export function skillEvidence(
+  positions: PositionRecord[],
+  cfg: ScoringConfig,
+  now: number,
+): SkillEvidence {
+  const settledAt = (p: PositionRecord) => p.resolvedAt ?? p.lastActivityAt ?? p.firstEntryAt ?? 0;
+  const byEvent = new Map<string, PositionRecord[]>();
+  for (const p of positions) {
+    if (p.won === null || p.avgPrice < cfg.minEntryPrice || p.avgPrice > cfg.maxEntryPrice)
+      continue;
+    const key = p.eventId ?? p.conditionId;
+    byEvent.set(key, [...(byEvent.get(key) ?? []), p]);
+  }
+  const ratio = (p: PositionRecord, d: number) => {
+    const q = Math.min(0.99, p.avgPrice + d);
+    return p.won ? q / p.avgPrice : (1 - q) / (1 - p.avgPrice);
+  };
+  const logSkill = SKILL_EDGES.map(() => 0);
+  let logNoEdge = 0;
+  let events = 0;
+  for (const bets of byEvent.values()) {
+    const first = Math.min(...bets.map(settledAt));
+    if (first + EVENT_WINDOW > now) continue; // not final yet
+    const counted = bets.filter((p) => settledAt(p) <= first + EVENT_WINDOW);
+    const avg = (f: (p: PositionRecord) => number) =>
+      counted.reduce((a, p) => a + f(p), 0) / counted.length;
+    SKILL_EDGES.forEach((d, j) => (logSkill[j] += Math.log(avg((p) => ratio(p, d)))));
+    logNoEdge += Math.log(avg((p) => 1 / ratio(p, cfg.minEdge)));
+    events++;
+  }
+  return {
+    eSkill: logSkill.reduce((a, l) => a + Math.exp(l), 0) / SKILL_EDGES.length,
+    eNoEdge: Math.exp(logNoEdge),
+    events,
   };
 }
 
@@ -335,6 +409,7 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
       ? positions
       : positions.filter((p) => p.firstEntryAt !== null && p.firstEntryAt >= holdoutFrom);
   const skill = skillZ(tested, cfg);
+  const evidence = skillEvidence(tested, cfg, now);
   const conc = concentration(closed);
   const months = monthlyPnl(pnlSeries);
   const activeMonths = months.filter((m) => Math.abs(m.pnl) > 1e-6);
@@ -386,6 +461,9 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     edgePerBet: skill.edgePerBet,
     mcPValue: monteCarloPValue(tested, cfg, input.wallet),
     nHoldout: holdoutFrom === null ? null : skill.n,
+    eSkill: evidence.eSkill,
+    eNoEdge: evidence.eNoEdge,
+    holdoutDays: holdoutFrom === null ? null : Math.max(0, (now - holdoutFrom) / DAY),
     roi,
     roiShrunk: roi === null ? null : roi * (nClosed / (nClosed + cfg.roiShrinkK)),
     topMarketShare: conc.topMarketShare,

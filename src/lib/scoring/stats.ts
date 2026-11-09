@@ -37,6 +37,20 @@ export function benjaminiHochbergThreshold(pValues: number[], q: number): number
 }
 
 /**
+ * e-BH (Wang & Ramdas 2022): the Benjamini–Hochberg procedure for e-values. With m tests,
+ * the k largest pass when the k-th largest is ≥ m/(k·q); this returns that bar for the
+ * largest such k (Infinity = nothing passes). Controls the false discovery rate at q
+ * under any dependence between the tests.
+ */
+export function eBenjaminiHochbergThreshold(eValues: number[], q: number): number {
+  const sorted = eValues.filter((e) => !Number.isNaN(e)).sort((a, b) => b - a);
+  const m = sorted.length;
+  let threshold = Infinity;
+  for (let k = 1; k <= m; k++) if (q > 0 && sorted[k - 1] >= m / (k * q)) threshold = m / (k * q);
+  return threshold;
+}
+
+/**
  * Simulations needed for the luck test to be passable at all. A Monte Carlo p-value can't
  * go below 1/(simulations + 1), while Benjamini–Hochberg needs the best of `candidates`
  * at or below q/candidates. With fewer simulations nobody can pass, however skilled.

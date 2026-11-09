@@ -17,14 +17,13 @@
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "@/lib/scoring/config";
 import {
   computeMetrics,
-  skillZ,
   type CopyReplay,
   type MetricsInput,
   type PositionRecord,
   type TraderMetrics,
 } from "@/lib/scoring/metrics";
 import { scoreTrader, type ScoreResult } from "@/lib/scoring/score";
-import { benjaminiHochbergThreshold, seededRandom, simulationsFor } from "@/lib/scoring/stats";
+import { eBenjaminiHochbergThreshold, seededRandom } from "@/lib/scoring/stats";
 
 export const DAY = 86_400;
 
@@ -174,7 +173,7 @@ export function inputAt(t: SimTrader, now: number, holdoutFrom: number): Metrics
 
 export interface PipelineOptions {
   horizonDays: number;
-  /** Earlier tested wallets in the pooled luck test (zero skill → uniform p-values). */
+  /** Earlier tested zero-skill wallets in the pooled skill test (e-BH). */
   pooledNull: number;
   candidateEveryDays: number;
   cooldownDays: number;
@@ -223,16 +222,15 @@ export function runPipeline(
   cfg: ScoringConfig = DEFAULT_SCORING_CONFIG,
   o: PipelineOptions = PIPELINE_DEFAULTS,
 ): PipelineResult[] {
-  const full = {
-    ...cfg,
-    simulations: simulationsFor(o.pooledNull + traders.length, cfg.fdrQ, cfg.simulations),
-  };
-  const nullP = Array.from({ length: o.pooledNull }, (_, i) => (i + 0.5) / o.pooledNull);
+  // The Monte Carlo luck p-value is display-only now, so keep it cheap.
+  const full = { ...cfg, simulations: 100 };
+  // Earlier tested zero-skill wallets: evidence 1 (= none; under no skill it averages 1).
+  const nullE = Array.from({ length: o.pooledNull }, () => 1);
   const state = traders.map((t) => ({
     t,
     next: 0,
     from: day0,
-    tested: null as { day: number; p: number } | null,
+    tested: null as { day: number; e: number } | null,
     res: {
       wallet: t.wallet,
       edge: t.edge,
@@ -248,37 +246,26 @@ export function runPipeline(
     const now = day0 + day * DAY;
     const due = state.filter((s) => s.res.foundDay === null && s.next <= day);
     if (due.length === 0) continue;
-    const today: Array<{ s: (typeof state)[number]; m: TraderMetrics | null }> = [];
+    const today: Array<{ s: (typeof state)[number]; m: TraderMetrics }> = [];
     for (const s of due) {
-      const input = inputAt(s.t, now, s.from);
-      const held = input.positions.filter((p) => p.firstEntryAt! >= s.from);
-      const z = skillZ(held, cfg);
-      // skill_z is a hard check: once testable and below minZ the tier is Rejected whatever
-      // the luck test says, so skip the (slow) Monte Carlo for these.
-      if (z.n >= cfg.minResolved && (z.z ?? -Infinity) < cfg.minZ) {
-        today.push({ s, m: null });
-        s.tested = { day, p: 1 };
-      } else {
-        const m = computeMetrics(input, full);
-        today.push({ s, m });
-        if ((m.nHoldout ?? 0) >= cfg.minResolved && m.mcPValue !== null)
-          s.tested = { day, p: m.mcPValue };
-      }
+      const m = computeMetrics(inputAt(s.t, now, s.from), full);
+      today.push({ s, m });
+      if ((m.nHoldout ?? 0) >= cfg.minResolved) s.tested = { day, e: m.eSkill };
     }
     const pooled = [
-      ...nullP,
-      ...state.filter((s) => s.tested && s.tested.day > day - 30).map((s) => s.tested!.p),
+      ...nullE,
+      ...state.filter((s) => s.tested && s.tested.day > day - 30).map((s) => s.tested!.e),
     ];
     const ctx = {
-      mcPThreshold: benjaminiHochbergThreshold(pooled, cfg.fdrQ),
+      eThreshold: eBenjaminiHochbergThreshold(pooled, cfg.fdrQ),
       candidates: pooled.length,
     };
     for (const { s, m } of today) {
-      const r: ScoreResult | null = m ? scoreTrader(m, cfg, ctx) : null;
+      const r: ScoreResult = scoreTrader(m, cfg, ctx);
       s.res.checks++;
-      s.res.lastTier = r?.tier ?? "rejected";
-      s.res.lastFailed = r ? r.checks.filter((c) => !c.ok).map((c) => c.code) : ["skill_z"];
-      if (r?.passed) {
+      s.res.lastTier = r.tier;
+      s.res.lastFailed = r.checks.filter((c) => !c.ok).map((c) => c.code);
+      if (r.passed) {
         s.res.foundDay = day;
         continue;
       }

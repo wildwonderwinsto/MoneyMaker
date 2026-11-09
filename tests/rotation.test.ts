@@ -9,7 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/lib/db/client";
 import { follows, hiddenTraders, traders, traderScores } from "@/lib/db/schema";
 import { DEFAULT_ROTATION, pickDailyWallets } from "@/lib/jobs/rotation";
-import { DEFAULT_SCORE, recentTestedPValues, scoreAll } from "@/lib/jobs/score";
+import { DEFAULT_SCORE, recentTestedEValues, scoreAll } from "@/lib/jobs/score";
 import { DEFAULT_SCORING_CONFIG as cfg } from "@/lib/scoring/config";
 
 import { createTestDb } from "./helpers/db";
@@ -112,8 +112,8 @@ describe("scoring with rotation", () => {
     expect(again.firstCheckedAt!.getTime()).toBe(first);
   });
 
-  it("pools the luck test over everyone tested in the last 30 days", async () => {
-    const row = (wallet: string, days: number, p: number, nHoldout: number) => ({
+  it("pools the skill test over everyone tested in the last 30 days", async () => {
+    const row = (wallet: string, days: number, e: number | undefined, nHoldout: number) => ({
       wallet,
       tier: "rejected" as const,
       score: 0,
@@ -121,16 +121,17 @@ describe("scoring with rotation", () => {
       nResolved: 0,
       nEvents: 0,
       computedAt: daysAgo(days),
-      metrics: { mcPValue: p, nHoldout },
+      metrics: e === undefined ? { mcPValue: 0.01, nHoldout } : { eSkill: e, nHoldout },
     });
     await db.insert(traderScores).values([
-      row("0xa", 3, 0.2, 60),
+      row("0xa", 3, 5, 60),
       row("0xb", 29, 0.4, 80),
-      row("0xold", 31, 0.01, 90), // outside the 30-day window
-      row("0xthin", 2, 0.3, 10), // too few post-pick bets: not tested
+      row("0xold", 31, 900, 90), // outside the 30-day window
+      row("0xthin", 2, 3, 10), // too few post-pick bets: not tested
       row("0xtoday", 1, 0.5, 70), // re-checked today: today's value is used instead
+      row("0xlegacy", 4, undefined, 70), // scored before the sequential test: counts as 1
     ]);
-    const ps = await recentTestedPValues(db, daysAgo(30), new Set(["0xtoday"]), cfg.minResolved);
-    expect(ps.sort()).toEqual([0.2, 0.4]);
+    const es = await recentTestedEValues(db, daysAgo(30), new Set(["0xtoday"]), cfg.minResolved);
+    expect(es.sort((x, y) => x - y)).toEqual([0.4, 1, 5]);
   });
 });

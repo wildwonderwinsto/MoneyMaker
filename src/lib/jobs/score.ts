@@ -33,7 +33,7 @@ import {
   type TraderMetrics,
 } from "@/lib/scoring/metrics";
 import { scoreTrader, type ScoreResult } from "@/lib/scoring/score";
-import { benjaminiHochbergThreshold, simulationsFor } from "@/lib/scoring/stats";
+import { eBenjaminiHochbergThreshold } from "@/lib/scoring/stats";
 
 import { chunk, mapPool, toDate, toEpoch } from "./util";
 
@@ -348,11 +348,12 @@ function scoreRow(wallet: string, m: TraderMetrics, r: ScoreResult, category: st
 const POOLED_BH_DAYS = 30;
 
 /**
- * Luck-test p-values of wallets tested in the window (enough post-pick bets), except those
- * re-checked now. Testing more wallets means more lucky passes, so Benjamini–Hochberg is
- * applied over everyone tested recently, not just today's batch.
+ * Sequential skill evidence of wallets tested in the window (enough post-pick bets), except
+ * those re-checked now. Testing more wallets means more lucky passes, so e-BH is applied
+ * over everyone tested recently, not just today's batch. Rows scored before the sequential
+ * test have no evidence stored; they count as 1 (no evidence), so they still count as tests.
  */
-export async function recentTestedPValues(
+export async function recentTestedEValues(
   db: Db,
   since: Date,
   exclude: ReadonlySet<string>,
@@ -364,9 +365,9 @@ export async function recentTestedPValues(
     .where(gte(traderScores.computedAt, since));
   return rows
     .filter((r) => !exclude.has(r.wallet))
-    .map((r) => r.metrics as { mcPValue?: number | null; nHoldout?: number | null })
-    .filter((m) => typeof m.mcPValue === "number" && (m.nHoldout ?? 0) >= minResolved)
-    .map((m) => m.mcPValue as number);
+    .map((r) => r.metrics as { eSkill?: number | null; nHoldout?: number | null })
+    .filter((m) => (m.nHoldout ?? 0) >= minResolved)
+    .map((m) => (typeof m.eSkill === "number" ? m.eSkill : 1));
 }
 
 export async function scoreAll(
@@ -394,34 +395,32 @@ export async function scoreAll(
     );
   const wallets = walletRows.map((r) => r.wallet);
   const { inputs, meta } = await loadInputs(db, wallets, now);
-  const earlier = await recentTestedPValues(
+  const earlier = await recentTestedEValues(
     db,
     new Date((now - POOLED_BH_DAYS * 86_400) * 1000),
     new Set(wallets),
     baseCfg.minResolved,
   );
-  const cfg = {
-    ...baseCfg,
-    // Enough draws that the smallest p-value can clear the pooled correction.
-    simulations: simulationsFor(inputs.size + earlier.length, baseCfg.fdrQ, baseCfg.simulations),
-  };
+  // The Monte Carlo luck p-value is kept for display only; it no longer decides a tier.
+  const cfg = baseCfg;
 
   // Stage 1
   const metrics = new Map<string, TraderMetrics>();
   for (const [wallet, input] of inputs) metrics.set(wallet, computeMetrics(input, cfg));
   // Only wallets with enough post-pick bets are tested; the rest are Candidates.
-  const pValues = [
+  const eValues = [
     ...[...metrics.values()]
       .filter((m) => (m.nHoldout ?? Infinity) >= cfg.minResolved)
-      .map((m) => m.mcPValue)
-      .filter((p): p is number => p !== null),
+      .map((m) => m.eSkill),
     ...earlier,
   ];
   const ctx = {
-    mcPThreshold: benjaminiHochbergThreshold(pValues, cfg.fdrQ),
-    candidates: pValues.length,
+    eThreshold: eBenjaminiHochbergThreshold(eValues, cfg.fdrQ),
+    candidates: eValues.length,
   };
-  log(`stage 1: ${metrics.size} traders, BH p-threshold ${ctx.mcPThreshold.toExponential(2)}`);
+  log(
+    `stage 1: ${metrics.size} traders, ${eValues.length} tested, e-BH bar ${ctx.eThreshold.toExponential(2)}`,
+  );
 
   const prelim = new Map<string, ScoreResult>();
   for (const [wallet, m] of metrics) prelim.set(wallet, scoreTrader(m, cfg, ctx));

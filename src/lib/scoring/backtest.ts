@@ -17,7 +17,7 @@ import { DEFAULT_TAKER_FEE_RATE } from "@/lib/polymarket/gamma";
 import type { ScoringConfig } from "./config";
 import { computeMetrics, type MetricsInput, type PositionRecord } from "./metrics";
 import { scoreTrader } from "./score";
-import { benjaminiHochbergThreshold, mean, simulationsFor } from "./stats";
+import { eBenjaminiHochbergThreshold, mean, simulationsFor } from "./stats";
 
 const DAY = 86_400;
 
@@ -170,10 +170,10 @@ function simulatedPicks(
 ): { strategy: string[]; baseline: string[] } {
   const formation = traders.map((t) => asOf(t, start));
   const metrics = formation.map((f) => computeMetrics(f, cfg));
-  const pValues = metrics.map((m) => m.mcPValue).filter((p): p is number => p !== null);
+  const eValues = metrics.map((m) => m.eSkill);
   const ctx = {
-    mcPThreshold: benjaminiHochbergThreshold(pValues, cfg.fdrQ),
-    candidates: pValues.length,
+    eThreshold: eBenjaminiHochbergThreshold(eValues, cfg.fdrQ),
+    candidates: eValues.length,
   };
 
   // Copy-ROI can't be measured historically; its effect is modelled via slippage.

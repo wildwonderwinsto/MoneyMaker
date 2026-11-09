@@ -8,6 +8,8 @@ import {
   drawdownStats,
   monthlyPnl,
   skillZ,
+  type MetricsInput,
+  type PositionRecord,
 } from "@/lib/scoring/metrics";
 import { scoreTrader } from "@/lib/scoring/score";
 import {
@@ -25,7 +27,8 @@ import {
   steadyGrinder,
 } from "./fixtures/traders";
 
-const ctx = { mcPThreshold: 0.05, candidates: 100 };
+// One test at p = 0.05 is the same bar as sequential evidence ≥ 1/0.05 = 20.
+const ctx = { eThreshold: 20, candidates: 100 };
 const failedCodes = (r: ReturnType<typeof scoreTrader>) =>
   r.checks.filter((c) => !c.ok).map((c) => c.code);
 
@@ -145,7 +148,7 @@ describe("verification of fixture traders", () => {
     const m = computeMetrics(favoriteBuyer(), cfg);
     const r = scoreTrader(m, cfg, ctx);
     expect(m.winRate!).toBeGreaterThan(0.9);
-    expect(failedCodes(r)).toContain("skill_z");
+    expect(failedCodes(r)).toContain("skill"); // was skill_z: the skill check is now sequential
     expect(r.passed).toBe(false);
   });
 
@@ -207,6 +210,21 @@ describe("forward holdout (owner decision 2026-11-08, design #8)", () => {
     expect(r.checks.find((c) => c.code === "holdout_sample")?.ok).toBe(true);
   });
 
+  it("an unlucky draw of a skilled trader stays a Candidate (evidence still building)", () => {
+    // Seed 7: +10 points over 160 post-pick bets, z 2.53. A single-look z test would pass it;
+    // the sequential test (valid however often it is re-checked) wants more evidence, and
+    // nothing shows the edge is below minEdge, so it stays a Candidate, not Rejected.
+    const t = steadyGrinder(7);
+    const from = Math.min(...t.positions.map((p) => p.firstEntryAt!));
+    const m = computeMetrics({ ...t, holdoutFrom: from }, cfg); // all 160 bets post-pick
+    const r = scoreTrader({ ...m, holdoutDays: 100 }, cfg, ctx); // 100 days into candidacy
+    expect(m.nHoldout).toBe(160);
+    expect(m.eSkill).toBeGreaterThan(1);
+    expect(r.checks.find((c) => c.code === "skill")?.ok).toBe(false);
+    expect(r.checks.find((c) => c.code === "no_edge")?.ok).toBe(true);
+    expect(r.tier).toBe("candidate");
+  });
+
   it("while skill is pending, Watchlist allows 1 failed check, not 3", () => {
     // Owner decision (2026-11-08): pending skill checks don't count, so the old 3-miss rule
     // put 104 of 150 traders on the Watchlist.
@@ -221,5 +239,82 @@ describe("forward holdout (owner decision 2026-11-08, design #8)", () => {
     expect(scoreTrader({ ...tested, daysSinceTrade: 100, oosRoi: -0.5 }, cfg, ctx).tier).toBe(
       "watchlist",
     );
+  });
+});
+
+describe("sequential skill test (owner decision 2026-11-09, S2; audit R2, R6)", () => {
+  // A trader whose history passes every non-skill check (seed-1 grinder), plus `bets`
+  // post-pick bets at 50¢ opened after `from`.
+  const withPostPick = (
+    bets: Array<{ won: boolean; event: string }>,
+    daysAfter = 60,
+  ): { input: MetricsInput; from: number } => {
+    const t = steadyGrinder();
+    const from = t.now - daysAfter * 86_400;
+    const pre = t.positions.filter((p) => p.firstEntryAt! < from);
+    const post: PositionRecord[] = bets.map((b, i) => {
+      const entry = from + ((i + 0.5) / bets.length) * (daysAfter - 3) * 86_400;
+      return {
+        conditionId: `post-c${i}`,
+        tokenId: `post-t${i}`,
+        eventId: b.event,
+        category: "sports",
+        avgPrice: 0.5,
+        sharesBought: 200,
+        realizedPnl: 200 * ((b.won ? 1 : 0) - 0.5),
+        unrealizedPnl: 0,
+        closed: true,
+        won: b.won,
+        firstEntryAt: entry,
+        lastActivityAt: entry + 48 * 3600,
+      };
+    });
+    return { input: { ...t, positions: [...pre, ...post], holdoutFrom: from }, from };
+  };
+  const tierOf = (input: MetricsInput) => scoreTrader(computeMetrics(input, cfg), cfg, ctx);
+
+  it("a skilled trader with z < 2 at 60 post-pick bets stays a Candidate (not Rejected)", () => {
+    // 33 of 60 at 50¢ = +5 points, z 0.77: the old hard skill_z check rejected this.
+    const bets = Array.from({ length: 60 }, (_, i) => ({ won: i % 20 < 11, event: `e${i}` }));
+    const { input } = withPostPick(bets);
+    const m = computeMetrics(input, cfg);
+    expect(m.nHoldout).toBe(60);
+    expect(m.zSkill!).toBeLessThan(cfg.minZ);
+    expect(tierOf(input).tier).toBe("candidate");
+  });
+
+  it("bets in the same event count once: 60 bets in 3 events are not 60 wins", () => {
+    // Two events of 20 bets all won, one all lost: 40/60 looks like z 2.58 per bet, but it
+    // is 3 outcomes. Must not be Verified.
+    const bets = Array.from({ length: 60 }, (_, i) => ({
+      won: i < 40,
+      event: `ev${Math.floor(i / 20)}`,
+    }));
+    const { input } = withPostPick(bets);
+    const r = tierOf(input);
+    expect(r.passed).toBe(false);
+    expect(r.tier).toBe("candidate"); // 3 events: evidence still building
+    expect(r.checks.find((c) => c.code === "skill")?.ok).toBe(false);
+  });
+
+  it("a Candidate not proven within maxCandidateDays is Rejected (R6)", () => {
+    // Too few post-pick bets to ever be tested (30, winning 60%, so every other check still
+    // passes), 181 days after the holdout began.
+    const bets = Array.from({ length: 30 }, (_, i) => ({ won: i % 5 < 3, event: `e${i}` }));
+    const { input } = withPostPick(bets, 181);
+    const r = tierOf(input);
+    expect(r.tier).toBe("rejected");
+    expect(cfg.maxCandidateDays).toBe(180);
+    expect(r.checks.find((c) => c.code === "candidate_age")?.ok).toBe(false);
+  });
+
+  it("clear evidence of no edge rejects (futility)", () => {
+    // 700 post-pick bets at 50¢ winning exactly half: no edge at all. At 50¢ the evidence of
+    // "edge below 5 points" grows ×e^0.005 per bet, so ~600 bets reach the bar of 20.
+    const bets = Array.from({ length: 700 }, (_, i) => ({ won: i % 2 === 0, event: `e${i}` }));
+    const { input } = withPostPick(bets, 150);
+    const r = tierOf(input);
+    expect(r.tier).toBe("rejected"); // old code rejected this too (skill_z); now via no_edge
+    expect(r.checks.find((c) => c.code === "no_edge")?.ok).toBe(false);
   });
 });
