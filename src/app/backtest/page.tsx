@@ -59,6 +59,9 @@ async function BacktestContent() {
   }));
   const cashMonths = s.months.filter((m) => m.strategyPicks.length === 0).length;
   const recordedMonths = s.recordedMonths ?? 0;
+  // Recorded picks rebuilt from their own activity (#9); partial = the row cap cut the month.
+  const pickMonths = s.recordedPickMonths ?? 0;
+  const partialPickMonths = s.partialPickMonths ?? 0;
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -115,6 +118,8 @@ async function BacktestContent() {
             Run {timeAgo(run.createdAt)} · {params.traders ?? "?"} traders · last{" "}
             {params.months ?? s.months.length} months
             {recordedMonths > 0 && ` · ${recordedMonths} recorded at the time`}
+            {pickMonths > 0 &&
+              ` · ${partialPickMonths} of ${pickMonths} recorded pick-months partial (${pct(partialPickMonths / pickMonths, 0)}, left out)`}
           </CardDescription>
         </CardHeader>
         <CardContent className="px-4 sm:px-6">

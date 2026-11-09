@@ -1,16 +1,20 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import {
   backtestRuns,
   leaderboardSnapshots,
+  markets,
   monthlySelections,
   traders,
   traderScores,
 } from "@/lib/db/schema";
 import { runBacktest, type BacktestParams, type RecordedPicks } from "@/lib/scoring/backtest";
-import type { ScoringConfig } from "@/lib/scoring/config";
+import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "@/lib/scoring/config";
 
+import { getMidpoints } from "@/lib/polymarket/clob";
+
+import { fetchActivityWindow, isBotLike, rebuildPickMonth, recentProfile } from "./activityHistory";
 import { loadInputs } from "./score";
 
 const monthKey = (d: Date) => d.toISOString().slice(0, 7);
@@ -29,6 +33,8 @@ export async function recordMonthlySelections(
   topK: number,
   log: (m: string) => void,
   now = new Date(),
+  /** Bot check for the baseline (#9): the scoring config's trades-a-day limit. */
+  maxTradesPerDay = DEFAULT_SCORING_CONFIG.maxTradesPerDay,
 ): Promise<{ month: string; strategy: number; baseline: number }> {
   const month = monthKey(now);
   const have = new Set(
@@ -65,7 +71,23 @@ export async function recordMonthlySelections(
         ),
       )
       .orderBy(asc(leaderboardSnapshots.rank));
-    const top = [...new Set(board.map((b) => b.wallet))].slice(0, topK);
+    // Bot-free (#9, owner 2026-11-08): skip wallets whose last 30 days are bots' (too many
+    // trades a day, or mostly redeems / merges / conversions) and take the next on the board.
+    // A failed lookup leaves the baseline unrecorded this run; the next run retries.
+    const top: string[] = [];
+    let skipped = 0;
+    try {
+      for (const wallet of [...new Set(board.map((b) => b.wallet))]) {
+        if (top.length >= topK || top.length + skipped >= 3 * topK) break;
+        const p = await recentProfile(wallet, Math.floor(now.getTime() / 1000));
+        if (isBotLike(p, maxTradesPerDay)) skipped++;
+        else top.push(wallet);
+      }
+    } catch (err) {
+      log(`baseline not recorded (activity lookup failed, retried next run): ${String(err)}`);
+      top.length = 0;
+    }
+    if (skipped) log(`baseline: skipped ${skipped} bot-like wallets on the month board`);
     top.forEach((wallet, i) =>
       rows.push({ month, method: "baseline", wallet, rank: i + 1, recordedAt: now }),
     );
@@ -100,11 +122,95 @@ export async function loadRecordedPicks(
     .orderBy(asc(monthlySelections.rank));
   const out = new Map<string, RecordedPicks>();
   for (const r of rows) {
-    const picks = out.get(r.month) ?? { strategy: [], baseline: [], from: Infinity };
+    const picks: RecordedPicks = out.get(r.month) ?? {
+      strategy: [],
+      baseline: [],
+      from: Infinity,
+      results: {},
+    };
     picks[r.method].push(r.wallet);
     picks.from = Math.min(picks.from, Math.floor(r.recordedAt.getTime() / 1000));
+    if (r.bets !== null && r.staked !== null && r.pnl !== null) {
+      picks.results![`${r.method}:${r.wallet}`] = {
+        bets: r.bets,
+        staked: r.staked,
+        pnl: r.pnl,
+        partial: r.partial ?? false,
+      };
+    }
     out.set(r.month, picks);
   }
+  for (const p of out.values()) if (!Object.keys(p.results ?? {}).length) delete p.results;
+  return out;
+}
+
+/**
+ * Once a recorded month is over, rebuild each pick's month from their own activity (#9) and
+ * store it on the monthly_selections row: bets opened from when the pick was recorded to
+ * the month's end. Still-held shares are valued at the settled payout, else today's price.
+ * Each row is rebuilt once.
+ */
+export async function rebuildRecordedMonths(
+  db: Db,
+  params: BacktestParams,
+  log: (m: string) => void,
+  now = new Date(),
+): Promise<{ rebuilt: number; partial: number }> {
+  const keys = Array.from({ length: params.months }, (_, i) => monthsBack(now, i + 1));
+  const todo = await db
+    .select()
+    .from(monthlySelections)
+    .where(and(inArray(monthlySelections.month, keys), isNull(monthlySelections.bets)));
+  let partial = 0;
+  for (const row of todo) {
+    const [y, m] = row.month.split("-").map(Number);
+    const monthStart = Date.UTC(y, m - 1, 1) / 1000;
+    const end = Date.UTC(y, m, 1) / 1000;
+    const from = Math.max(monthStart, Math.floor(row.recordedAt.getTime() / 1000));
+    const w = await fetchActivityWindow(row.wallet, from, end);
+    const value = await holdValues(db, w.rows);
+    const r = rebuildPickMonth(
+      w.rows,
+      (t) => value.get(t),
+      params.copySlippage,
+      params.takerFeeRate,
+    );
+    if (w.partial) partial++;
+    await db
+      .update(monthlySelections)
+      .set({ coverageStart: new Date(w.coverageStart * 1000), partial: w.partial, ...r })
+      .where(
+        and(
+          eq(monthlySelections.month, row.month),
+          eq(monthlySelections.method, row.method),
+          eq(monthlySelections.wallet, row.wallet),
+        ),
+      );
+  }
+  if (todo.length)
+    log(`rebuilt ${todo.length} recorded pick-months from activity (${partial} partial)`);
+  return { rebuilt: todo.length, partial };
+}
+
+/** Per token: settled payout from the markets table, else today's midpoint. */
+async function holdValues(db: Db, rows: { condition_id: string; token_id?: string | null }[]) {
+  const tokens = [...new Set(rows.map((r) => r.token_id).filter((t): t is string => !!t))];
+  const conditions = [...new Set(rows.map((r) => r.condition_id))];
+  const out = new Map<string, number>();
+  if (conditions.length) {
+    const ms = await db
+      .select({ tokenIds: markets.tokenIds, payouts: markets.payouts, winner: markets.winnerIndex })
+      .from(markets)
+      .where(inArray(markets.conditionId, conditions));
+    for (const m of ms) {
+      m.tokenIds.forEach((t, i) => {
+        const v = m.payouts?.[i] ?? (m.winner === null ? undefined : m.winner === i ? 1 : 0);
+        if (v !== undefined) out.set(t, v);
+      });
+    }
+  }
+  const open = tokens.filter((t) => !out.has(t));
+  if (open.length) for (const [t, p] of await getMidpoints(open)) out.set(t, p);
   return out;
 }
 
@@ -133,6 +239,7 @@ export async function backtestJob(
       .from(traders)
       .where(isNotNull(traders.lastBackfillAt))
   ).map((r) => r.wallet);
+  await rebuildRecordedMonths(db, params, log, new Date(now * 1000));
   const [{ inputs }, recorded] = await Promise.all([
     loadInputs(db, wallets, now),
     loadRecordedPicks(db, params.months, new Date(now * 1000)),

@@ -49,6 +49,19 @@ export interface RecordedPicks {
   baseline: string[];
   /** Epoch seconds the picks were recorded; bets opened earlier in the month don't count. */
   from: number;
+  /**
+   * Rebuilt from each pick's own activity once the month was over (#9), keyed
+   * "method:wallet". When every pick of a method has one, the month uses them instead of
+   * /positions rows; partial ones (row cap cut the window) are left out.
+   */
+  results?: Record<string, PickMonthResult>;
+}
+
+export interface PickMonthResult {
+  bets: number;
+  staked: number;
+  pnl: number;
+  partial: boolean;
 }
 
 export interface BacktestMonth {
@@ -61,6 +74,10 @@ export interface BacktestMonth {
   baselineBets: number;
   /** Picks were recorded that month, not re-derived from today's pool. */
   recorded?: boolean;
+  /** Recorded picks whose rebuilt month was partial (left out of the return). */
+  partialPicks?: number;
+  /** Recorded picks evaluated from their rebuilt activity. */
+  rebuiltPicks?: number;
 }
 
 export interface CurvePoint {
@@ -82,6 +99,9 @@ export interface BacktestResult {
     avgStrategyPicks: number;
     /** Months whose picks were recorded at the time (free of survivorship bias). */
     recordedMonths: number;
+    /** Rebuilt recorded pick-months, and how many of them were partial (#9). */
+    recordedPickMonths: number;
+    partialPickMonths: number;
   };
 }
 
@@ -146,6 +166,27 @@ function portfolioReturn(
     return staked > 0 ? pnl / staked : 0; // idle capital earns 0
   });
   return { ret: perTrader.length ? mean(perTrader) : 0, bets };
+}
+
+/**
+ * A recorded month's return from its picks' rebuilt activity (#9): per pick, copy P&L over
+ * dollars staked (0 if they opened nothing, like idle cash), averaged over picks; partial
+ * pick-months are left out. Null when not every pick has been rebuilt yet.
+ */
+function rebuiltReturn(
+  rec: RecordedPicks | undefined,
+  method: "strategy" | "baseline",
+  picks: string[],
+): { ret: number; bets: number; partial: number; rebuilt: number } | null {
+  const results = picks.map((w) => rec?.results?.[`${method}:${w}`]);
+  if (!picks.length || results.some((r) => r === undefined)) return null;
+  const full = (results as PickMonthResult[]).filter((r) => !r.partial);
+  return {
+    ret: full.length ? mean(full.map((r) => (r.staked > 0 ? r.pnl / r.staked : 0))) : 0,
+    bets: full.reduce((a, r) => a + r.bets, 0),
+    partial: results.length - full.length,
+    rebuilt: results.length,
+  };
 }
 
 function maxDrawdown(curve: CurvePoint[]): number {
@@ -232,8 +273,13 @@ export function runBacktest(
     const from = rec ? Math.max(start, rec.from) : start;
 
     const cost = [params.copySlippage, params.takerFeeRate] as const;
-    const s = portfolioReturn(picks.strategy, byWallet, from, end, ...cost);
-    const b = portfolioReturn(picks.baseline, byWallet, from, end, ...cost);
+    type MethodResult = { ret: number; bets: number; partial?: number; rebuilt?: number };
+    const s: MethodResult =
+      rebuiltReturn(rec, "strategy", picks.strategy) ??
+      portfolioReturn(picks.strategy, byWallet, from, end, ...cost);
+    const b: MethodResult =
+      rebuiltReturn(rec, "baseline", picks.baseline) ??
+      portfolioReturn(picks.baseline, byWallet, from, end, ...cost);
     months.push({
       month: label,
       strategyPicks: picks.strategy,
@@ -243,6 +289,8 @@ export function runBacktest(
       strategyBets: s.bets,
       baselineBets: b.bets,
       recorded: !!rec,
+      partialPicks: (s.partial ?? 0) + (b.partial ?? 0),
+      rebuiltPicks: (s.rebuilt ?? 0) + (b.rebuilt ?? 0),
     });
   }
 
@@ -272,6 +320,8 @@ export function runBacktest(
       baselineMaxDrawdown: maxDrawdown(baselineCurve),
       avgStrategyPicks: mean(months.map((m) => m.strategyPicks.length)),
       recordedMonths: months.filter((m) => m.recorded).length,
+      recordedPickMonths: months.reduce((a, m) => a + (m.rebuiltPicks ?? 0), 0),
+      partialPickMonths: months.reduce((a, m) => a + (m.partialPicks ?? 0), 0),
     },
   };
 }

@@ -461,6 +461,16 @@ export const monthlySelections = pgTable(
     rank: integer().notNull(),
     /** Only bets opened after this count (no look-ahead for mid-month records). */
     recordedAt: createdAt(),
+    /**
+     * Rebuilt from the wallet's own activity once the month is over (#9). Null = not rebuilt
+     * yet. `coverageStart` later than the month's start = the row cap cut the window, so the
+     * pick-month is `partial` and left out of the month's return.
+     */
+    coverageStart: tsz(),
+    partial: boolean(),
+    bets: integer(),
+    staked: doublePrecision(),
+    pnl: doublePrecision(),
   },
   (t) => [primaryKey({ columns: [t.month, t.method, t.wallet] })],
 ).enableRLS();

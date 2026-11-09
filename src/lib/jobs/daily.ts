@@ -144,7 +144,9 @@ export async function dailyJob(
     opts.discover.maxCandidates >= DEFAULT_DISCOVER.maxCandidates &&
     opts.discover.perBoard >= DEFAULT_DISCOVER.perBoard &&
     opts.backtest.topK === DEFAULT_BACKTEST.topK;
-  const selections = full ? await recordMonthlySelections(db, opts.backtest.topK, log) : null;
+  const selections = full
+    ? await recordMonthlySelections(db, opts.backtest.topK, log, new Date(), cfg.maxTradesPerDay)
+    : null;
   if (!full) log("smaller than a default run: this month's picks not recorded");
   const backtest = await step("backtest", () => backtestJob(db, cfg, opts.backtest, log));
   // Candidates keep no history between checks either (storage); it reloads when due.

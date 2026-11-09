@@ -7,7 +7,7 @@ import {
   leaderExits,
   toPositionRecord,
 } from "@/lib/jobs/score";
-import { asOf, copiedBetReturn, runBacktest } from "@/lib/scoring/backtest";
+import { asOf, copiedBetReturn, DEFAULT_BACKTEST, runBacktest } from "@/lib/scoring/backtest";
 import { DEFAULT_SCORING_CONFIG as cfg } from "@/lib/scoring/config";
 import { computeMetrics, copyAdjustedRoi, copyRoiStats } from "@/lib/scoring/metrics";
 
@@ -162,6 +162,38 @@ describe("runBacktest", () => {
     expect(early.summary.recordedMonths).toBe(1);
     // Recorded at the very end of the month: no bet was opened after it, so none count.
     expect(at(nov - 1).months[0].strategyBets).toBe(0);
+  });
+
+  it("recorded months use the picks' rebuilt activity results; partial pick-months are left out (#9)", () => {
+    // The grinder's /positions rows say nothing about these wallets' October; the rebuilt
+    // results do. 0xa made +50% on $200; 0xb's window was cut by the row cap (partial).
+    const params = { ...DEFAULT_BACKTEST, months: 1, topK: 3 };
+    const r = runBacktest(
+      [steadyGrinder(12)],
+      cfg,
+      params,
+      NOW,
+      new Map([
+        [
+          "2026-10",
+          {
+            strategy: ["0xa", "0xb"],
+            baseline: ["0xc"],
+            from: Date.UTC(2026, 9, 1) / 1000,
+            results: {
+              "strategy:0xa": { bets: 4, staked: 200, pnl: 100, partial: false },
+              "strategy:0xb": { bets: 9, staked: 900, pnl: -900, partial: true },
+              "baseline:0xc": { bets: 2, staked: 100, pnl: -10, partial: false },
+            },
+          },
+        ],
+      ]),
+    );
+    expect(r.months[0].strategyReturn).toBeCloseTo(0.5, 10);
+    expect(r.months[0].strategyBets).toBe(4);
+    expect(r.months[0].baselineReturn).toBeCloseTo(-0.1, 10);
+    expect(r.months[0].partialPicks).toBe(1);
+    expect(r.summary).toMatchObject({ recordedPickMonths: 3, partialPickMonths: 1 });
   });
 });
 

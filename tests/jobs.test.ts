@@ -20,7 +20,13 @@ import {
   traderTrades,
 } from "@/lib/db/schema";
 import { backfillTrader, cleanupStorage, prunePositions, typicalStake } from "@/lib/jobs/backfill";
-import { loadRecordedPicks, recordedWallets, recordMonthlySelections } from "@/lib/jobs/backtest";
+import {
+  loadRecordedPicks,
+  rebuildRecordedMonths,
+  recordedWallets,
+  recordMonthlySelections,
+} from "@/lib/jobs/backtest";
+import { DEFAULT_BACKTEST } from "@/lib/scoring/backtest";
 import { loadInputs } from "@/lib/jobs/score";
 import { succeededToday } from "@/lib/jobs/util";
 import * as data from "@/lib/polymarket/data";
@@ -31,7 +37,13 @@ vi.mock("@/lib/polymarket/data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/polymarket/data")>()),
   getPositions: vi.fn(),
   getUserPnl: vi.fn(),
+  getActivity: vi.fn(),
 }));
+const noActivity = () =>
+  vi.mocked(data.getActivity).mockResolvedValue({
+    data: [],
+    pagination: { has_more: false, next_cursor: null },
+  } as never);
 
 describe("backfillTrader", () => {
   it("requests positions newest-first so the cap can't cherry-pick winners", async () => {
@@ -574,6 +586,7 @@ describe("monthly selections (point-in-time picks)", () => {
       })),
     );
     const log = () => {};
+    noActivity(); // neither board wallet is bot-like
     expect(await recordMonthlySelections(db, 10, log, day)).toMatchObject({
       month: "2026-11",
       strategy: 2,
@@ -623,5 +636,143 @@ describe("succeededToday", () => {
     expect(await succeededToday(db, "daily-test", now)).toBe(true);
     // The next UTC day starts fresh.
     expect(await succeededToday(db, "daily-test", new Date("2026-11-06T10:00:00Z"))).toBe(false);
+  });
+});
+
+describe("pick-month rebuild and bot-free baseline (#9)", () => {
+  const act = (o: Partial<data.Activity> & { timestamp: number; type: string }): data.Activity => ({
+    proxy_wallet: "0x",
+    condition_id: "c1",
+    size: 1,
+    usdc_size: 1,
+    transaction_hash: `0xtx${Math.random()}`,
+    price: 0.5,
+    token_id: null,
+    side: null,
+    outcome_index: null,
+    title: null,
+    slug: null,
+    icon: null,
+    event_slug: null,
+    outcome: null,
+    name: null,
+    pseudonym: null,
+    ...o,
+  });
+  const page = (rows: data.Activity[], more = false) =>
+    ({ data: rows, pagination: { has_more: more, next_cursor: more ? "x" : null } }) as never;
+
+  it("skips bot-like wallets on the month board for the baseline and takes the next", async () => {
+    await db.delete(monthlySelections);
+    await db.delete(leaderboardSnapshots);
+    const day = new Date(Date.UTC(2026, 11, 2, 10));
+    const now = day.getTime() / 1000;
+    await db.insert(leaderboardSnapshots).values(
+      ["0xbot", "0xredeemer", "0xhuman"].map((wallet, i) => ({
+        capturedAt: day,
+        timePeriod: "month",
+        category: "overall",
+        sortBy: "PNL",
+        rank: i + 1,
+        wallet,
+        pnl: 1000 - i,
+      })),
+    );
+    vi.mocked(data.getActivity).mockImplementation(async ({ user }) => {
+      if (user === "0xbot")
+        // 250 trades a day (cap reached: 6,000 rows over 24 days)
+        return page(
+          Array.from({ length: 6000 }, (_, i) =>
+            act({ type: "TRADE", timestamp: now - i * 345.6 }),
+          ),
+          true,
+        );
+      if (user === "0xredeemer")
+        // 30 redeems + 10 trades in a month
+        return page(
+          Array.from({ length: 40 }, (_, i) =>
+            act({ type: i < 30 ? "REDEEM" : "TRADE", timestamp: now - i * 3600 }),
+          ),
+        );
+      return page(
+        Array.from({ length: 20 }, (_, i) => act({ type: "TRADE", timestamp: now - i * 86_400 })),
+      );
+    });
+    await recordMonthlySelections(db, 10, () => {}, day, 200);
+    const rows = await db
+      .select()
+      .from(monthlySelections)
+      .where(eq(monthlySelections.method, "baseline"));
+    expect(rows.map((r) => r.wallet)).toEqual(["0xhuman"]);
+  });
+
+  it("rebuilds a finished month's pick from its activity, once, and the backtest reads it", async () => {
+    await db.delete(monthlySelections);
+    await db.insert(monthlySelections).values({
+      month: "2026-10",
+      method: "strategy",
+      wallet: "0xpick",
+      rank: 1,
+      recordedAt: new Date(Date.UTC(2026, 9, 1)),
+    });
+    await db
+      .insert(markets)
+      .values({ conditionId: "c1", question: "won?", tokenIds: ["t1", "t1no"], payouts: [1, 0] })
+      .onConflictDoNothing();
+    const oct = (d: number) => Date.UTC(2026, 9, d) / 1000;
+    vi.mocked(data.getActivity).mockResolvedValue(
+      page([
+        act({
+          type: "REDEEM",
+          condition_id: "c1",
+          token_id: "t1",
+          size: 100,
+          usdc_size: 100,
+          timestamp: oct(20),
+        }),
+        act({ type: "MERGE", condition_id: "c2", size: 10, usdc_size: 10, timestamp: oct(12) }),
+        act({
+          type: "TRADE",
+          side: "BUY",
+          condition_id: "c2",
+          token_id: "t2",
+          size: 10,
+          usdc_size: 5,
+          timestamp: oct(11),
+        }),
+        act({
+          type: "TRADE",
+          side: "BUY",
+          condition_id: "c1",
+          token_id: "t1",
+          size: 100,
+          usdc_size: 50,
+          timestamp: oct(3),
+        }),
+      ]),
+    );
+    const now = new Date(Date.UTC(2026, 10, 5));
+    expect(await rebuildRecordedMonths(db, DEFAULT_BACKTEST, () => {}, now)).toEqual({
+      rebuilt: 1,
+      partial: 0,
+    });
+    const [row] = await db.select().from(monthlySelections);
+    // Only the c1 bet counts (c2 was merged: unknown cost). Leader: $50 → $100 redeemed.
+    const allIn = 0.51 + 0.05 * 0.51 * 0.49;
+    expect(row).toMatchObject({ bets: 1, staked: 50, partial: false });
+    expect(row.pnl!).toBeCloseTo(50 * (2 * (0.5 / allIn) - 1), 6);
+    expect(row.coverageStart!.getTime()).toBe(Date.UTC(2026, 9, 1));
+    // Rebuilt once: a second run fetches nothing.
+    vi.mocked(data.getActivity).mockClear();
+    expect(await rebuildRecordedMonths(db, DEFAULT_BACKTEST, () => {}, now)).toEqual({
+      rebuilt: 0,
+      partial: 0,
+    });
+    expect(data.getActivity).not.toHaveBeenCalled();
+    const picks = await loadRecordedPicks(db, 6, now);
+    expect(picks.get("2026-10")?.results?.["strategy:0xpick"]).toMatchObject({
+      bets: 1,
+      partial: false,
+    });
   });
 });
