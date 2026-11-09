@@ -49,6 +49,8 @@ export interface RecordedPicks {
   baseline: string[];
   /** Epoch seconds the picks were recorded; bets opened earlier in the month don't count. */
   from: number;
+  /** Per method when they were recorded at different times (B1); falls back to `from`. */
+  fromByMethod?: { strategy?: number; baseline?: number };
   /**
    * Rebuilt from each pick's own activity once the month was over (#9), keyed
    * "method:wallet". When every pick of a method has one, the month uses them instead of
@@ -274,17 +276,19 @@ export function runBacktest(
           baseline: rec.baseline.slice(0, params.topK),
         }
       : simulatedPicks(traders, cfg, params.topK, start);
-    // Picks recorded mid-month only get credit for bets opened after they were known.
-    const from = rec ? Math.max(start, rec.from) : start;
+    // Picks recorded mid-month only get credit for bets opened after they were known — each
+    // method from its own recording time (B1).
+    const fromOf = (m: "strategy" | "baseline") =>
+      rec ? Math.max(start, rec.fromByMethod?.[m] ?? rec.from) : start;
 
     const cost = [params.copySlippage, params.takerFeeRate] as const;
     type MethodResult = { ret: number; bets: number; partial?: number; rebuilt?: number };
     const s: MethodResult =
       rebuiltReturn(rec, "strategy", picks.strategy) ??
-      portfolioReturn(picks.strategy, byWallet, from, end, ...cost);
+      portfolioReturn(picks.strategy, byWallet, fromOf("strategy"), end, ...cost);
     const b: MethodResult =
       rebuiltReturn(rec, "baseline", picks.baseline) ??
-      portfolioReturn(picks.baseline, byWallet, from, end, ...cost);
+      portfolioReturn(picks.baseline, byWallet, fromOf("baseline"), end, ...cost);
     months.push({
       month: label,
       strategyPicks: picks.strategy,

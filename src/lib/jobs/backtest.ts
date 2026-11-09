@@ -129,7 +129,12 @@ export async function loadRecordedPicks(
       results: {},
     };
     picks[r.method].push(r.wallet);
-    picks.from = Math.min(picks.from, Math.floor(r.recordedAt.getTime() / 1000));
+    const at = Math.floor(r.recordedAt.getTime() / 1000);
+    picks.from = Math.min(picks.from, at);
+    picks.fromByMethod = {
+      ...picks.fromByMethod,
+      [r.method]: Math.min(picks.fromByMethod?.[r.method] ?? Infinity, at),
+    };
     if (r.bets !== null && r.staked !== null && r.pnl !== null) {
       picks.results![`${r.method}:${r.wallet}`] = {
         bets: r.bets,

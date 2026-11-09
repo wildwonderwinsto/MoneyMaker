@@ -455,3 +455,31 @@ describe("copy-adjusted ROI sample size", () => {
     expect(m.copyAdjRoi!).toBeLessThan(m.copyAdjRoiMean! - 0.5);
   });
 });
+
+describe("B1: each recorded method counts bets from its own recording time", () => {
+  it("a method recorded late in the month gets no credit for bets before its picks existed", () => {
+    // Strategy recorded on Oct 1, baseline only on Oct 31: the baseline's picks didn't exist
+    // for the month's bets, so none count for it.
+    const params = { ...DEFAULT_BACKTEST, months: 1, topK: 3 };
+    const oct = Date.UTC(2026, 9, 1) / 1000;
+    const r = runBacktest(
+      [steadyGrinder(12)],
+      cfg,
+      params,
+      NOW,
+      new Map([
+        [
+          "2026-10",
+          {
+            strategy: ["0xgrinder"],
+            baseline: ["0xgrinder"],
+            from: oct,
+            fromByMethod: { strategy: oct, baseline: Date.UTC(2026, 9, 31) / 1000 },
+          },
+        ],
+      ]),
+    );
+    expect(r.months[0].strategyBets).toBeGreaterThan(0);
+    expect(r.months[0].baselineBets).toBe(0);
+  });
+});

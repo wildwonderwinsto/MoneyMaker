@@ -615,6 +615,8 @@ describe("monthly selections (point-in-time picks)", () => {
       strategy: ["0xb", "0xa"],
       baseline: ["0xtop1", "0xtop2"],
       from: day.getTime() / 1000,
+      // Both methods were recorded in the same run here (B1: each keeps its own time).
+      fromByMethod: { strategy: day.getTime() / 1000, baseline: day.getTime() / 1000 },
     });
   });
 });
