@@ -309,7 +309,12 @@ export async function cleanupStorage(
   tradeRetentionDays = 120,
   // Only the baseline reads snapshots (last 6 h); owner approved 30 days (2026-11-08).
   snapshotRetentionDays = 30,
-): Promise<{ markets: number; trades: number; snapshots: number }> {
+  // Owner, 2026-11-09: Rejected wallets' scores (~2.8 KB each, ~170 new a day). Only the last
+  // 30 days feed the pooled skill test; the cool-down uses traders.last_checked_at; rotation
+  // and the backtest read other tiers. Followed (even paused) and hidden wallets keep theirs
+  // (their pages and the Hidden list join scores).
+  rejectedScoreRetentionDays = 30,
+): Promise<{ markets: number; trades: number; snapshots: number; scores: number }> {
   const orphanMarkets = await db.execute(sql`
     delete from markets m
     where not exists (select 1 from trader_positions p where p.condition_id = m.condition_id)
@@ -331,10 +336,18 @@ export async function cleanupStorage(
       ),
     )
     .returning({ id: leaderboardSnapshots.id });
+  const oldScores = await db.execute(sql`
+    delete from trader_scores s
+    where s.tier = 'rejected'
+      and s.computed_at < ${new Date(Date.now() - rejectedScoreRetentionDays * 86_400_000).toISOString()}::timestamptz
+      and not exists (select 1 from follows f where f.wallet = s.wallet)
+      and not exists (select 1 from hidden_traders h where h.wallet = s.wallet)
+  `);
   return {
     markets: affectedRows(orphanMarkets),
     trades: oldTrades.length,
     snapshots: oldSnapshots.length,
+    scores: affectedRows(oldScores),
   };
 }
 

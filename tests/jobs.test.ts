@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/lib/db/client";
 import {
   follows,
+  hiddenTraders,
   jobRuns,
   leaderboardSnapshots,
   markets,
@@ -419,7 +420,7 @@ describe("storage maintenance", () => {
     expect(await db.select().from(traderPnlDaily)).toHaveLength(0);
 
     const cleaned = await cleanupStorage(db);
-    expect(cleaned).toEqual({ markets: 1, trades: 1, snapshots: 0 });
+    expect(cleaned).toEqual({ markets: 1, trades: 1, snapshots: 0, scores: 0 });
     const left = await db.select({ id: markets.conditionId }).from(markets);
     expect(left.map((m) => m.id)).toEqual(["c-keep"]);
   });
@@ -444,6 +445,43 @@ describe("storage maintenance", () => {
     expect(left.map((r) => r.w)).toContain("0xs29");
     expect(left.map((r) => r.w)).not.toContain("0xs31");
     await db.delete(leaderboardSnapshots);
+  });
+
+  it("drops Rejected wallets' scores after 30 days, keeping followed and hidden ones (owner, 2026-11-09)", async () => {
+    // Only the last 30 days of scores feed the pooled skill test; the cool-down uses
+    // traders.last_checked_at; rotation and backtest read non-rejected tiers only.
+    const at = (days: number) => new Date(Date.now() - days * 86_400_000);
+    const ws = ["0xr31", "0xr29", "0xw31", "0xf31", "0xp31", "0xh31"];
+    await db.insert(traders).values(ws.map((wallet) => ({ wallet, lastCheckedAt: at(31) })));
+    const score = (wallet: string, tier: string, days: number) => ({
+      wallet,
+      tier: tier as "rejected",
+      score: 1,
+      passed: false,
+      nResolved: 0,
+      nEvents: 0,
+      computedAt: at(days),
+    });
+    await db.insert(traderScores).values([
+      score("0xr31", "rejected", 31), // old rejected: dropped
+      score("0xr29", "rejected", 29), // still in the pooled window: kept
+      score("0xw31", "watchlist", 31), // not rejected: kept
+      score("0xf31", "rejected", 31), // followed: kept
+      score("0xp31", "rejected", 31), // paused follow: kept
+      score("0xh31", "rejected", 31), // hidden (the Hidden list joins scores): kept
+    ]);
+    await db.insert(follows).values([{ wallet: "0xf31" }, { wallet: "0xp31", enabled: false }]);
+    await db.insert(hiddenTraders).values({ wallet: "0xh31" });
+    const cleaned = await cleanupStorage(db);
+    const left = (await db.select({ w: traderScores.wallet }).from(traderScores)).map((r) => r.w);
+    expect(left.sort()).toEqual(["0xf31", "0xh31", "0xp31", "0xr29", "0xw31"]);
+    expect(cleaned.scores).toBe(1);
+    // The trader row (and its last check, which drives the cool-down) stays.
+    expect(await db.select().from(traders).where(eq(traders.wallet, "0xr31"))).toHaveLength(1);
+    await db.delete(traderScores).where(inArray(traderScores.wallet, ws));
+    await db.delete(follows).where(inArray(follows.wallet, ws));
+    await db.delete(hiddenTraders);
+    await db.delete(traders).where(inArray(traders.wallet, ws));
   });
 
   it("never prunes a trader who is followed (even paused) or whose copy we still hold", async () => {

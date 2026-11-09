@@ -69,7 +69,12 @@ beforeEach(async () => {
   vi.mocked(backfill.backfillTrader).mockResolvedValue({ positions: 1, pnlPoints: 1 });
   vi.mocked(backfill.resolveMarkets).mockResolvedValue({ fetched: 0, resolved: 0 });
   vi.mocked(backfill.prunePositions).mockResolvedValue(0);
-  vi.mocked(backfill.cleanupStorage).mockResolvedValue({ markets: 0, trades: 0, snapshots: 0 });
+  vi.mocked(backfill.cleanupStorage).mockResolvedValue({
+    markets: 0,
+    trades: 0,
+    snapshots: 0,
+    scores: 0,
+  });
   vi.mocked(score.scoreAll).mockResolvedValue({
     scored: 6,
     shortlisted: 0,
