@@ -4,7 +4,7 @@
  */
 import type { ScoreCheck, ScoreTier } from "@/lib/db/schema";
 
-import type { ScoringConfig } from "./config";
+import { MAX_REDEEM_MERGE_SHARE, type ScoringConfig } from "./config";
 import { NO_EDGE_EVIDENCE, type TraderMetrics } from "./metrics";
 import { clamp, normalCdf } from "./stats";
 
@@ -115,13 +115,17 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
       m.recoveryFactor,
       cfg.minRecoveryFactor,
     ),
-    atMost(
-      "bot_activity",
-      `Not a high-frequency bot (≤ ${cfg.maxTradesPerDay} trades/day)`,
-      m.tradesPerDay,
-      cfg.maxTradesPerDay,
-      true,
-    ),
+    {
+      // Lifetime average and, when looked up, the last 30 days (a lifetime average dilutes
+      // a wallet that recently turned bot); mostly redeems/merges/conversions = bot too.
+      code: "bot_activity",
+      label: `Not a bot (≤ ${cfg.maxTradesPerDay} trades/day, lifetime and last 30 days; not mostly redeems/merges/conversions)`,
+      value: Math.max(m.tradesPerDay ?? 0, m.recentTradesPerDay ?? 0),
+      threshold: cfg.maxTradesPerDay,
+      ok:
+        Math.max(m.tradesPerDay ?? 0, m.recentTradesPerDay ?? 0) <= cfg.maxTradesPerDay &&
+        (m.recentRedeemMergeShare ?? 0) <= MAX_REDEEM_MERGE_SHARE,
+    },
     atMost(
       "both_sides",
       `Not a market maker (buys both sides in ≤ ${pct(cfg.maxBothSidesRatio)} of markets)`,

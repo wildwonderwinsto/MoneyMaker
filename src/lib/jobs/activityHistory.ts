@@ -14,13 +14,12 @@
  * (no token), so their cost per share is unknowable.
  */
 import { collect, getActivity, paginate, type Activity } from "@/lib/polymarket/data";
+import { MAX_REDEEM_MERGE_SHARE } from "@/lib/scoring/config";
 
 /** Rows fetched per pick-month or profile (newest first); older rows are "not covered". */
 export const ACTIVITY_ROW_CAP = 6000;
 /** Recent window for the bot profile. */
 export const PROFILE_DAYS = 30;
-/** "Mostly redeems / merges / conversions" (owner decision 2026-11-08). */
-export const MAX_REDEEM_MERGE_SHARE = 0.5;
 
 const DAY = 86_400;
 const POSITION_TYPES = new Set(["TRADE", "REDEEM", "MERGE", "SPLIT", "CONVERSION"]);

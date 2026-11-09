@@ -4,16 +4,35 @@
  * checked today" (J1).
  */
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
-import { follows, hiddenTraders, traderPositions, traders, traderScores } from "@/lib/db/schema";
+import {
+  follows,
+  hiddenTraders,
+  traderPnlDaily,
+  traderPositions,
+  traders,
+  traderScores,
+} from "@/lib/db/schema";
 import { DEFAULT_DISCOVER } from "@/lib/jobs/discover";
 import { DEFAULT_ROTATION, pickDailyWallets } from "@/lib/jobs/rotation";
 import { DEFAULT_SCORE, recentTestedEValues, scoreAll } from "@/lib/jobs/score";
 import { DEFAULT_SCORING_CONFIG as cfg } from "@/lib/scoring/config";
 
+import * as data from "@/lib/polymarket/data";
+
+import { steadyGrinder } from "./fixtures/traders";
 import { createTestDb } from "./helpers/db";
+
+// scoreAll looks up recent activity for wallets still in the running: never the live API.
+vi.mock("@/lib/polymarket/data", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/polymarket/data")>()),
+  getActivity: vi.fn(async () => ({
+    data: [],
+    pagination: { has_more: false, next_cursor: null },
+  })),
+}));
 
 let db: Db;
 let close: () => Promise<void>;
@@ -115,6 +134,81 @@ describe("pickDailyWallets", () => {
     expect((row.metrics as { nHoldout: number }).nHoldout).toBe(0);
     const [t] = await db.select().from(traders).where(eq(traders.wallet, "0xreturn"));
     expect(t.firstCheckedAt!.getTime()).toBe(ago(60).getTime()); // first check kept
+  });
+
+  it("scoreAll rejects a still-eligible wallet whose last 30 days are mostly redeems (bot check)", async () => {
+    // The grinder's history, first picked today: skill pending, only copy_roi missing →
+    // Watchlist in stage 1, so its recent activity is looked up — and it's a redeem bot.
+    const g = steadyGrinder();
+    await db.insert(traders).values({
+      wallet: "0xredeembot",
+      lastBackfillAt: new Date(),
+      tradeCount: 480,
+      joinedAt: new Date((g.now - 240 * 86_400) * 1000),
+    });
+    await db.insert(traderPositions).values(
+      g.positions.map((p, i) => ({
+        wallet: "0xredeembot",
+        conditionId: p.conditionId,
+        tokenId: p.tokenId,
+        eventId: p.eventId,
+        status: "CLOSED",
+        avgPrice: p.avgPrice,
+        size: 0,
+        sharesBought: p.sharesBought,
+        totalCost: p.sharesBought * p.avgPrice,
+        realizedPnl: p.realizedPnl,
+        won: p.won,
+        firstEntryAt: new Date(p.firstEntryAt! * 1000),
+        lastActivityAt: new Date(p.lastActivityAt! * 1000),
+        category: i % 3 ? "sports" : "politics",
+      })),
+    );
+    await db
+      .insert(traderPnlDaily)
+      .values(
+        g.pnlSeries.map((pt) => ({
+          wallet: "0xredeembot",
+          day: new Date(pt.ts * 1000).toISOString().slice(0, 10),
+          pnl: pt.pnl,
+        })),
+      )
+      .onConflictDoNothing();
+    const now = Math.floor(Date.now() / 1000);
+    const row = (type: string, i: number) => ({
+      proxy_wallet: "0xredeembot",
+      timestamp: now - i * 3600,
+      condition_id: `c${i}`,
+      type,
+      size: 1,
+      usdc_size: 1,
+      transaction_hash: `0x${i}`,
+      price: 0.5,
+      token_id: null,
+      side: null,
+      outcome_index: null,
+      title: null,
+      slug: null,
+      icon: null,
+      event_slug: null,
+      outcome: null,
+      name: null,
+      pseudonym: null,
+    });
+    vi.mocked(data.getActivity).mockImplementation(
+      async ({ type }) =>
+        ({
+          data: type
+            ? []
+            : Array.from({ length: 40 }, (_, i) => row(i < 30 ? "REDEEM" : "TRADE", i)),
+          pagination: { has_more: false, next_cursor: null },
+        }) as never,
+    );
+    await scoreAll(db, { ...cfg, simulations: 100 }, DEFAULT_SCORE, () => {}, ["0xredeembot"]);
+    const [s] = await db.select().from(traderScores).where(eq(traderScores.wallet, "0xredeembot"));
+    expect(s.tier).toBe("rejected");
+    expect(s.checks.find((c) => c.code === "bot_activity")?.ok).toBe(false);
+    expect((s.metrics as { recentRedeemMergeShare: number }).recentRedeemMergeShare).toBe(0.75);
   });
 
   it("never drops a followed trader, even past the cap", async () => {

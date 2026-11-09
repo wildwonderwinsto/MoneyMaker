@@ -344,3 +344,34 @@ describe("copy-return guard (owner decision 2026-11-09)", () => {
     expect(unmeasured.checks.find((c) => c.code === "copy_loss")?.ok).toBe(true);
   });
 });
+
+describe("bot check uses recent activity too (owner, 2026-11-09)", () => {
+  it("REJECTS a wallet whose last 30 days are mostly redeems / merges / conversions", () => {
+    const t = steadyGrinder();
+    const m = computeMetrics(
+      { ...t, recentActivity: { tradesPerDay: 3, redeemMergeShare: 0.6, rows: 400 } },
+      cfg,
+    );
+    const r = scoreTrader(m, cfg, ctx);
+    expect(r.tier).toBe("rejected");
+    expect(failedCodes(r)).toContain("bot_activity");
+  });
+
+  it("REJECTS a wallet trading over the limit recently, whatever its lifetime average", () => {
+    const t = steadyGrinder(); // lifetime ~2 trades a day
+    const m = computeMetrics(
+      { ...t, recentActivity: { tradesPerDay: 250, redeemMergeShare: 0.1, rows: 6000 } },
+      cfg,
+    );
+    expect(scoreTrader(m, cfg, ctx).tier).toBe("rejected");
+  });
+
+  it("a normal recent profile changes nothing", () => {
+    const t = steadyGrinder();
+    const m = computeMetrics(
+      { ...t, recentActivity: { tradesPerDay: 2, redeemMergeShare: 0.2, rows: 60 } },
+      cfg,
+    );
+    expect(["verified", "elite"]).toContain(scoreTrader(m, cfg, ctx).tier);
+  });
+});

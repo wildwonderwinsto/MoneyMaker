@@ -74,4 +74,11 @@ export const ScoringConfigSchema = z.object({
 
 export type ScoringConfig = z.infer<typeof ScoringConfigSchema>;
 
+/**
+ * Bot check, recent part (owner decision 2026-11-08, "mostly"): a wallet whose last 30 days
+ * are more than this share redeems / merges / conversions is a bot, not a copyable trader.
+ * Shared by scoring and the backtest's baseline.
+ */
+export const MAX_REDEEM_MERGE_SHARE = 0.5;
+
 export const DEFAULT_SCORING_CONFIG: ScoringConfig = ScoringConfigSchema.parse({});

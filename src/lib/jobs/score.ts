@@ -28,6 +28,7 @@ import {
 import { scoreTrader, type ScoreResult } from "@/lib/scoring/score";
 import { eBenjaminiHochbergThreshold } from "@/lib/scoring/stats";
 
+import { recentProfile } from "./activityHistory";
 import { chunk, mapPool, toDate, toEpoch } from "./util";
 
 export interface ScoreOptions {
@@ -411,6 +412,23 @@ export async function scoreAll(
 
   const prelim = new Map<string, ScoreResult>();
   for (const [wallet, m] of metrics) prelim.set(wallet, scoreTrader(m, cfg, ctx));
+
+  // Recent bot check (owner, 2026-11-09): last 30 days of activity for wallets still in the
+  // running. A failed lookup falls back to the lifetime check (logged).
+  const live = [...prelim].filter(([, r]) => r.tier !== "rejected").map(([w]) => w);
+  let profileFailures = 0;
+  await mapPool(live, 2, async (wallet) => {
+    try {
+      const input = { ...inputs.get(wallet)!, recentActivity: await recentProfile(wallet, now) };
+      inputs.set(wallet, input);
+      const m = computeMetrics(input, cfg);
+      metrics.set(wallet, m);
+      prelim.set(wallet, scoreTrader(m, cfg, ctx));
+    } catch {
+      profileFailures++;
+    }
+  });
+  log(`recent activity checked for ${live.length} traders (${profileFailures} lookups failed)`);
 
   // Stage 2: shortlist = everyone who would pass, be a Candidate or be watchlisted apart
   // from copy ROI.

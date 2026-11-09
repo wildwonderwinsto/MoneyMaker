@@ -96,6 +96,9 @@ export interface TraderMetrics {
   recoveryFactor: number | null;
   sharpe: number | null;
   tradesPerDay: number | null;
+  /** Last 30 days (null = not looked up): trades a day, share of redeems/merges/conversions. */
+  recentTradesPerDay: number | null;
+  recentRedeemMergeShare: number | null;
   bothSidesRatio: number;
   medianHoldHours: number | null;
   oosRoi: number | null;
@@ -386,6 +389,8 @@ export interface MetricsInput {
   copyReplays: CopyReplay[] | null;
   /** Epoch seconds; injectable for tests. */
   now: number;
+  /** Last 30 days of activity (daily job; omitted in backtests and tests). */
+  recentActivity?: { tradesPerDay: number; redeemMergeShare: number; rows: number } | null;
   /**
    * Forward holdout: epoch seconds the trader was first picked. The skill tests (z and the
    * luck test) then count only bets opened at or after it, because the pick itself was
@@ -480,6 +485,8 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     sharpe: dd.sharpe,
     tradesPerDay:
       activity.tradeCount !== null && daysActive ? activity.tradeCount / daysActive : null,
+    recentTradesPerDay: input.recentActivity?.tradesPerDay ?? null,
+    recentRedeemMergeShare: input.recentActivity?.redeemMergeShare ?? null,
     bothSidesRatio: bothSidesRatio(positions),
     medianHoldHours: holds.length ? median(holds) : null,
     oosRoi:
