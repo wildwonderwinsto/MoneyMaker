@@ -133,7 +133,7 @@ npm run smoke:polymarket                 # live API sanity check
 
 - Render free: 750 hours per month covers one always-on service. The instance may restart at
   any time; nothing is lost because all state lives in Supabase.
-- Supabase free: 500 MB. The daily job caps full checks at 150 a day and prunes rejected traders to
+- Supabase free: 500 MB. The daily job caps full checks at 210 a day and prunes rejected traders to
   stay well under that. It pauses only after 7 days with no activity, which the 1-minute
   tick prevents.
 - GitHub Actions: a private repo gets 2,000 free minutes per month; the daily job uses about

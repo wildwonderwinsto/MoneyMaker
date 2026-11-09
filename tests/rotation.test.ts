@@ -72,11 +72,11 @@ describe("pickDailyWallets", () => {
     expect(r.wallets).toEqual(["0xc-low-oldest", "0xc-mid-older"]);
   });
 
-  it("defaults: 120 re-checks in 150 daily slots until storage is freed (owner, 2026-11-09)", () => {
-    // 210 slots approved, but held at 150 until production space is reclaimed and confirmed.
+  it("defaults: 120 re-checks in 210 daily slots (owner, 2026-11-09; storage freed)", () => {
+    // Held at 150 until production space was reclaimed (404 → 84 MB, 2026-11-09).
     expect(DEFAULT_ROTATION.recheckCap).toBe(120);
-    expect(DEFAULT_ROTATION.slots).toBe(150);
-    expect(DEFAULT_DISCOVER.maxCandidates).toBe(150);
+    expect(DEFAULT_ROTATION.slots).toBe(210);
+    expect(DEFAULT_DISCOVER.maxCandidates).toBe(210);
   });
 
   it("a re-selected wallet's holdout starts at re-selection, not its first check (R3)", async () => {
