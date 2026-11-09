@@ -11,7 +11,7 @@
  * Without the holdout this population produced 17–23 zero-skill Verified/Elite out of 150
  * (audit simulation, 2026-11-08); with it, 0 in every seed tried.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { DEFAULT_SCORING_CONFIG as base } from "@/lib/scoring/config";
 import {
@@ -22,6 +22,15 @@ import {
 } from "@/lib/scoring/metrics";
 import { scoreTrader } from "@/lib/scoring/score";
 import { benjaminiHochbergThreshold, seededRandom, simulationsFor } from "@/lib/scoring/stats";
+
+import {
+  PIPELINE_DEFAULTS,
+  REAL_BET_RATES,
+  runPipeline,
+  skilledTrader,
+  type PipelineResult,
+  type SimTrader,
+} from "./helpers/skillPipeline";
 
 /** Most zero-skill Verified/Elite allowed (agreed limit). */
 const MAX_FALSE_POSITIVES = 1;
@@ -136,5 +145,50 @@ describe("zero-skill traders don't become Verified/Elite", () => {
     const passed = metrics.filter((m) => scoreTrader(m, cfg, ctx).passed).length;
     expect(picked.length).toBe(200);
     expect(passed).toBeLessThanOrEqual(MAX_FALSE_POSITIVES);
+  });
+});
+
+/**
+ * Power (audit R1, 2026-11-09): the strategy must also let real skill through. Traders who
+ * win 5 or 8 points more often than prices say, at the four real activity levels (positions
+ * per day: 0.43 / 1.88 / 6.4 / 12.65, the p25/p50/p75/p90 of the latest local run), are
+ * picked on day 0 and checked on the rotation's schedule. A Rejected trader isn't assumed
+ * to be picked again (that needs discovery to rank them into a free slot).
+ *
+ * Bar (proposed 2026-11-09, owner to confirm): within 180 days at least 50% of the +8
+ * traders and 25% of the +5 traders reach Verified/Elite. The lowest activity level can't
+ * build enough bets in 180 days under any valid test, so 75% is the practical ceiling.
+ *
+ * KNOWN FAILURE until the skill test is redesigned (audit R2: skill_z rejects at 50 post-pick
+ * bets; a +5 edge needs ~320 for z = 2). Today: +5 → 2/40, +8 → 8/40. `it.fails` keeps the
+ * check green and turns red the moment the bar is met — then change it to `it`.
+ */
+describe("skilled traders can reach Verified/Elite", () => {
+  const DAY0 = Date.UTC(2026, 4, 1) / 1000;
+  const HORIZON = 180;
+  const MIN_FOUND = { 0.05: 0.25, 0.08: 0.5 } as const;
+  let results: PipelineResult[] = [];
+
+  beforeAll(() => {
+    const traders: SimTrader[] = [];
+    let seed = 1000;
+    for (const edge of [0.05, 0.08])
+      for (const rate of REAL_BET_RATES)
+        for (let i = 0; i < 10; i++)
+          traders.push(
+            skilledTrader(`0xskill${edge}-${rate}-${i}`, edge, rate, DAY0, HORIZON, seed++),
+          );
+    results = runPipeline(traders, DAY0, base, { ...PIPELINE_DEFAULTS, horizonDays: HORIZON });
+  }, 120_000);
+
+  it("simulates every trader on the production checks", () => {
+    expect(results).toHaveLength(80);
+    expect(results.every((r) => r.checks > 0)).toBe(true);
+  });
+
+  it.fails.each([0.05, 0.08] as const)("+%s edge: enough are found within 180 days", (edge) => {
+    const group = results.filter((r) => r.edge === edge);
+    const found = group.filter((r) => r.foundDay !== null && r.foundDay <= HORIZON).length;
+    expect(found / group.length).toBeGreaterThanOrEqual(MIN_FOUND[edge]);
   });
 });
