@@ -231,8 +231,11 @@ export function scoreTrader(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
   let tier: ScoreTier;
   if (passed) tier = score >= cfg.eliteScore ? "elite" : "verified";
   else if (pending && counted.length === 0) tier = "candidate";
-  // While skill is pending a near miss is stricter: at most 1 other failed check (owner,
-  // 2026-11-08); the 3-miss rule put 104 of 150 on the Watchlist.
+  // CAPACITY rule, not a statistical one (audit R4): while skill is pending, at most 1 other
+  // failed check (owner, 2026-11-08), because the 3-miss rule put 104 of 150 on the
+  // Watchlist and Watchlist re-checks crowd out Candidates and new wallets. The 1 is not a
+  // confidence level; it trades some skilled traders for slots — in the power sim most
+  // skilled traders not found were rejected here (copy_roi and recent both noisy).
   else if (counted.length <= (pending ? 1 : 3) && !counted.some((c) => HARD_CHECKS.has(c.code)))
     tier = "watchlist";
   else tier = "rejected";

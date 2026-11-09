@@ -28,7 +28,9 @@ downloads each candidate's full position history and runs 16 checks:
 Traders who pass everything are **Verified** (or **Elite** when the score is ≥ 70). A newly
 picked trader who passes everything else is a **Candidate** while evidence on their new bets
 builds; they're rejected once those bets show an edge below 5 points, or after 180 days
-without proof. Near misses go on the **Watchlist**. Each trader's page shows every check and why it passed or
+without proof. Near misses go on the **Watchlist** (up to 3 failed checks; only 1 while a Candidate's
+skill is still being tested — that limit keeps the re-check list short, it isn't a
+statistical test). Each trader's page shows every check and why it passed or
 failed. All thresholds can be changed in **Settings**.
 
 A walk-forward **backtest** asks: "if I had picked traders this way each month, using only
