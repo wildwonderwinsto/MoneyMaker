@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { Db } from "@/lib/db/client";
 import { follows, hiddenTraders, traders, traderScores } from "@/lib/db/schema";
+import { DEFAULT_DISCOVER } from "@/lib/jobs/discover";
 import { DEFAULT_ROTATION, pickDailyWallets } from "@/lib/jobs/rotation";
 import { DEFAULT_SCORE, recentTestedEValues, scoreAll } from "@/lib/jobs/score";
 import { DEFAULT_SCORING_CONFIG as cfg } from "@/lib/scoring/config";
@@ -58,6 +59,21 @@ describe("pickDailyWallets", () => {
 
     const roomy = await pickDailyWallets(db, [], { ...opts, recheckCap: 10 }, NOW);
     expect(roomy.wallets).toEqual(["0xf1", "0xe-high", "0xv-low", "0xc-due", "0xw"]);
+  });
+
+  it("re-checks due Candidates oldest first, not by score (owner, 2026-11-09)", async () => {
+    // ~2,000 Candidates wait at steady state under the sequential skill test; in score order
+    // the low-scored ones would never be re-checked before their 180-day limit.
+    await scored("0xc-high-recent", "candidate", 90, daysAgo(8));
+    await scored("0xc-low-oldest", "candidate", 20, daysAgo(30));
+    await scored("0xc-mid-older", "candidate", 50, daysAgo(15));
+    const r = await pickDailyWallets(db, [], { ...opts, recheckCap: 2 }, NOW);
+    expect(r.wallets).toEqual(["0xc-low-oldest", "0xc-mid-older"]);
+  });
+
+  it("defaults: 120 re-checks in 210 daily slots (owner, 2026-11-09)", () => {
+    expect(DEFAULT_ROTATION.recheckCap).toBe(120);
+    expect(DEFAULT_DISCOVER.maxCandidates).toBe(210);
   });
 
   it("never drops a followed trader, even past the cap", async () => {

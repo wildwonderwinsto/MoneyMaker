@@ -3,7 +3,8 @@
  * daily full checks.
  *
  * 1. Re-checks, in priority order, up to `recheckCap`: followed traders (never dropped, even
- *    past the cap) → Verified/Elite → Candidates not checked for a week → Watchlist.
+ *    past the cap) → Verified/Elite → Candidates not checked for a week (oldest check
+ *    first) → Watchlist.
  * 2. The rest of the `slots` go to the best-ranked wallets from today's discovery that
  *    haven't been checked, or whose 30-day cool-down ended, or who traded at least
  *    `earlyReturnMarkets` new markets since their last check (a fresh sample that could
@@ -24,10 +25,15 @@ export interface RotationOptions {
   earlyReturnMarkets: number;
 }
 
-/** Owner-approved values; `earlyReturnMarkets` is the scoring config's `minResolved`. */
+/**
+ * Owner-approved values; `earlyReturnMarkets` is the scoring config's `minResolved`. 120
+ * re-checks in 210 slots (owner, 2026-11-09): under the sequential skill test ~2,000
+ * Candidates wait at steady state (sim), so even 120 re-checks a day means one about every
+ * 2.5 weeks; 60 would be every ~5 weeks.
+ */
 export const DEFAULT_ROTATION: Omit<RotationOptions, "earlyReturnMarkets"> = {
-  slots: 150,
-  recheckCap: 60,
+  slots: 210,
+  recheckCap: 120,
   cooldownDays: 30,
   candidateEveryDays: 7,
 };
@@ -66,6 +72,9 @@ export async function pickDailyWallets(
         !hidden.has(r.w) &&
         (r.checked === null || r.checked.getTime() <= candidateDue),
     )
+    // Oldest check first: in score order low-scored Candidates would wait out their whole
+    // candidacy without a re-check.
+    .sort((a, b) => (a.checked?.getTime() ?? 0) - (b.checked?.getTime() ?? 0))
     .map((r) => r.w);
 
   const picked: string[] = [];

@@ -37,8 +37,9 @@ export interface DiscoverOptions {
 
 export const DEFAULT_DISCOVER: DiscoverOptions = {
   perBoard: 300,
-  // ~150 keeps a full run comfortably inside Supabase's free 500 MB.
-  maxCandidates: 150,
+  // Daily full checks (re-checks + new wallets). 210 = 120 re-checks + 90 new (owner,
+  // 2026-11-09); Candidates' and rejected wallets' positions are pruned after scoring.
+  maxCandidates: 210,
   timePeriods: ["week", "month", "all"],
   categories: ["overall", "politics", "sports", "crypto", "economics", "tech", "culture"],
   holderMarkets: 40,
