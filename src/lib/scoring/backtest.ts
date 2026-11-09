@@ -134,8 +134,13 @@ export function asOf(input: MetricsInput, at: number): MetricsInput {
     // before `at`. Market end dates are unreliable (placeholders, or before entry).
     positions: input.positions
       .filter((p) => (p.lastActivityAt ?? p.endAt ?? Infinity) < at)
-      // Sold before `at`, but the market settled later: its outcome wasn't known yet.
-      .map((p) => (p.won !== null && (p.resolvedAt ?? -Infinity) >= at ? { ...p, won: null } : p)),
+      // Market settled after `at`: at formation it was an open bet — outcome unknown, and
+      // its P&L (the API's figure is the final one) left out (#10).
+      .map((p) =>
+        (p.resolvedAt ?? -Infinity) >= at
+          ? { ...p, won: null, closed: false, realizedPnl: 0, unrealizedPnl: 0 }
+          : p,
+      ),
     pnlSeries: input.pnlSeries.filter((pt) => pt.ts < at),
   };
 }

@@ -54,6 +54,28 @@ describe("copiedBetReturn", () => {
 });
 
 describe("asOf (no look-ahead)", () => {
+  it("a position whose market settled after the formation date is open, with no P&L (#10)", () => {
+    // The leader stopped trading it before `at`, but the result (and its final P&L) only
+    // became known after: at formation it was an open bet.
+    const t = steadyGrinder();
+    const at = NOW - 30 * 86_400;
+    const p = {
+      ...t.positions[0],
+      conditionId: "late",
+      closed: true,
+      won: true,
+      realizedPnl: 500,
+      unrealizedPnl: 0,
+      lastActivityAt: at - 86_400,
+      resolvedAt: at + 86_400,
+    };
+    const [late] = asOf({ ...t, positions: [p] }, at).positions;
+    expect(late).toMatchObject({ closed: false, won: null, realizedPnl: 0, unrealizedPnl: 0 });
+    const m = computeMetrics(asOf({ ...t, positions: [p] }, at), cfg);
+    expect(m.totalPnl).toBe(0);
+    expect(m.nClosed).toBe(0);
+  });
+
   it("drops positions whose market had not ended yet", () => {
     const t = steadyGrinder();
     const cut = NOW - 100 * 86_400;
