@@ -206,4 +206,20 @@ describe("forward holdout (owner decision 2026-11-08, design #8)", () => {
     expect(["verified", "elite"]).toContain(r.tier);
     expect(r.checks.find((c) => c.code === "holdout_sample")?.ok).toBe(true);
   });
+
+  it("while skill is pending, Watchlist allows 1 failed check, not 3", () => {
+    // Owner decision (2026-11-08): pending skill checks don't count, so the old 3-miss rule
+    // put 104 of 150 traders on the Watchlist.
+    const t = steadyGrinder();
+    const pending = computeMetrics({ ...t, holdoutFrom: t.now }, cfg);
+    const oneMiss = { ...pending, daysSinceTrade: 100 }; // "active" fails
+    const twoMisses = { ...oneMiss, oosRoi: -0.5 }; // and "recent"
+    expect(scoreTrader(oneMiss, cfg, ctx).tier).toBe("watchlist");
+    expect(scoreTrader(twoMisses, cfg, ctx).tier).toBe("rejected");
+    // Once skill can be tested, the existing rule (up to 3 misses) applies.
+    const tested = computeMetrics({ ...t, holdoutFrom: 0 }, cfg);
+    expect(scoreTrader({ ...tested, daysSinceTrade: 100, oosRoi: -0.5 }, cfg, ctx).tier).toBe(
+      "watchlist",
+    );
+  });
 });

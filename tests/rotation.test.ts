@@ -42,7 +42,9 @@ async function scored(wallet: string, tier: string, score: number, lastCheckedAt
 }
 
 describe("pickDailyWallets", () => {
-  it("re-checks followed → Verified/Elite → Watchlist → due Candidates, up to the cap", async () => {
+  it("re-checks followed → Verified/Elite → due Candidates → Watchlist, up to the cap", async () => {
+    // Owner decision (2026-11-08, revised): Candidates before Watchlist, or a big Watchlist
+    // (104 in a live run) takes every slot and Candidates are never re-checked.
     await db.insert(follows).values([{ wallet: "0xf1" }, { wallet: "0xpaused", enabled: false }]);
     await scored("0xv-low", "verified", 40, daysAgo(1));
     await scored("0xe-high", "elite", 80, daysAgo(1));
@@ -50,12 +52,12 @@ describe("pickDailyWallets", () => {
     await scored("0xc-due", "candidate", 60, daysAgo(8));
     await scored("0xc-notdue", "candidate", 90, daysAgo(2));
     const r = await pickDailyWallets(db, [], opts, NOW);
-    // Cap 4: followed, then V/E by score, then watchlist. The due candidate didn't fit.
-    expect(r.wallets).toEqual(["0xf1", "0xe-high", "0xv-low", "0xw"]);
+    // Cap 4: followed, then V/E by score, then the due candidate. Watchlist didn't fit.
+    expect(r.wallets).toEqual(["0xf1", "0xe-high", "0xv-low", "0xc-due"]);
     expect(r.recheck).toBe(4);
 
     const roomy = await pickDailyWallets(db, [], { ...opts, recheckCap: 10 }, NOW);
-    expect(roomy.wallets).toEqual(["0xf1", "0xe-high", "0xv-low", "0xw", "0xc-due"]);
+    expect(roomy.wallets).toEqual(["0xf1", "0xe-high", "0xv-low", "0xc-due", "0xw"]);
   });
 
   it("never drops a followed trader, even past the cap", async () => {

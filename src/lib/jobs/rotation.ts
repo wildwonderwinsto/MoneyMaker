@@ -3,7 +3,7 @@
  * daily full checks.
  *
  * 1. Re-checks, in priority order, up to `recheckCap`: followed traders (never dropped, even
- *    past the cap) → Verified/Elite → Watchlist → Candidates not checked for a week.
+ *    past the cap) → Verified/Elite → Candidates not checked for a week → Watchlist.
  * 2. The rest of the `slots` go to the best-ranked wallets from today's discovery that
  *    haven't been checked, or whose 30-day cool-down ended, or who traded at least
  *    `earlyReturnMarkets` new markets since their last check (a fresh sample that could
@@ -73,7 +73,9 @@ export async function pickDailyWallets(
     if (!picked.includes(w)) picked.push(w);
   };
   followed.forEach(take);
-  for (const w of [...byTier(["elite", "verified"]), ...byTier(["watchlist"]), ...dueCandidates]) {
+  // Candidates before Watchlist (owner, 2026-11-08): a large Watchlist would otherwise take
+  // every slot and Candidates would never collect their post-pick bets' verdict.
+  for (const w of [...byTier(["elite", "verified"]), ...dueCandidates, ...byTier(["watchlist"])]) {
     if (picked.length >= opts.recheckCap) break;
     take(w);
   }

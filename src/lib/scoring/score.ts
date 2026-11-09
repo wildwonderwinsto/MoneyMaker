@@ -196,7 +196,10 @@ export function scoreTrader(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
   let tier: ScoreTier;
   if (passed) tier = score >= cfg.eliteScore ? "elite" : "verified";
   else if (pending && counted.length === 0) tier = "candidate";
-  else if (counted.length <= 3 && !counted.some((c) => HARD_CHECKS.has(c.code))) tier = "watchlist";
+  // While skill is pending a near miss is stricter: at most 1 other failed check (owner,
+  // 2026-11-08); the 3-miss rule put 104 of 150 on the Watchlist.
+  else if (counted.length <= (pending ? 1 : 3) && !counted.some((c) => HARD_CHECKS.has(c.code)))
+    tier = "watchlist";
   else tier = "rejected";
 
   return { tier, score, passed, checks };
