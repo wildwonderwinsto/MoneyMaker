@@ -123,6 +123,13 @@ export function copiedBetReturn(p: PositionRecord, slippage: number, feeRate = 0
   const leaderReturn = pnl / cost;
   const entry = Math.min(0.999, p.avgPrice + slippage);
   const allIn = entry + feeRate * entry * (1 - entry);
+  // Sold before the market resolved (closed, no outcome): the copy sells too, a bit worse
+  // than the leader and paying the taker fee (B7). Redeeming at resolution is free.
+  if (p.closed && p.won === null) {
+    const leaderExit = p.avgPrice * (1 + leaderReturn);
+    const x = Math.max(0, leaderExit - slippage);
+    return Math.max(-1, (x - feeRate * x * (1 - x)) / allIn - 1);
+  }
   const ours = (1 + leaderReturn) * (p.avgPrice / allIn) - 1;
   return Math.max(-1, ours);
 }

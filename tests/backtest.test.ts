@@ -526,3 +526,23 @@ describe("B6: trades a day at formation don't include later trades", () => {
     expect(past.activity.tradeCount).toBe(Math.round((1600 * before) / t.positions.length));
   });
 });
+
+describe("B7: a copy sold before resolution pays exit slippage and fee too", () => {
+  it("charges the exit as well as the entry when the leader sold early", () => {
+    // Leader bought at 50¢ and sold at 50¢ (P&L 0) before the market resolved.
+    const sold = {
+      ...steadyGrinder().positions[0],
+      avgPrice: 0.5,
+      sharesBought: 100,
+      realizedPnl: 0,
+      closed: true,
+      won: null,
+    };
+    const allIn = 0.51 + 0.05 * 0.51 * 0.49;
+    const exitNet = 0.49 - 0.05 * 0.49 * 0.51;
+    expect(copiedBetReturn(sold, 0.01, 0.05)).toBeCloseTo(exitNet / allIn - 1, 10);
+    // Held to resolution (won known): redeeming is free, entry costs only.
+    const held = { ...sold, won: true, realizedPnl: 50 };
+    expect(copiedBetReturn(held, 0.01, 0.05)).toBeCloseTo((1 + 1) * (0.5 / allIn) - 1, 10);
+  });
+});
