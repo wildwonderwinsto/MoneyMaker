@@ -4,9 +4,11 @@
  * themselves are tested in jobs/discover/scoring tests.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import type { Db } from "@/lib/db/client";
 import { jobRuns } from "@/lib/db/schema";
+import { fetchJson } from "@/lib/http";
 import * as backfill from "@/lib/jobs/backfill";
 import * as backtest from "@/lib/jobs/backtest";
 import { dailyJob } from "@/lib/jobs/daily";
@@ -139,6 +141,35 @@ describe("daily job health", () => {
     expect(run.status).toBe("error");
     expect(run.stats).toMatchObject({ backfill: { traders: 6, failed: 4 } });
     expect(await succeededToday(db, "daily")).toBe(false);
+  });
+
+  it("records each step's time and API calls in the run's stats (0957678)", async () => {
+    // The slow-run investigation relies on these: which step was slow, and whether it was
+    // 429s/retries or plain latency. Each mocked backfill makes one real (stubbed) request.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => Response.json({ ok: true }));
+    vi.mocked(backfill.backfillTrader).mockImplementation(async () => {
+      await fetchJson("https://x.test/a", { schema: z.object({ ok: z.boolean() }) });
+      return { positions: 1, pnlPoints: 1 };
+    });
+    await runJob(db, "daily", (log) => dailyJob(db, cfg, opts, log));
+    fetchSpy.mockRestore();
+    const timings = (await lastRun()).stats?.timings as Record<
+      string,
+      { seconds: number; requests: number; rateLimited: number }
+    >;
+    expect(Object.keys(timings ?? {}).sort()).toEqual([
+      "backfill",
+      "backtest",
+      "discovery",
+      "market resolution",
+      "scoring",
+    ]);
+    expect(timings.backfill.requests).toBe(WALLETS.length);
+    expect(timings.scoring.requests).toBe(0);
+    expect(timings.backfill.rateLimited).toBe(0);
+    expect(timings.backfill.seconds).toBeGreaterThanOrEqual(0);
   });
 
   it("exactly half failing is still a run (failures listed in the stats)", async () => {
