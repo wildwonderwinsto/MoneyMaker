@@ -307,7 +307,8 @@ export async function prunePositions(db: Db, wallets: string[]): Promise<number>
 export async function cleanupStorage(
   db: Db,
   tradeRetentionDays = 120,
-  snapshotRetentionDays = 90,
+  // Only the baseline reads snapshots (last 6 h); owner approved 30 days (2026-11-08).
+  snapshotRetentionDays = 30,
 ): Promise<{ markets: number; trades: number; snapshots: number }> {
   const orphanMarkets = await db.execute(sql`
     delete from markets m

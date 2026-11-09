@@ -424,6 +424,28 @@ describe("storage maintenance", () => {
     expect(left.map((m) => m.id)).toEqual(["c-keep"]);
   });
 
+  it("keeps leaderboard snapshots 30 days (owner decision 2026-11-08)", async () => {
+    // Only the baseline reads them, and only the last 6 hours: 90 days cost ~130 MB.
+    const at = (days: number) => new Date(Date.now() - days * 86_400_000);
+    const snap = (wallet: string, days: number) => ({
+      timePeriod: "month",
+      category: "overall",
+      sortBy: "PNL",
+      rank: 1,
+      wallet,
+      pnl: 1,
+      volume: 1,
+      capturedAt: at(days),
+    });
+    await db.insert(leaderboardSnapshots).values([snap("0xs29", 29), snap("0xs31", 31)]);
+    const cleaned = await cleanupStorage(db);
+    expect(cleaned.snapshots).toBe(1);
+    const left = await db.select({ w: leaderboardSnapshots.wallet }).from(leaderboardSnapshots);
+    expect(left.map((r) => r.w)).toContain("0xs29");
+    expect(left.map((r) => r.w)).not.toContain("0xs31");
+    await db.delete(leaderboardSnapshots);
+  });
+
   it("never prunes a trader who is followed (even paused) or whose copy we still hold", async () => {
     // Regression: a rejected trader's history was deleted even while followed or copied,
     // leaving the trader page empty and the next scoring run skipping them.
