@@ -546,3 +546,47 @@ describe("B7: a copy sold before resolution pays exit slippage and fee too", () 
     expect(copiedBetReturn(held, 0.01, 0.05)).toBeCloseTo((1 + 1) * (0.5 / allIn) - 1, 10);
   });
 });
+
+describe("B8: bets still open aren't valued at today's price", () => {
+  it("leaves still-open bets out of the month's return", () => {
+    const t = steadyGrinder(12);
+    const oct = Date.UTC(2026, 9, 1) / 1000;
+    const base = {
+      ...t.positions[0],
+      avgPrice: 0.5,
+      sharesBought: 200,
+      firstEntryAt: oct + 86_400,
+      lastActivityAt: oct + 2 * 86_400,
+    };
+    const won = {
+      ...base,
+      conditionId: "w",
+      tokenId: "w-t",
+      realizedPnl: 100,
+      closed: true,
+      won: true,
+    };
+    const open = {
+      ...base,
+      conditionId: "o",
+      tokenId: "o-t",
+      realizedPnl: 0,
+      unrealizedPnl: -90,
+      closed: false,
+      won: null,
+    };
+    const params = { ...DEFAULT_BACKTEST, months: 1, topK: 3 };
+    const r = runBacktest(
+      [{ ...t, wallet: "0xb8", positions: [won, open] }],
+      cfg,
+      params,
+      NOW,
+      new Map([["2026-10", { strategy: ["0xb8"], baseline: [], from: oct }]]),
+    );
+    expect(r.months[0].strategyBets).toBe(1);
+    expect(r.months[0].strategyReturn).toBeCloseTo(
+      copiedBetReturn(won, params.copySlippage, params.takerFeeRate)!,
+      10,
+    );
+  });
+});

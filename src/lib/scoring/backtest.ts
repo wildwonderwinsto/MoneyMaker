@@ -191,6 +191,9 @@ function portfolioReturn(
     for (const p of byWallet.get(w)?.positions ?? []) {
       if (p.firstEntryAt === null || p.firstEntryAt < from || p.firstEntryAt >= to) continue;
       const stake = p.sharesBought * p.avgPrice;
+      // Still open: today's price isn't a result, so it's left out (B8). Finished bets are
+      // booked whole in the month they were opened.
+      if (!p.closed) continue;
       // What the engine would skip (B4): too small a leader bet, or a price outside its band.
       if (stake < params.minLeaderUsd) continue;
       if (p.avgPrice < params.minEntryPrice || p.avgPrice > params.maxEntryPrice) continue;
