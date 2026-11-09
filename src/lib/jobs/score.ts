@@ -8,7 +8,14 @@
 import { and, gte, inArray, isNotNull, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
-import { markets, traderPnlDaily, traderPositions, traders, traderScores } from "@/lib/db/schema";
+import {
+  evidenceStates,
+  markets,
+  traderPnlDaily,
+  traderPositions,
+  traders,
+  traderScores,
+} from "@/lib/db/schema";
 import { getMidpoints, getPriceHistory, type PricePoint } from "@/lib/polymarket/clob";
 import { collect, getActivity, paginate, tradeIds, type Activity } from "@/lib/polymarket/data";
 import {
@@ -20,7 +27,11 @@ import {
 import type { ScoringConfig } from "@/lib/scoring/config";
 import {
   computeMetrics,
+  emptyEvidence,
+  evidenceTotals,
+  updateEvidence,
   type CopyReplay,
+  type EvidenceState,
   type MetricsInput,
   type PositionRecord,
   type TraderMetrics,
@@ -332,6 +343,64 @@ function scoreRow(wallet: string, m: TraderMetrics, r: ScoreResult, category: st
   };
 }
 
+type EvidenceRows = Map<string, { holdoutFrom: number; state: EvidenceState }>;
+
+/** Stored running evidence for these wallets. */
+export async function loadEvidence(db: Db, wallets: string[]): Promise<EvidenceRows> {
+  const out: EvidenceRows = new Map();
+  for (const part of chunk(wallets, 500)) {
+    const rows = await db.select().from(evidenceStates).where(inArray(evidenceStates.wallet, part));
+    for (const r of rows)
+      out.set(r.wallet, { holdoutFrom: toEpoch(r.holdoutFrom)!, state: r.state });
+  }
+  return out;
+}
+
+export async function saveEvidence(db: Db, states: EvidenceRows) {
+  for (const part of chunk([...states], 200)) {
+    await db
+      .insert(evidenceStates)
+      .values(
+        part.map(([wallet, s]) => ({
+          wallet,
+          holdoutFrom: new Date(s.holdoutFrom * 1000),
+          state: s.state,
+          updatedAt: new Date(),
+        })),
+      )
+      .onConflictDoUpdate({
+        target: evidenceStates.wallet,
+        set: {
+          holdoutFrom: sql`excluded.holdout_from`,
+          state: sql`excluded.state`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      });
+  }
+}
+
+/**
+ * Replace the from-scratch skill evidence with the running total: fold this check's newly
+ * final events (post-pick bets only) into the wallet's state — a new state if the holdout
+ * restarted — and report its totals. Idempotent for the same data.
+ */
+export function withRunningEvidence(
+  m: TraderMetrics,
+  input: MetricsInput,
+  states: EvidenceRows,
+  cfg: ScoringConfig,
+): TraderMetrics {
+  const from = input.holdoutFrom;
+  if (from === null || from === undefined) return m;
+  const prev = states.get(input.wallet);
+  const base = prev && prev.holdoutFrom === from ? prev.state : emptyEvidence();
+  const tested = input.positions.filter((p) => p.firstEntryAt !== null && p.firstEntryAt >= from);
+  const state = updateEvidence(base, tested, cfg, input.now);
+  states.set(input.wallet, { holdoutFrom: from, state });
+  const t = evidenceTotals(state);
+  return { ...m, eSkill: t.eSkill, eNoEdge: t.eNoEdge };
+}
+
 /** Days of earlier checks the luck test is pooled over (owner decision 2026-11-08). */
 const POOLED_BH_DAYS = 30;
 
@@ -393,8 +462,13 @@ export async function scoreAll(
   const cfg = baseCfg;
 
   // Stage 1
+  // Running skill evidence (owner, 2026-11-09): the full check folds new final events into
+  // the same total the cheap re-checks use, so the two never disagree.
+  const states = await loadEvidence(db, [...inputs.keys()]);
+  const measure = (input: MetricsInput) =>
+    withRunningEvidence(computeMetrics(input, cfg), input, states, cfg);
   const metrics = new Map<string, TraderMetrics>();
-  for (const [wallet, input] of inputs) metrics.set(wallet, computeMetrics(input, cfg));
+  for (const [wallet, input] of inputs) metrics.set(wallet, measure(input));
   // Only wallets with enough post-pick bets are tested; the rest are Candidates.
   const eValues = [
     ...[...metrics.values()]
@@ -421,7 +495,7 @@ export async function scoreAll(
     try {
       const input = { ...inputs.get(wallet)!, recentActivity: await recentProfile(wallet, now) };
       inputs.set(wallet, input);
-      const m = computeMetrics(input, cfg);
+      const m = measure(input);
       metrics.set(wallet, m);
       prelim.set(wallet, scoreTrader(m, cfg, ctx));
     } catch {
@@ -446,7 +520,7 @@ export async function scoreAll(
     try {
       const replays = await buildCopyReplays(db, wallet, cfg, opts, now);
       const input = { ...inputs.get(wallet)!, copyReplays: replays };
-      const m = computeMetrics(input, cfg);
+      const m = measure(input);
       metrics.set(wallet, m);
       prelim.set(wallet, scoreTrader(m, cfg, ctx));
     } catch (err) {
@@ -483,10 +557,14 @@ export async function scoreAll(
       .set({
         firstCheckedAt: sql`coalesce(${traders.firstCheckedAt}, ${checked.toISOString()}::timestamptz)`,
         lastCheckedAt: checked,
+        lastFullCheckAt: checked,
+        fullCheckDue: false,
         marketsAtCheck: sql`${traders.marketsTraded}`,
       })
       .where(inArray(traders.wallet, part));
   }
+
+  await saveEvidence(db, states);
 
   const tiers = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.tier] = (acc[r.tier] ?? 0) + 1;

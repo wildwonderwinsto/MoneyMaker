@@ -50,6 +50,35 @@ export function typicalStake(
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+/**
+ * Cheap re-check (owner decision 2026-11-09): only the positions opened since `from` (the
+ * holdout start). Lists come newest-first by last event, so fetching stops at the first
+ * position last active before `from`. Stored like a full backfill; pruned after scoring.
+ */
+export async function backfillPostPick(db: Db, wallet: string, from: number): Promise<number> {
+  const since = async (status: "OPEN" | "CLOSED") => {
+    const out: Position[] = [];
+    for await (const p of paginate(
+      (cursor) => getPositions({ user: wallet, status, cursor, sortBy: "TIMESTAMP" }),
+      { maxItems: DEFAULT_BACKFILL.maxPositionsPerStatus },
+    )) {
+      if ((p.last_event_at ?? Infinity) < from) break;
+      out.push(p);
+    }
+    return out;
+  };
+  const [closed, open] = await Promise.all([since("CLOSED"), since("OPEN")]);
+  const byToken = new Map<string, typeof traderPositions.$inferInsert>();
+  for (const p of [...closed, ...open]) {
+    const row = positionRow(p);
+    if (row.firstEntryAt && row.firstEntryAt.getTime() >= from * 1000) byToken.set(p.token_id, row);
+  }
+  const rows = [...byToken.values()];
+  await db.delete(traderPositions).where(eq(traderPositions.wallet, wallet));
+  for (const part of chunk(rows, 400)) await db.insert(traderPositions).values(part);
+  return rows.length;
+}
+
 function positionRow(p: Position): typeof traderPositions.$inferInsert {
   // total_size counts bought shares only: it is 0 (not null) when they came from a split.
   // Then the shares still held are the best known lower bound, unless the position is

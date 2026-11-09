@@ -60,6 +60,13 @@ export const traders = pgTable("traders", {
    * holdout starts at `firstCheckedAt`.
    */
   holdoutFrom: tsz(),
+  /**
+   * Last FULL check (whole history, every check). Candidates in between get cheap re-checks
+   * (skill evidence only); a full one is due every 4 weeks and before any promotion.
+   */
+  lastFullCheckAt: tsz(),
+  /** A cheap re-check found enough skill evidence: a full check decides the promotion. */
+  fullCheckDue: boolean().notNull().default(false),
   /** Last full check: drives the rotation's re-check cadence and 30-day cool-down. */
   lastCheckedAt: tsz(),
   /** Distinct markets traded (user-stats `trades`), refreshed by every discovery run. */
@@ -192,6 +199,25 @@ export const traderPnlDaily = pgTable(
   },
   (t) => [primaryKey({ columns: [t.wallet, t.day] })],
 ).enableRLS();
+
+/**
+ * Running skill evidence per wallet (owner decision 2026-11-09): log factors of the events
+ * counted so far since `holdoutFrom`, and their key hashes. Reset when the holdout restarts.
+ */
+export const evidenceStates = pgTable("skill_evidence", {
+  wallet: text().primaryKey(),
+  holdoutFrom: tsz().notNull(),
+  state: jsonb()
+    .$type<{
+      logSkill: number[];
+      logNoEdge: number;
+      events: number;
+      bets: number;
+      eventKeys: number[];
+    }>()
+    .notNull(),
+  updatedAt: createdAt(),
+}).enableRLS();
 
 /** candidate = passes every check but hasn't made enough bets since first picked (holdout). */
 export type ScoreTier = "elite" | "verified" | "candidate" | "watchlist" | "rejected";

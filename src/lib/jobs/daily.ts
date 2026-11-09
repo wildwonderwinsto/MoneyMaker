@@ -18,6 +18,7 @@ import {
 } from "./backfill";
 import { backtestJob, recordedWallets, recordMonthlySelections } from "./backtest";
 import { DEFAULT_DISCOVER, discoverCandidates, type DiscoverOptions } from "./discover";
+import { lightCheck } from "./lightCheck";
 import { DEFAULT_ROTATION, pickDailyWallets } from "./rotation";
 import { DEFAULT_SCORE, scoreAll } from "./score";
 import { httpStats } from "@/lib/http";
@@ -114,7 +115,7 @@ export async function dailyJob(
     earlyReturnMarkets: cfg.minResolved,
   });
   log(
-    `rotation: ${rotation.recheck} re-checks (${rotation.followed} followed) + ${rotation.fresh} new (${rotation.returning} returning, fresh holdout)`,
+    `rotation: ${rotation.recheck} re-checks (${rotation.followed} followed) + ${rotation.fresh} new (${rotation.returning} returning, fresh holdout); ${rotation.light.length} cheap Candidate re-checks`,
   );
   // Traders picked in recorded months are judged by the backtest: keep them backfilled.
   const recorded = await recordedWallets(db, opts.backtest.months);
@@ -138,6 +139,8 @@ export async function dailyJob(
       rotation.wallets.filter((w) => succeeded.has(w)),
     ),
   );
+  // Cheap Candidate re-checks (owner, 2026-11-09): post-pick positions only, never promote.
+  const light = await step("cheap re-checks", () => lightCheck(db, cfg, rotation.light, log));
   // A shrunken run (e.g. a quick local --limit 5) must not stand in for the real one: it
   // records no picks, and `full: false` keeps it from counting as today's run.
   const full =
@@ -163,6 +166,7 @@ export async function dailyJob(
     full,
     discovered: discovered.ranked.length,
     rotation: { recheck: rotation.recheck, followed: rotation.followed, fresh: rotation.fresh },
+    light,
     candidates: candidates.length,
     backfill,
     score,

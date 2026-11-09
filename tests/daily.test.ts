@@ -167,6 +167,7 @@ describe("daily job health", () => {
     expect(Object.keys(timings ?? {}).sort()).toEqual([
       "backfill",
       "backtest",
+      "cheap re-checks",
       "discovery",
       "market resolution",
       "scoring",

@@ -22,6 +22,7 @@ import {
   type PositionRecord,
   type TraderMetrics,
 } from "@/lib/scoring/metrics";
+import { lightDecision } from "@/lib/jobs/lightCheck";
 import { scoreTrader, type ScoreResult } from "@/lib/scoring/score";
 import { eBenjaminiHochbergThreshold, seededRandom } from "@/lib/scoring/stats";
 
@@ -186,6 +187,8 @@ export interface PipelineOptions {
   repick: boolean;
   /** Holdout start: the first check (today's `first_checked_at`) or the latest re-pick. */
   holdout: "first" | "repick";
+  /** Candidates' weekly re-checks are cheap (production since 2026-11-09). */
+  cheapRechecks: boolean;
 }
 
 export const PIPELINE_DEFAULTS: PipelineOptions = {
@@ -196,6 +199,7 @@ export const PIPELINE_DEFAULTS: PipelineOptions = {
   earlyReturnMarkets: DEFAULT_SCORING_CONFIG.minResolved,
   repick: false,
   holdout: "first",
+  cheapRechecks: true,
 };
 
 export interface PipelineResult {
@@ -230,6 +234,8 @@ export function runPipeline(
     t,
     next: 0,
     from: day0,
+    lastFull: -Infinity,
+    fullDue: false,
     tested: null as { day: number; e: number } | null,
     res: {
       wallet: t.wallet,
@@ -263,6 +269,24 @@ export function runPipeline(
     for (const { s, m } of today) {
       const r: ScoreResult = scoreTrader(m, cfg, ctx);
       s.res.checks++;
+      // Production calendar (owner, 2026-11-09): a Candidate's re-checks are cheap (skill
+      // only, never a promotion) unless a full one is due — every 4 weeks, or the day after
+      // a cheap one proved the skill.
+      const full =
+        !o.cheapRechecks || s.fullDue || day - s.lastFull >= 28 || s.res.lastTier !== "candidate";
+      if (!full) {
+        const d = lightDecision(m, cfg, ctx.eThreshold);
+        if (d === "reject") {
+          s.res.lastTier = "rejected";
+          s.next = Infinity;
+        } else {
+          s.fullDue = d === "full_check";
+          s.next = s.fullDue ? day + 1 : day + o.candidateEveryDays;
+        }
+        continue;
+      }
+      s.lastFull = day;
+      s.fullDue = false;
       s.res.lastTier = r.tier;
       s.res.lastFailed = r.checks.filter((c) => !c.ok).map((c) => c.code);
       if (r.passed) {

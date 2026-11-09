@@ -24,6 +24,10 @@ export interface RotationOptions {
   candidateEveryDays: number;
   /** New markets traded since the last check that end a cool-down early. */
   earlyReturnMarkets: number;
+  /** Cheap Candidate re-checks a day (post-pick positions only), outside the slots. */
+  lightCap: number;
+  /** A Candidate gets a full check at least this often (and before any promotion). */
+  fullEveryDays: number;
 }
 
 /**
@@ -37,6 +41,9 @@ export const DEFAULT_ROTATION: Omit<RotationOptions, "earlyReturnMarkets"> = {
   recheckCap: 120,
   cooldownDays: 30,
   candidateEveryDays: 7,
+  // Owner, 2026-11-09 (option b): weekly cheap re-checks, a full one every 4 weeks.
+  lightCap: 600,
+  fullEveryDays: 28,
 };
 
 const DAY_MS = 86_400_000;
@@ -48,6 +55,8 @@ export async function pickDailyWallets(
   now = new Date(),
 ): Promise<{
   wallets: string[];
+  /** Candidates due a cheap re-check today (not in `wallets`). */
+  light: string[];
   followed: number;
   recheck: number;
   fresh: number;
@@ -64,7 +73,13 @@ export async function pickDailyWallets(
     .filter((w) => !hidden.has(w));
 
   const scored = await db
-    .select({ w: traderScores.wallet, tier: traderScores.tier, checked: traders.lastCheckedAt })
+    .select({
+      w: traderScores.wallet,
+      tier: traderScores.tier,
+      checked: traders.lastCheckedAt,
+      full: traders.lastFullCheckAt,
+      due: traders.fullCheckDue,
+    })
     .from(traderScores)
     .leftJoin(traders, eq(traders.wallet, traderScores.wallet))
     .where(inArray(traderScores.tier, ["elite", "verified", "watchlist", "candidate"]))
@@ -72,16 +87,29 @@ export async function pickDailyWallets(
   const candidateDue = now.getTime() - opts.candidateEveryDays * DAY_MS;
   const byTier = (tiers: string[]) =>
     scored.filter((r) => tiers.includes(r.tier) && !hidden.has(r.w)).map((r) => r.w);
-  const dueCandidates = scored
+  const fullDue = now.getTime() - opts.fullEveryDays * DAY_MS;
+  const followedSet = new Set(followed);
+  const due = scored
     .filter(
       (r) =>
         r.tier === "candidate" &&
         !hidden.has(r.w) &&
-        (r.checked === null || r.checked.getTime() <= candidateDue),
+        (r.due || r.checked === null || r.checked.getTime() <= candidateDue),
     )
     // Oldest check first: in score order low-scored Candidates would wait out their whole
     // candidacy without a re-check.
-    .sort((a, b) => (a.checked?.getTime() ?? 0) - (b.checked?.getTime() ?? 0))
+    .sort((a, b) => (a.checked?.getTime() ?? 0) - (b.checked?.getTime() ?? 0));
+  // Full check when proven by a cheap one, never fully checked, 4+ weeks since the last
+  // full one, or followed; otherwise a cheap re-check (owner, 2026-11-09).
+  const needsFull = (r: (typeof due)[number]) =>
+    r.due || r.full === null || r.full.getTime() <= fullDue || followedSet.has(r.w);
+  const dueCandidates = [
+    ...due.filter((r) => r.due),
+    ...due.filter((r) => !r.due && needsFull(r)),
+  ].map((r) => r.w);
+  const light = due
+    .filter((r) => !needsFull(r))
+    .slice(0, opts.lightCap)
     .map((r) => r.w);
 
   const picked: string[] = [];
@@ -135,6 +163,7 @@ export async function pickDailyWallets(
   }
   return {
     wallets: picked,
+    light: light.filter((w) => !picked.includes(w)),
     followed: followed.length,
     recheck,
     fresh: picked.length - recheck,
