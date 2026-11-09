@@ -12,6 +12,7 @@
  * bias, so the comparison between them is the meaningful number, not the absolute return.
  * Months whose picks were recorded at the time (monthlySelections) have no such bias.
  */
+import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { DEFAULT_TAKER_FEE_RATE } from "@/lib/polymarket/gamma";
 
 import type { ScoringConfig } from "./config";
@@ -31,6 +32,10 @@ export interface BacktestParams {
   startingEquity: number;
   /** Simulations per trader per month (lower than live scoring for speed). */
   simulations: number;
+  /** The copy engine's own filters (B4): smaller leader bets and prices outside are skipped. */
+  minLeaderUsd: number;
+  minEntryPrice: number;
+  maxEntryPrice: number;
 }
 
 export const DEFAULT_BACKTEST: BacktestParams = {
@@ -41,6 +46,9 @@ export const DEFAULT_BACKTEST: BacktestParams = {
   takerFeeRate: DEFAULT_TAKER_FEE_RATE,
   startingEquity: 1000,
   simulations: 300,
+  minLeaderUsd: DEFAULT_RISK_CONFIG.minLeaderUsd,
+  minEntryPrice: DEFAULT_RISK_CONFIG.minEntryPrice,
+  maxEntryPrice: DEFAULT_RISK_CONFIG.maxEntryPrice,
 };
 
 /** Picks recorded at the time (see db monthlySelections): point-in-time, no survivors-only pool. */
@@ -152,9 +160,9 @@ function portfolioReturn(
   byWallet: Map<string, MetricsInput>,
   from: number,
   to: number,
-  slippage: number,
-  feeRate: number,
+  params: BacktestParams,
 ) {
+  const { copySlippage: slippage, takerFeeRate: feeRate } = params;
   let bets = 0;
   // Proportional copying: each leader's bets are weighted by the dollars they risked,
   // so a tiny long-shot can't dominate the result.
@@ -163,9 +171,12 @@ function portfolioReturn(
     let pnl = 0;
     for (const p of byWallet.get(w)?.positions ?? []) {
       if (p.firstEntryAt === null || p.firstEntryAt < from || p.firstEntryAt >= to) continue;
+      const stake = p.sharesBought * p.avgPrice;
+      // What the engine would skip (B4): too small a leader bet, or a price outside its band.
+      if (stake < params.minLeaderUsd) continue;
+      if (p.avgPrice < params.minEntryPrice || p.avgPrice > params.maxEntryPrice) continue;
       const r = copiedBetReturn(p, slippage, feeRate);
       if (r === null) continue;
-      const stake = p.sharesBought * p.avgPrice;
       staked += stake;
       pnl += stake * r;
       bets++;
@@ -281,14 +292,13 @@ export function runBacktest(
     const fromOf = (m: "strategy" | "baseline") =>
       rec ? Math.max(start, rec.fromByMethod?.[m] ?? rec.from) : start;
 
-    const cost = [params.copySlippage, params.takerFeeRate] as const;
     type MethodResult = { ret: number; bets: number; partial?: number; rebuilt?: number };
     const s: MethodResult =
       rebuiltReturn(rec, "strategy", picks.strategy) ??
-      portfolioReturn(picks.strategy, byWallet, fromOf("strategy"), end, ...cost);
+      portfolioReturn(picks.strategy, byWallet, fromOf("strategy"), end, params);
     const b: MethodResult =
       rebuiltReturn(rec, "baseline", picks.baseline) ??
-      portfolioReturn(picks.baseline, byWallet, fromOf("baseline"), end, ...cost);
+      portfolioReturn(picks.baseline, byWallet, fromOf("baseline"), end, params);
     months.push({
       month: label,
       strategyPicks: picks.strategy,

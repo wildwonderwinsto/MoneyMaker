@@ -71,6 +71,12 @@ export function rebuildPickMonth(
   value: (tokenId: string) => number | undefined,
   slippage: number,
   feeRate: number,
+  /** The copy engine's filters (B4): leader bets it would skip aren't counted. */
+  filters: { minLeaderUsd: number; minEntryPrice: number; maxEntryPrice: number } = {
+    minLeaderUsd: 0,
+    minEntryPrice: 0,
+    maxEntryPrice: 1,
+  },
 ): PickResult {
   const unknown = new Set(rows.filter((r) => UNKNOWN_COST.has(r.type)).map((r) => r.condition_id));
   const byToken = new Map<string, Activity[]>();
@@ -101,6 +107,8 @@ export function rebuildPickMonth(
     const held = Math.max(0, bought - out);
     const mark = held > 1e-9 ? value(token) : 0;
     if (mark === undefined || cost <= 0 || bought <= 0) continue;
+    if (cost < filters.minLeaderUsd) continue;
+    if (cost / bought < filters.minEntryPrice || cost / bought > filters.maxEntryPrice) continue;
     const leaderReturn = (received + held * mark) / cost - 1;
     // Our entry: the leader's average price plus slippage, plus the taker fee.
     const avg = cost / bought;

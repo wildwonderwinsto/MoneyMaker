@@ -179,6 +179,7 @@ export async function rebuildRecordedMonths(
       (t) => value.get(t),
       params.copySlippage,
       params.takerFeeRate,
+      params,
     );
     if (w.partial) partial++;
     await db

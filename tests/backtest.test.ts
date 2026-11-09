@@ -136,6 +136,7 @@ describe("runBacktest", () => {
       traders,
       cfg,
       {
+        ...DEFAULT_BACKTEST,
         months: 4,
         topK: 3,
         copySlippage: 0.01,
@@ -156,6 +157,7 @@ describe("runBacktest", () => {
   it("uses picks recorded at the time, and only bets opened after them", () => {
     const traders = [steadyGrinder(12), oneHitWonder()];
     const params = {
+      ...DEFAULT_BACKTEST,
       months: 1,
       topK: 3,
       copySlippage: 0.01,
@@ -481,5 +483,35 @@ describe("B1: each recorded method counts bets from its own recording time", () 
     );
     expect(r.months[0].strategyBets).toBeGreaterThan(0);
     expect(r.months[0].baselineBets).toBe(0);
+  });
+});
+
+describe("B4: the backtest copies only what the copy engine would copy", () => {
+  it("ignores leader bets under minLeaderUsd or outside the engine's entry-price band", () => {
+    // One $2 long shot at 1¢ that paid 100× would otherwise be the month's whole return.
+    const t = steadyGrinder(12);
+    const oct = Date.UTC(2026, 9, 1) / 1000;
+    const longShot = {
+      ...t.positions[0],
+      conditionId: "ls",
+      tokenId: "ls-t",
+      avgPrice: 0.01,
+      sharesBought: 200,
+      realizedPnl: 198,
+      closed: true,
+      won: true,
+      firstEntryAt: oct + 86_400,
+      lastActivityAt: oct + 2 * 86_400,
+    };
+    const params = { ...DEFAULT_BACKTEST, months: 1, topK: 3 };
+    const r = runBacktest(
+      [{ ...t, wallet: "0xls", positions: [longShot] }],
+      cfg,
+      params,
+      NOW,
+      new Map([["2026-10", { strategy: ["0xls"], baseline: [], from: oct }]]),
+    );
+    expect(r.months[0].strategyBets).toBe(0);
+    expect(r.months[0].strategyReturn).toBe(0);
   });
 });
