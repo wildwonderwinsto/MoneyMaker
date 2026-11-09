@@ -590,3 +590,15 @@ describe("B8: bets still open aren't valued at today's price", () => {
     );
   });
 });
+
+describe("B9: re-derived baseline months leave out bots, like recorded ones", () => {
+  it("skips a top earner trading over the bot limit at the formation date", () => {
+    const g = steadyGrinder(12);
+    // A copy of the grinder that trades 1,000 times a day: top earner, but a bot.
+    const bot = { ...g, wallet: "0xbot", activity: { ...g.activity, tradeCount: 1000 * 240 } };
+    const params = { ...DEFAULT_BACKTEST, months: 1, topK: 3 };
+    const r = runBacktest([g, bot], cfg, params, NOW);
+    expect(r.months[0].baselinePicks).toContain("0xgrinder");
+    expect(r.months[0].baselinePicks).not.toContain("0xbot");
+  });
+});

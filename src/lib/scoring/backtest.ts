@@ -265,7 +265,15 @@ function simulatedPicks(
     .slice(0, topK)
     .map((x) => x.wallet);
 
+  // Bot-free like the recorded baseline (B9): skip wallets over the trades-a-day limit at the
+  // formation date (B6-scaled). Their recent redeem share isn't knowable historically.
+  const bots = new Set(
+    formation
+      .filter((_, i) => (metrics[i].tradesPerDay ?? 0) > cfg.maxTradesPerDay)
+      .map((f) => f.wallet),
+  );
   const baseline = traders
+    .filter((t) => !bots.has(t.wallet))
     .map((t) => ({
       wallet: t.wallet,
       pnl: t.positions
