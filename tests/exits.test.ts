@@ -372,3 +372,70 @@ describe("a leader exit that fills in pieces", () => {
     expect(leaderSoldFraction(merged, pieces, { size: 100, lastEventAt: 1000 })).toBe(1);
   });
 });
+
+describe("leader exits by merge or conversion (owner, 2026-11-09)", () => {
+  // A merge turns YES+NO pairs back into $1 each: no token, no side, just the market.
+  const merge = (size: number, hash: string, ts = t0 + 30) =>
+    act({
+      type: "MERGE",
+      transaction_hash: hash,
+      token_id: "",
+      side: null,
+      price: 0,
+      size,
+      usdc_size: size,
+      outcome_index: 999,
+      timestamp: ts,
+    });
+
+  it("a merge of half the leader's holding sells half our copy", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    expect(await openShares()).toEqual([40]);
+    rows.push(merge(100, "0xmerge"));
+    vi.mocked(data.getPositions).mockResolvedValue(page([position(100, t0 + 30)])); // 200 → 100
+    await runTick(db, (t0 + 40) * 1000);
+    expect((await openShares())[0]).toBeCloseTo(20, 6);
+    expect((await signalOf("0xmerge"))?.decision).toBe("closed");
+  });
+
+  it("a merge of the whole holding closes our copy", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    rows.push(merge(200, "0xmergeall"));
+    vi.mocked(data.getPositions).mockResolvedValue(page([])); // leader holds none of it now
+    await runTick(db, (t0 + 40) * 1000);
+    expect(await openShares()).toEqual([]);
+  });
+
+  it("a conversion is flagged on the Live page, never sold automatically", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    rows.push(
+      act({
+        type: "CONVERSION",
+        transaction_hash: "0xconv",
+        token_id: "",
+        side: null,
+        price: 0,
+        size: 50,
+        usdc_size: 100,
+        outcome_index: 999,
+        timestamp: t0 + 30,
+      }),
+    );
+    await runTick(db, (t0 + 40) * 1000);
+    expect(await openShares()).toEqual([40]);
+    expect(await signalOf("0xconv")).toMatchObject({
+      decision: "skipped",
+      reasonCode: "leader_converted",
+      tokenId: YES,
+    });
+  });
+
+  it("a merge or conversion in a market we hold no copy in is ignored", async () => {
+    rows = [merge(100, "0xother")];
+    await runTick(db, (t0 + 40) * 1000);
+    expect(await signalOf("0xother")).toBeUndefined();
+  });
+});

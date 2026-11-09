@@ -321,6 +321,7 @@ export type ReasonCode =
   | "sell_size_unknown"
   | "buy_limit"
   | "sell_floor"
+  | "leader_converted"
   | "other";
 
 /** Every leader trade we observed, with our decision and the reason. */

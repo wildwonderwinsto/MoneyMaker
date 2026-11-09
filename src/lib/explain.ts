@@ -246,6 +246,14 @@ export function explain(opts: {
         setting: "Most buys into one position",
       };
     }
+    case "leader_converted":
+      return {
+        title: "The trader converted shares in this market — check it",
+        body: [
+          "They used a conversion (multi-outcome markets) instead of a sale, so we can't tell how much of this side they gave up. It is not mirrored automatically.",
+          "If they've left the market, close the position by hand from its page.",
+        ],
+      };
     case "sell_floor": {
       const bid = num(d, "bestBid");
       const paid = num(d, "leaderPrice");

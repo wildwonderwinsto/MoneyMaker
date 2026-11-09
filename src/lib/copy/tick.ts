@@ -374,7 +374,8 @@ async function pollLeaders(db: Db, ctx: EngineCtx, wallets: string[]) {
       try {
         const page = await getActivity({
           user: wallet,
-          type: "TRADE",
+          // Merges and conversions are exits without a trade (owner, 2026-11-09).
+          type: "TRADE,MERGE,CONVERSION",
           start: cursor,
           sortDirection: "ASC",
           limit: 200,
@@ -402,6 +403,8 @@ async function pollLeaders(db: Db, ctx: EngineCtx, wallets: string[]) {
     maxTs.set(page.wallet, Math.max(...page.rows.map((a) => a.timestamp)));
   }
 
+  const flagged = await leaderExitsWithoutTrades(db, ctx, pages, watched, candidates);
+
   // `start` is inclusive and the stream may have copied some already: skip known ids.
   const fresh = await filterUnseen(db, candidates, legacy);
   ctx.stats.newTrades += fresh.length;
@@ -409,8 +412,106 @@ async function pollLeaders(db: Db, ctx: EngineCtx, wallets: string[]) {
   // `start` is inclusive, so a trade that failed to record is fetched again next tick
   // (already-recorded ones are filtered out by id).
   for (const [wallet, ts] of maxTs) {
-    await setCursor(db, wallet, Math.min(ts, failedAt.get(wallet) ?? Infinity));
+    await setCursor(
+      db,
+      wallet,
+      Math.min(ts, failedAt.get(wallet) ?? Infinity, flagged.get(wallet) ?? Infinity),
+    );
   }
+}
+
+/**
+ * Leader exits without a trade (owner decision 2026-11-09), for markets we hold a copy in.
+ * A MERGE turns YES+NO pairs back into $1 each, so the leader's holding on each side drops by
+ * `size`: added to `candidates` as a sell of `size` on each of our copies there, sized by the
+ * normal sell path (merged ÷ what they held). The leader got $1 a pair, so there is no
+ * per-side price and no sell floor applies. A CONVERSION (negRisk) is not reliably tied to one
+ * market's NO side (verified live: one row can stand for ~9 markets), so it is only recorded
+ * as a skipped signal for the Live page. Returns, per wallet, the time of a conversion whose
+ * signal failed to record (the cursor is held there).
+ */
+async function leaderExitsWithoutTrades(
+  db: Db,
+  ctx: EngineCtx,
+  pages: Array<{ wallet: string; rows: Activity[] } | null>,
+  watched: string[],
+  candidates: LeaderTrade[],
+): Promise<Map<string, number>> {
+  const failed = new Map<string, number>();
+  const rows = pages.flatMap(
+    (p) => p?.rows.filter((a) => a.type === "MERGE" || a.type === "CONVERSION") ?? [],
+  );
+  if (rows.length === 0) return failed;
+  const held = await db
+    .select({
+      wallet: paperPositions.sourceWallet,
+      conditionId: paperPositions.conditionId,
+      tokenId: paperPositions.tokenId,
+      outcome: paperPositions.outcome,
+    })
+    .from(paperPositions)
+    .where(
+      and(
+        eq(paperPositions.accountId, ctx.accountId),
+        eq(paperPositions.status, "open"),
+        eq(paperPositions.kind, "copy"),
+        inArray(paperPositions.sourceWallet, watched),
+      ),
+    );
+  for (const a of rows) {
+    const wallet = a.proxy_wallet.toLowerCase();
+    for (const h of held.filter((x) => x.wallet === wallet && x.conditionId === a.condition_id)) {
+      const id = `${(a.transaction_hash ?? "nohash").toLowerCase()}:${h.tokenId}:${a.type}:${a.size}`;
+      const base = {
+        id,
+        wallet,
+        ts: a.timestamp,
+        conditionId: a.condition_id,
+        tokenId: h.tokenId,
+        side: "SELL" as const,
+        price: 0,
+        size: a.size,
+        usdc: 0,
+        outcome: h.outcome ?? null,
+        title: a.title ?? null,
+        slug: a.slug ?? null,
+        icon: a.icon || null,
+      };
+      if (a.type === "MERGE") {
+        if (isRelevant(ctx, base)) candidates.push(base);
+        continue;
+      }
+      try {
+        await db
+          .insert(signals)
+          .values({
+            id,
+            wallet,
+            leaderTs: new Date(a.timestamp * 1000),
+            conditionId: a.condition_id,
+            tokenId: h.tokenId,
+            outcome: h.outcome ?? null,
+            side: "SELL",
+            leaderPrice: 0,
+            leaderSize: a.size,
+            leaderUsdc: a.usdc_size,
+            title: a.title ?? null,
+            slug: a.slug ?? null,
+            decision: "skipped",
+            reason:
+              "Leader converted shares in this market (negRisk). Not mirrored automatically — check and close by hand if they exited.",
+            reasonCode: "leader_converted",
+            source: "poll",
+            accountId: ctx.accountId,
+          })
+          .onConflictDoNothing();
+      } catch (err) {
+        ctx.stats.errors.push(`${wallet}: conversion signal: ${errMsg(err)}`);
+        failed.set(wallet, Math.min(failed.get(wallet) ?? Infinity, a.timestamp));
+      }
+    }
+  }
+  return failed;
 }
 
 /** Drop trades already recorded (by current id, or by the pre-fill-aware legacy id). */
