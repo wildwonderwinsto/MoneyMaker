@@ -193,11 +193,58 @@ export function skillEvidence(
   cfg: ScoringConfig,
   now: number,
 ): SkillEvidence {
+  return evidenceTotals(updateEvidence(emptyEvidence(), positions, cfg, now));
+}
+
+/** An unresolved bet stops blocking its event's count after this long (stuck data). */
+const UNRESOLVED_WAIT = 30 * DAY;
+
+/**
+ * Running skill evidence (owner decision 2026-11-09, cheap re-checks): log factors summed
+ * over the events counted so far, and those events' keys (32-bit hashes) so none is ever
+ * counted twice. Cheap and full checks both fold new final events into the same total.
+ */
+export interface EvidenceState {
+  logSkill: number[];
+  logNoEdge: number;
+  events: number;
+  bets: number;
+  eventKeys: number[];
+}
+
+export const emptyEvidence = (): EvidenceState => ({
+  logSkill: SKILL_EDGES.map(() => 0),
+  logNoEdge: 0,
+  events: 0,
+  bets: 0,
+  eventKeys: [],
+});
+
+export function evidenceTotals(s: EvidenceState): SkillEvidence {
+  return {
+    eSkill: s.logSkill.reduce((a, l) => a + Math.exp(l), 0) / SKILL_EDGES.length,
+    eNoEdge: Math.exp(s.logNoEdge),
+    events: s.events,
+  };
+}
+
+/**
+ * Fold the events that became final into `state` (returns a new state). An event is final
+ * once its first settlement is EVENT_WINDOW old AND none of its bets opened before then is
+ * still unresolved (it might still settle inside the window); after UNRESOLVED_WAIT a stuck
+ * bet stops blocking. Its factor then covers exactly the bets settled inside the window, so
+ * an event whose markets settle across several checks is counted once, complete.
+ */
+export function updateEvidence(
+  state: EvidenceState,
+  positions: PositionRecord[],
+  cfg: ScoringConfig,
+  now: number,
+): EvidenceState {
   const settledAt = (p: PositionRecord) => p.resolvedAt ?? p.lastActivityAt ?? p.firstEntryAt ?? 0;
   const byEvent = new Map<string, PositionRecord[]>();
   for (const p of positions) {
-    if (p.won === null || p.avgPrice < cfg.minEntryPrice || p.avgPrice > cfg.maxEntryPrice)
-      continue;
+    if (p.avgPrice < cfg.minEntryPrice || p.avgPrice > cfg.maxEntryPrice) continue;
     const key = p.eventId ?? p.conditionId;
     byEvent.set(key, [...(byEvent.get(key) ?? []), p]);
   }
@@ -205,24 +252,33 @@ export function skillEvidence(
     const q = Math.min(0.99, p.avgPrice + d);
     return p.won ? q / p.avgPrice : (1 - q) / (1 - p.avgPrice);
   };
-  const logSkill = SKILL_EDGES.map(() => 0);
-  let logNoEdge = 0;
-  let events = 0;
-  for (const bets of byEvent.values()) {
-    const first = Math.min(...bets.map(settledAt));
-    if (first + EVENT_WINDOW > now) continue; // not final yet
-    const counted = bets.filter((p) => settledAt(p) <= first + EVENT_WINDOW);
+  const seen = new Set(state.eventKeys);
+  const next: EvidenceState = {
+    ...state,
+    logSkill: [...state.logSkill],
+    eventKeys: [...state.eventKeys],
+  };
+  for (const [key, all] of byEvent) {
+    const h = hashString(key);
+    if (seen.has(h)) continue;
+    const resolved = all.filter((p) => p.won !== null);
+    if (resolved.length === 0) continue;
+    const first = Math.min(...resolved.map(settledAt));
+    const closes = first + EVENT_WINDOW;
+    if (closes > now) continue; // not final yet
+    const blocked = all.some((p) => p.won === null && (p.firstEntryAt ?? 0) <= closes);
+    if (blocked && first + UNRESOLVED_WAIT > now) continue; // a bet may still settle inside
+    const counted = resolved.filter((p) => settledAt(p) <= closes);
     const avg = (f: (p: PositionRecord) => number) =>
       counted.reduce((a, p) => a + f(p), 0) / counted.length;
-    SKILL_EDGES.forEach((d, j) => (logSkill[j] += Math.log(avg((p) => ratio(p, d)))));
-    logNoEdge += Math.log(avg((p) => 1 / ratio(p, cfg.minEdge)));
-    events++;
+    SKILL_EDGES.forEach((d, j) => (next.logSkill[j] += Math.log(avg((p) => ratio(p, d)))));
+    next.logNoEdge += Math.log(avg((p) => 1 / ratio(p, cfg.minEdge)));
+    next.events++;
+    next.bets += counted.length;
+    next.eventKeys.push(h);
+    seen.add(h);
   }
-  return {
-    eSkill: logSkill.reduce((a, l) => a + Math.exp(l), 0) / SKILL_EDGES.length,
-    eNoEdge: Math.exp(logNoEdge),
-    events,
-  };
+  return next;
 }
 
 /**

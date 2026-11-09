@@ -7,7 +7,11 @@ import {
   copyAdjustedRoi,
   drawdownStats,
   monthlyPnl,
+  emptyEvidence,
+  evidenceTotals,
+  skillEvidence,
   skillZ,
+  updateEvidence,
   type MetricsInput,
   type PositionRecord,
 } from "@/lib/scoring/metrics";
@@ -25,6 +29,7 @@ import {
   hftBot,
   oneHitWonder,
   steadyGrinder,
+  NOW,
 } from "./fixtures/traders";
 
 // One test at p = 0.05 is the same bar as sequential evidence ≥ 1/0.05 = 20.
@@ -373,5 +378,60 @@ describe("bot check uses recent activity too (owner, 2026-11-09)", () => {
       cfg,
     );
     expect(["verified", "elite"]).toContain(scoreTrader(m, cfg, ctx).tier);
+  });
+});
+
+describe("running skill evidence across checks (owner, 2026-11-09)", () => {
+  const H = 3600;
+  const t0 = NOW - 20 * 86_400;
+  const bet = (
+    id: string,
+    event: string,
+    won: boolean | null,
+    entry: number,
+    settled: number | null,
+  ) => ({
+    conditionId: id,
+    tokenId: `${id}-t`,
+    eventId: event,
+    category: null,
+    avgPrice: 0.5,
+    sharesBought: 100,
+    realizedPnl: 0,
+    unrealizedPnl: 0,
+    closed: won !== null,
+    won,
+    firstEntryAt: entry,
+    lastActivityAt: settled ?? entry,
+    resolvedAt: settled,
+  });
+  // Event E: A won (settled t0); B lost, opened before A settled and settled inside the
+  // window, but its result only reached us after check 1.
+  const atCheck1 = [bet("A", "E", true, t0 - 5 * H, t0), bet("B", "E", null, t0 - H, null)];
+  const atCheck2 = [bet("A", "E", true, t0 - 5 * H, t0), bet("B", "E", false, t0 - H, t0 + 12 * H)];
+  const now1 = t0 + 2 * 86_400;
+  const now2 = t0 + 3 * 86_400;
+
+  it("an event isn't counted while one of its bets may still settle inside the window", () => {
+    expect(skillEvidence(atCheck1, cfg, now1).events).toBe(0);
+  });
+
+  it("counts an event once, complete, when its markets settle across checks", () => {
+    const s1 = updateEvidence(emptyEvidence(), atCheck1, cfg, now1);
+    expect(s1.events).toBe(0);
+    const s2 = updateEvidence(s1, atCheck2, cfg, now2);
+    expect(s2).toMatchObject({ events: 1, bets: 2 });
+    // Same as computing everything at once from check 2's data.
+    expect(evidenceTotals(s2).eSkill).toBeCloseTo(skillEvidence(atCheck2, cfg, now2).eSkill, 12);
+    // Seen again at later checks (or a full check): never counted twice.
+    const s3 = updateEvidence(s2, atCheck2, cfg, now2 + 7 * 86_400);
+    expect(s3).toEqual(s2);
+  });
+
+  it("a bet that never resolves stops blocking its event after 30 days", () => {
+    expect(updateEvidence(emptyEvidence(), atCheck1, cfg, t0 + 31 * 86_400)).toMatchObject({
+      events: 1,
+      bets: 1,
+    });
   });
 });
