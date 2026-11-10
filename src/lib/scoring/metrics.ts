@@ -29,6 +29,8 @@ export interface PositionRecord {
   endAt?: number | null;
   /** When the market actually settled (epoch seconds), if known. */
   resolvedAt?: number | null;
+  /** Sports: when the game started (epoch seconds); bets opened after it can't be copied. */
+  gameStartAt?: number | null;
 }
 
 export interface PnlSeriesPoint {

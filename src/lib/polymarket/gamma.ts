@@ -34,6 +34,8 @@ export const GammaMarket = z.object({
   image: z.string().nullish(),
   icon: z.string().nullish(),
   endDate: z.string().nullish(),
+  /** Sports: when the game starts ("2026-11-10 17:25:00+00"); = the event's startTime. */
+  gameStartTime: z.string().nullish(),
   closed: z.boolean().nullish(),
   active: z.boolean().nullish(),
   umaResolutionStatus: z.string().nullish(),
@@ -53,6 +55,27 @@ export const GammaMarket = z.object({
     .nullish(),
 });
 export type GammaMarket = z.infer<typeof GammaMarket>;
+
+/** Gamma's timestamps come as "2026-11-10 17:25:00+00" or ISO; null if absent/unreadable. */
+export function gammaTime(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const d = new Date(
+    s
+      .trim()
+      .replace(" ", "T")
+      .replace(/([+-]\d\d)$/, "$1:00"),
+  );
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * A combo (parlay) bet: one token for several markets at once. Verified live 2026-11-10: such
+ * trades carry a synthetic condition id padded with zeros, unknown to Gamma, with no order
+ * book or price history, so they can't be copied or replayed.
+ */
+export function isComboCondition(conditionId: string): boolean {
+  return /0{20,}$/.test(conditionId);
+}
 
 const KeysetResponse = z.object({
   markets: z.array(GammaMarket),

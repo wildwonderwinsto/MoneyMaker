@@ -334,13 +334,10 @@ export const RISK_GROUPS: Group[] = [
         step: 1,
       },
       {
-        kind: "number",
-        name: "minMinutesToEnd",
-        label: "Skip markets ending within",
-        help: "Prices jump around right before a market ends, with no time to react.",
-        unit: "min",
-        min: 0,
-        step: 1,
+        kind: "boolean",
+        name: "skipInPlay",
+        label: "Skip games already in play",
+        help: "Don't copy buys into a sports game once it has started: in-play prices move too fast, and copies of in-play trades returned less than pre-game ones. Applies to the backtest and the traders' copy check too. Other markets are never skipped for their end date (Polymarket's end date isn't when a market really closes); the price limits protect those.",
       },
       {
         kind: "number",

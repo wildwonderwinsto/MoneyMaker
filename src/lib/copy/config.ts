@@ -12,8 +12,11 @@ export const RiskConfigSchema = z
     minEntryPrice: z.number().min(0).max(1).default(0.03),
     /** Max price move (in price points) we accept vs. the leader's fill. */
     maxPriceDrift: z.number().min(0).max(0.5).default(0.03),
-    /** Don't open positions in markets ending sooner than this. */
-    minMinutesToEnd: z.number().min(0).default(10),
+    /**
+     * Don't buy into a sports game once it has started (Gamma gameStartTime). Replaces
+     * "skip markets ending within N min": Polymarket's end date isn't the real close time.
+     */
+    skipInPlay: z.boolean().default(true),
     /**
      * Ignore leader trades older than this (e.g. after downtime). At most 7 days: a far
      * larger value made the skipped-trade retry window an invalid date (batch 6).

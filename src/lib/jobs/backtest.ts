@@ -15,6 +15,8 @@ import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "@/lib/scoring/config
 import { getMidpoints } from "@/lib/polymarket/clob";
 
 import { fetchActivityWindow, isBotLike, rebuildPickMonth, recentProfile } from "./activityHistory";
+import { getRiskConfig } from "@/lib/settings";
+
 import { loadInputs } from "./score";
 
 const monthKey = (d: Date) => d.toISOString().slice(0, 7);
@@ -174,12 +176,16 @@ export async function rebuildRecordedMonths(
     const from = Math.max(monthStart, Math.floor(row.recordedAt.getTime() / 1000));
     const w = await fetchActivityWindow(row.wallet, from, end);
     const value = await holdValues(db, w.rows);
+    const starts = params.skipInPlay ? await gameStarts(db, w.rows) : new Map<string, number>();
     const r = rebuildPickMonth(
       w.rows,
       (t) => value.get(t),
       params.copySlippage,
       params.takerFeeRate,
-      params,
+      {
+        ...params,
+        gameStart: (c) => starts.get(c),
+      },
     );
     if (w.partial) partial++;
     await db
@@ -199,6 +205,19 @@ export async function rebuildRecordedMonths(
 }
 
 /** Per token: settled payout from the markets table, else today's midpoint. */
+/** Sports game starts (epoch seconds) from stored markets, for the in-play rule. */
+async function gameStarts(db: Db, rows: { condition_id: string }[]) {
+  const ids = [...new Set(rows.map((r) => r.condition_id))];
+  const out = new Map<string, number>();
+  if (ids.length === 0) return out;
+  const ms = await db
+    .select({ id: markets.conditionId, start: markets.gameStartTime })
+    .from(markets)
+    .where(and(inArray(markets.conditionId, ids), isNotNull(markets.gameStartTime)));
+  for (const m of ms) out.set(m.id, m.start!.getTime() / 1000);
+  return out;
+}
+
 async function holdValues(db: Db, rows: { condition_id: string; token_id?: string | null }[]) {
   const tokens = [...new Set(rows.map((r) => r.token_id).filter((t): t is string => !!t))];
   const conditions = [...new Set(rows.map((r) => r.condition_id))];
@@ -238,6 +257,16 @@ export async function backtestJob(
   params: BacktestParams,
   log: (m: string) => void,
 ) {
+  // The engine's saved filters, so the backtest copies what the engine would (B4 + the
+  // in-play rule, owner 2026-11-10), not the defaults.
+  const risk = await getRiskConfig(db);
+  params = {
+    ...params,
+    minLeaderUsd: risk.minLeaderUsd,
+    minEntryPrice: risk.minEntryPrice,
+    maxEntryPrice: risk.maxEntryPrice,
+    skipInPlay: risk.skipInPlay,
+  };
   const now = Math.floor(Date.now() / 1000);
   const wallets = (
     await db

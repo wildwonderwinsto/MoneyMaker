@@ -76,3 +76,29 @@ describe("getMarketInfo", () => {
     });
   });
 });
+
+describe("sports game start (owner, 2026-11-10)", () => {
+  it("reads Gamma's '2026-11-10 17:25:00+00' format and serves it from the cache", async () => {
+    const { gammaTime } = await import("@/lib/polymarket/gamma");
+    expect(gammaTime("2026-11-10 17:25:00+00")?.toISOString()).toBe("2026-11-10T17:25:00.000Z");
+    expect(gammaTime("2026-11-10T17:25:00Z")?.toISOString()).toBe("2026-11-10T17:25:00.000Z");
+    expect(gammaTime("not a date")).toBeNull();
+    const fetchMock = stubGamma((closed) =>
+      closed
+        ? []
+        : [
+            {
+              ...gammaMarket("0xgame", false),
+              question: "Heat vs. Jazz",
+              gameStartTime: "2026-11-11 02:00:00+00",
+            },
+          ],
+    );
+    const fresh = await getMarketInfo(db, ["0xgame"]);
+    expect(fresh.get("0xgame")?.gameStartTime?.toISOString()).toBe("2026-11-11T02:00:00.000Z");
+    fetchMock.mockClear();
+    const cached = await getMarketInfo(db, ["0xgame"]); // from the markets table now
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(cached.get("0xgame")?.gameStartTime?.toISOString()).toBe("2026-11-11T02:00:00.000Z");
+  });
+});

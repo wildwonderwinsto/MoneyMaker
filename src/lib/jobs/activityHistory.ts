@@ -14,6 +14,7 @@
  * (no token), so their cost per share is unknowable.
  */
 import { collect, getActivity, paginate, type Activity } from "@/lib/polymarket/data";
+import { isComboCondition } from "@/lib/polymarket/gamma";
 import { MAX_REDEEM_MERGE_SHARE } from "@/lib/scoring/config";
 
 /** Rows fetched per pick-month or profile (newest first); older rows are "not covered". */
@@ -71,8 +72,16 @@ export function rebuildPickMonth(
   value: (tokenId: string) => number | undefined,
   slippage: number,
   feeRate: number,
-  /** The copy engine's filters (B4): leader bets it would skip aren't counted. */
-  filters: { minLeaderUsd: number; minEntryPrice: number; maxEntryPrice: number } = {
+  /**
+   * The copy engine's filters (B4): leader bets it would skip aren't counted. `gameStart`
+   * (epoch seconds per market, sports only) drops tokens first bought after kickoff.
+   */
+  filters: {
+    minLeaderUsd: number;
+    minEntryPrice: number;
+    maxEntryPrice: number;
+    gameStart?: (conditionId: string) => number | null | undefined;
+  } = {
     minLeaderUsd: 0,
     minEntryPrice: 0,
     maxEntryPrice: 1,
@@ -82,6 +91,7 @@ export function rebuildPickMonth(
   const byToken = new Map<string, Activity[]>();
   for (const r of rows) {
     if (!POSITION_TYPES.has(r.type) || !r.token_id || unknown.has(r.condition_id)) continue;
+    if (isComboCondition(r.condition_id)) continue; // combos can't be copied
     if (r.type !== "TRADE" && r.type !== "REDEEM") continue;
     byToken.set(r.token_id, [...(byToken.get(r.token_id) ?? []), r]);
   }
@@ -91,6 +101,8 @@ export function rebuildPickMonth(
   for (const [token, list] of byToken) {
     list.sort((a, b) => a.timestamp - b.timestamp);
     if (!(list[0].type === "TRADE" && list[0].side === "BUY")) continue;
+    const kickoff = filters.gameStart?.(list[0].condition_id);
+    if (kickoff != null && list[0].timestamp >= kickoff) continue; // opened in play
     let bought = 0;
     let cost = 0;
     let out = 0;

@@ -33,6 +33,8 @@ export function codeFromReason(reason: string): ReasonCode {
     [/^Leader paid .*below/, "price_too_low"],
     [/^Leader trade too small/, "leader_too_small"],
     [/^Market ends in/, "ending_soon"],
+    [/^Game already started/, "in_play"],
+    [/^Combo bet/, "combo"],
     [/^Market is closed/, "market_closed"],
     [/^Market info unavailable/, "no_market"],
     [/^No sellers/, "no_sellers"],
@@ -173,12 +175,29 @@ export function explain(opts: {
       };
     }
     case "ending_soon":
+      // Old signals only: the end date is no longer used (owner decision 2026-11-10).
       return {
         title: "Skipped: market about to end",
         body: [
-          `This market ends in ${num(d, "minutesLeft") ?? "a few"} minutes. Prices jump around wildly right before the end, and there's no time to react.`,
+          `This market's listed end was ${num(d, "minutesLeft") ?? "a few"} minutes away. (An older rule: Polymarket's end date turned out not to be when markets really close, so it's no longer used.)`,
         ],
-        setting: "Skip markets ending within",
+        setting: "Skip games already in play",
+      };
+    case "in_play":
+      return {
+        title: "Skipped: game already started",
+        body: [
+          `This game started ${num(d, "minutesSinceStart") ?? "some"} minutes earlier. In-play prices move fast, and copies of in-play trades have returned less than pre-game ones.`,
+          "Sells are still copied, so positions bought before kickoff close with the trader.",
+        ],
+        setting: "Skip games already in play",
+      };
+    case "combo":
+      return {
+        title: "Skipped: combo bet",
+        body: [
+          "The trader bought a combo (one bet on several markets at once). Combos have no order book to copy into, so they can't be copied.",
+        ],
       };
     case "market_cap":
     case "trader_cap":

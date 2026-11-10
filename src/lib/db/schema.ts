@@ -111,6 +111,8 @@ export const markets = pgTable(
     image: text(),
     category: text(),
     endDate: tsz(),
+    /** Sports: when the game starts (Gamma gameStartTime); buys stop from then on. */
+    gameStartTime: tsz(),
     closed: boolean().notNull().default(false),
     /** Outcome labels, e.g. ["Yes","No"]. */
     outcomes: jsonb().$type<string[]>().notNull().default([]),
@@ -305,6 +307,8 @@ export type ReasonCode =
   | "no_market"
   | "market_closed"
   | "ending_soon"
+  | "in_play"
+  | "combo"
   | "price_too_high"
   | "price_too_low"
   | "daily_loss"

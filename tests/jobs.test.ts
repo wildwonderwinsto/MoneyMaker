@@ -858,3 +858,23 @@ describe("interrupted job runs (J11)", () => {
     await db.delete(jobRuns).where(eq(jobRuns.job, "j11"));
   });
 });
+
+describe("the backtest uses the engine's saved filters (owner, 2026-11-10)", () => {
+  it("skipInPlay and minLeaderUsd come from Settings, not the defaults", async () => {
+    const { backtestJob } = await import("@/lib/jobs/backtest");
+    const { backtestRuns } = await import("@/lib/db/schema");
+    const { writeSetting } = await import("@/lib/settings");
+    const { DEFAULT_RISK_CONFIG } = await import("@/lib/copy/config");
+    const { DEFAULT_SCORING_CONFIG } = await import("@/lib/scoring/config");
+    await writeSetting(db, "risk", { ...DEFAULT_RISK_CONFIG, skipInPlay: false, minLeaderUsd: 77 });
+    noActivity();
+    await backtestJob(db, DEFAULT_SCORING_CONFIG, { ...DEFAULT_BACKTEST, months: 1 }, () => {});
+    const [run] = await db
+      .select()
+      .from(backtestRuns)
+      .orderBy(sql`id desc`)
+      .limit(1);
+    expect(run.params).toMatchObject({ skipInPlay: false, minLeaderUsd: 77 });
+    await writeSetting(db, "risk", DEFAULT_RISK_CONFIG);
+  });
+});

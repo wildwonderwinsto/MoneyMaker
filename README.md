@@ -56,11 +56,17 @@ Copying fast comes first. The server runs the engine itself (`src/instrumentatio
 2. **Checks every 15, 30 or 60 s** (Settings → Speed) poll every trader as a safety net,
    re-check trades skipped because the price ran away, settle resolved markets at $1 or $0,
    mark prices, auto-hedge (if on) and snapshot equity.
-3. Each trade passes the risk rules (price moved too much? market ending? daily loss limit?
-   caps?), then fills against the **live order book** (real slippage), paying the market's
+3. Each trade passes the risk rules (price moved too much? sports game already in play?
+   daily loss limit? caps?), then fills against the **live order book** (real slippage), paying the market's
    real taker fee (`shares × rate × p × (1 − p)`, rate 0–7% by category). Pieces of one
    order are combined first, so sizing and the "too small" filter see the whole order.
 4. Sells are mirrored proportionally (and any hedge is sold with them).
+
+**Market timing.** Polymarket's listed end date isn't when a market really closes (checked live:
+46% of markets closed over an hour before it, and some still trade after it), so it is not used.
+Buys into a sports game stop once the game has started (`gameStartTime`): in-play copies returned
+less than pre-game ones. Combo bets (one bet on several markets) can't be copied and are skipped.
+The same rules apply to the traders' copy check and the backtest.
 
 `/api/cron/tick` (cron-job.org, every minute) keeps the free instance awake and runs a tick
 itself if the loop ever stalls. Set `ENGINE_LOOP=off` to rely on cron alone.

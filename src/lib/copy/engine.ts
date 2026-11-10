@@ -6,6 +6,7 @@
  */
 import type { ReasonCode } from "@/lib/db/schema";
 import type { OrderBook } from "@/lib/polymarket/clob";
+import { isComboCondition } from "@/lib/polymarket/gamma";
 
 import type { RiskConfig } from "./config";
 import { simulateBuy, simulateSell, type Fill } from "./fillSim";
@@ -39,6 +40,8 @@ export interface MarketInfo {
   eventSlug?: string | null;
   image: string | null;
   endDate: Date | null;
+  /** Sports: when the game starts; null otherwise (or not known yet). */
+  gameStartTime?: Date | null;
   closed: boolean;
   tokenIds: string[];
   outcomes: string[];
@@ -113,12 +116,18 @@ export function decideBuy(ctx: BuyContext): Decision {
       maxAgeSeconds: cfg.maxSignalAgeSeconds,
     });
   }
+  // A combo bet's synthetic market is unknown to Gamma and has no order book (verified live).
+  if (!market && isComboCondition(trade.conditionId)) {
+    return skip("Combo bet (several markets in one): can't be copied", "combo");
+  }
   if (!market) return skip("Market info unavailable", "no_market");
   if (market.closed) return skip("Market is closed", "market_closed");
-  if (market.endDate && market.endDate.getTime() / 1000 - now < cfg.minMinutesToEnd * 60) {
-    return skip(`Market ends in under ${cfg.minMinutesToEnd} min`, "ending_soon", {
-      minutesLeft: Math.max(0, Math.round((market.endDate.getTime() / 1000 - now) / 60)),
-      minMinutesToEnd: cfg.minMinutesToEnd,
+  // Owner decision 2026-11-10: Polymarket's endDate isn't the real close time (46% of markets
+  // closed > 1 h before it; 8% of volume trades after it), so it is not used. Sports games
+  // are skipped from kickoff: in-play copies returned less (stake-weighted +9.6% vs +13.0%).
+  if (cfg.skipInPlay && market.gameStartTime && now >= market.gameStartTime.getTime() / 1000) {
+    return skip("Game already started: in-play prices move too fast to copy", "in_play", {
+      minutesSinceStart: Math.round((now - market.gameStartTime.getTime() / 1000) / 60),
     });
   }
   if (trade.price > cfg.maxEntryPrice) {

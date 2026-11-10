@@ -96,6 +96,7 @@ describe("huge values", () => {
 // Risk settings: each one changes what the engine decides for the same trade.
 
 const NOW = 1_800_000_000;
+const started = new Date((NOW - 600) * 1000);
 const market = (minutesLeft = 7 * 24 * 60) => ({
   conditionId: "c",
   question: "q",
@@ -197,7 +198,7 @@ const riskCases: RiskCase[] = [
   ["maxEntryPrice", 0.4, (c) => buyOutcome(c)],
   ["minEntryPrice", 0.6, (c) => buyOutcome(c)],
   ["maxPriceDrift", 0.01, (c) => buyOutcome(c, { book: book([[0.52, 10_000]], []) })],
-  ["minMinutesToEnd", 60, (c) => buyOutcome(c, { market: market(30) })],
+  ["skipInPlay", false, (c) => buyOutcome(c, { market: { ...market(), gameStartTime: started } })],
   ["maxSignalAgeSeconds", 300, (c) => buyOutcome(c, { trade: trade({ ts: NOW - 200 }) })],
   ["maxDailyLossPct", 0.05, (c) => buyOutcome(c, { dailyLossPct: 0.08 })],
   ["maxBuysPerPosition", 2, (c) => buyOutcome(c, { positionBuys: 2 })],
@@ -223,10 +224,28 @@ describe("every risk setting changes the decision", () => {
     expect(after).not.toBe(before);
   });
 
-  it("minMinutesToEnd at the boundary: refuses at 9 min left with 10, copies at 11", () => {
-    const cfg = DEFAULT_RISK_CONFIG; // 10 min
-    expect(buyOutcome(cfg, { market: market(9) })).toBe("skip ending_soon");
-    expect(buyOutcome(cfg, { market: market(11) })).toMatch(/^buy /);
+  // Owner decision 2026-11-10 (live check: Polymarket's endDate isn't the real close time).
+  it("non-sports: the end date is not used; a market past it is copied like any other", () => {
+    expect(buyOutcome(DEFAULT_RISK_CONFIG, { market: market(-60) })).toMatch(/^buy /);
+    expect(buyOutcome(DEFAULT_RISK_CONFIG, { market: market(5) })).toMatch(/^buy /);
+  });
+
+  it("sports: buys are skipped from game start onward, copied before it", () => {
+    const at = (s: number) => ({ ...market(), gameStartTime: new Date((NOW + s) * 1000) });
+    expect(buyOutcome(DEFAULT_RISK_CONFIG, { market: at(0) })).toBe("skip in_play");
+    expect(buyOutcome(DEFAULT_RISK_CONFIG, { market: at(-3600) })).toBe("skip in_play");
+    expect(buyOutcome(DEFAULT_RISK_CONFIG, { market: at(60) })).toMatch(/^buy /);
+  });
+
+  it("a combo bet (several markets in one) is skipped as a combo, not 'market unavailable'", () => {
+    const combo = "0x0307bbccd23ea7621138345520cf6b74890000000000000000000000000000";
+    const d = decideBuy(
+      buyCtx(DEFAULT_RISK_CONFIG, { market: null, trade: trade({ conditionId: combo }) }),
+    );
+    expect(d).toMatchObject({ action: "skip", code: "combo" });
+    expect(decideBuy(buyCtx(DEFAULT_RISK_CONFIG, { market: null }))).toMatchObject({
+      code: "no_market",
+    });
   });
 
   it("realtime and tickIntervalSeconds reach the running engine", async () => {

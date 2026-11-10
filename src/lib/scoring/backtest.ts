@@ -15,7 +15,7 @@
  * rebuild time, bets are booked in the month they were opened, delay is modelled as slippage.
  */
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
-import { DEFAULT_TAKER_FEE_RATE } from "@/lib/polymarket/gamma";
+import { DEFAULT_TAKER_FEE_RATE, isComboCondition } from "@/lib/polymarket/gamma";
 
 import type { ScoringConfig } from "./config";
 import { computeMetrics, type MetricsInput, type PositionRecord } from "./metrics";
@@ -36,6 +36,8 @@ export interface BacktestParams {
   simulations: number;
   /** The copy engine's own filters (B4): smaller leader bets and prices outside are skipped. */
   minLeaderUsd: number;
+  /** The engine's "Skip games already in play": bets opened after kickoff aren't copied. */
+  skipInPlay: boolean;
   minEntryPrice: number;
   maxEntryPrice: number;
 }
@@ -49,6 +51,7 @@ export const DEFAULT_BACKTEST: BacktestParams = {
   startingEquity: 1000,
   simulations: 300,
   minLeaderUsd: DEFAULT_RISK_CONFIG.minLeaderUsd,
+  skipInPlay: DEFAULT_RISK_CONFIG.skipInPlay,
   minEntryPrice: DEFAULT_RISK_CONFIG.minEntryPrice,
   maxEntryPrice: DEFAULT_RISK_CONFIG.maxEntryPrice,
 };
@@ -199,6 +202,9 @@ function portfolioReturn(
       // What the engine would skip (B4): too small a leader bet, or a price outside its band.
       if (stake < params.minLeaderUsd) continue;
       if (p.avgPrice < params.minEntryPrice || p.avgPrice > params.maxEntryPrice) continue;
+      // Nor what it can't copy: combo bets, and sports bets opened once the game started.
+      if (isComboCondition(p.conditionId)) continue;
+      if (params.skipInPlay && p.gameStartAt != null && p.firstEntryAt >= p.gameStartAt) continue;
       const r = copiedBetReturn(p, slippage, feeRate);
       if (r === null) continue;
       staked += stake;

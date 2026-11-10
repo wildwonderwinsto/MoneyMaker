@@ -3,6 +3,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@/lib/db/client";
 import { markets } from "@/lib/db/schema";
 import {
+  gammaTime,
   getMarketsByConditionIds,
   resolvedPayouts,
   takerFeeRate,
@@ -20,6 +21,7 @@ const toInfo = (m: MarketRow): MarketInfo => ({
   eventSlug: m.eventSlug,
   image: m.image,
   endDate: m.endDate,
+  gameStartTime: m.gameStartTime,
   closed: m.closed,
   tokenIds: m.tokenIds,
   outcomes: m.outcomes,
@@ -95,6 +97,7 @@ export async function getMarketInfo(
       eventSlug: m.events?.[0]?.slug ?? null,
       image: m.image ?? m.icon ?? null,
       endDate: m.endDate ? new Date(m.endDate) : null,
+      gameStartTime: gammaTime(m.gameStartTime),
       closed: m.closed ?? false,
       outcomes: m.outcomes,
       tokenIds: m.clobTokenIds,
@@ -116,6 +119,7 @@ export async function getMarketInfo(
         eventSlug: sql`coalesce(excluded.event_slug, ${markets.eventSlug})`,
         image: sql`coalesce(excluded.image, ${markets.image})`,
         endDate: sql`excluded.end_date`,
+        gameStartTime: sql`excluded.game_start_time`,
         closed: sql`excluded.closed`,
         outcomes: sql`excluded.outcomes`,
         tokenIds: sql`excluded.token_ids`,

@@ -20,7 +20,12 @@ import {
   traderTrades,
 } from "@/lib/db/schema";
 import { collect, getPositions, getUserPnl, paginate, type Position } from "@/lib/polymarket/data";
-import { getMarketsByConditionIds, resolvedPayouts, winnerIndex } from "@/lib/polymarket/gamma";
+import {
+  gammaTime,
+  getMarketsByConditionIds,
+  resolvedPayouts,
+  winnerIndex,
+} from "@/lib/polymarket/gamma";
 
 import { chunk, toDate, toEpoch } from "./util";
 
@@ -256,6 +261,7 @@ export async function resolveMarkets(
         eventSlug: m.events?.[0]?.slug ?? null,
         image: m.image ?? m.icon ?? null,
         endDate: m.endDate ? new Date(m.endDate) : null,
+        gameStartTime: gammaTime(m.gameStartTime),
         closed: m.closed ?? false,
         outcomes: m.outcomes,
         tokenIds: m.clobTokenIds,
@@ -272,6 +278,7 @@ export async function resolveMarkets(
         target: markets.conditionId,
         set: {
           closed: sql`excluded.closed`,
+          gameStartTime: sql`coalesce(excluded.game_start_time, ${markets.gameStartTime})`,
           winnerIndex: sql`excluded.winner_index`,
           payouts: sql`excluded.payouts`,
           resolvedAt: sql`excluded.resolved_at`,

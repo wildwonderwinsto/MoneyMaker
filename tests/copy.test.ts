@@ -180,8 +180,9 @@ describe("decideBuy", () => {
     expect(reason({ ...ctx, trade: { ...trade, ts: NOW - 3600 } })).toMatch(/min old/);
     expect(reason({ ...ctx, market: { ...ctx.market!, closed: true } })).toMatch(/closed/);
     expect(
-      reason({ ...ctx, market: { ...ctx.market!, endDate: new Date((NOW + 60) * 1000) } }),
-    ).toMatch(/ends in under/);
+      // The end date is no longer used (owner, 2026-11-10); a game already in play is.
+      reason({ ...ctx, market: { ...ctx.market!, gameStartTime: new Date((NOW - 60) * 1000) } }),
+    ).toMatch(/Game already started/);
     expect(reason({ ...ctx, trade: { ...trade, price: 0.95 } })).toMatch(/above/);
     expect(reason({ ...ctx, dailyLossPct: 0.2 })).toMatch(/Daily loss/);
     expect(reason({ ...ctx, book: { ...book, asks: [{ price: 0.6, size: 100 }] } })).toMatch(

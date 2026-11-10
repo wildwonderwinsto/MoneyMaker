@@ -20,7 +20,9 @@ import { getMidpoints, getPriceHistory, type PricePoint } from "@/lib/polymarket
 import { collect, getActivity, paginate, tradeIds, type Activity } from "@/lib/polymarket/data";
 import {
   DEFAULT_TAKER_FEE_RATE,
+  gammaTime,
   getMarketsByConditionIds,
+  isComboCondition,
   resolvedPayouts,
   takerFeeRate,
 } from "@/lib/polymarket/gamma";
@@ -145,12 +147,17 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
     }
     // When each market actually settled (the backtest must not know outcomes early).
     const settled = new Map<string, number | null>();
+    // Sports game starts: the backtest skips bets opened in play, like the engine.
+    const gameStart = new Map<string, number | null>();
     for (const ids of chunk([...new Set(positions.map((r) => r.conditionId))], 1000)) {
       const rows = await db
-        .select({ id: markets.conditionId, at: markets.resolvedAt })
+        .select({ id: markets.conditionId, at: markets.resolvedAt, start: markets.gameStartTime })
         .from(markets)
         .where(inArray(markets.conditionId, ids));
-      for (const m of rows) settled.set(m.id, toEpoch(m.at));
+      for (const m of rows) {
+        settled.set(m.id, toEpoch(m.at));
+        gameStart.set(m.id, toEpoch(m.start));
+      }
     }
     for (const r of positions) {
       // Unknown cost (shares from splits/conversions, see backfill): the API's realized P&L on
@@ -160,6 +167,7 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
       inputs.get(r.wallet)?.positions.push({
         ...toPositionRecord(r),
         resolvedAt: settled.get(r.conditionId) ?? null,
+        gameStartAt: gameStart.get(r.conditionId) ?? null,
       });
     }
     for (const r of pnl) {
@@ -180,7 +188,7 @@ export async function buildCopyReplays(
 ): Promise<CopyReplay[]> {
   // Same minimum as the copy engine's "Ignore trader trades under" (owner, 2026-11-10): it
   // used to be a separate scoring setting that could drift from what is actually copied.
-  const { minLeaderUsd } = await getRiskConfig(db);
+  const { minLeaderUsd, skipInPlay } = await getRiskConfig(db);
   const start = Math.floor(now - opts.replayLookbackDays * 86_400);
   const trades: Activity[] = await collect(
     paginate((cursor) => getActivity({ user: wallet, type: "TRADE", start, cursor }), {
@@ -218,18 +226,29 @@ export async function buildCopyReplays(
       t.usdcSize >= minLeaderUsd &&
       t.price > cfg.minEntryPrice &&
       t.price < 0.97 &&
-      toEpoch(t.ts)! < now - cfg.copyDelaySeconds - 900,
+      toEpoch(t.ts)! < now - cfg.copyDelaySeconds - 900 &&
+      // Combo bets can't be copied (no order book), so they don't take sample slots.
+      !isComboCondition(t.conditionId),
   );
   if (buys.length === 0) return [];
-  const sample = evenSample(buys, opts.replaysPerTrader);
-  const exits = leaderExits(rows);
-
+  // Same rule as the engine: no buys after a game started. That needs each market's game
+  // start, so twice the sample is looked up and in-play buys dropped before the final pick.
+  const candidates = evenSample(buys, opts.replaysPerTrader * 2);
   const marketsById = new Map(
-    (await getMarketsByConditionIds(sample.map((s) => s.conditionId))).map((m) => [
+    (await getMarketsByConditionIds(candidates.map((s) => s.conditionId))).map((m) => [
       m.conditionId,
       m,
     ]),
   );
+  const inPlay = (t: (typeof buys)[number]) => {
+    const start = gammaTime(marketsById.get(t.conditionId)?.gameStartTime);
+    return skipInPlay && start !== null && toEpoch(t.ts)! >= start.getTime() / 1000;
+  };
+  const sample = evenSample(
+    candidates.filter((t) => !inPlay(t)),
+    opts.replaysPerTrader,
+  );
+  const exits = leaderExits(rows);
   const mids = await getMidpoints(sample.map((s) => s.tokenId));
 
   const replays = await mapPool(sample, 3, async (t): Promise<CopyReplay | null> => {

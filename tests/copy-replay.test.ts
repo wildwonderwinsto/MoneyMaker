@@ -121,3 +121,45 @@ describe("replay settings (batch 6 sweep)", () => {
     expect(Object.keys(cfg)).not.toContain("minReplayLeaderUsd");
   });
 });
+
+describe("replays leave out what the engine can't copy (owner, 2026-11-10)", () => {
+  it("no combo bets and no buys made after a game started", async () => {
+    const combo = {
+      ...buy(5),
+      condition_id: "0x0307bbccd23ea7621138345520cf6b74890000000000000000000000000000",
+      token_id: "tc",
+    };
+    const inPlay = buy(6); // its market's game started before the buy
+    const normal = buy(7);
+    vi.mocked(data.getActivity).mockResolvedValue({
+      data: [combo, inPlay, normal],
+      pagination: { has_more: false, next_cursor: null },
+    } as never);
+    vi.mocked(gamma.getMarketsByConditionIds).mockResolvedValue([
+      gamma.GammaMarket.parse({
+        id: "6",
+        question: "Game",
+        conditionId: inPlay.condition_id,
+        outcomes: '["Yes","No"]',
+        outcomePrices: '["0.5","0.5"]',
+        clobTokenIds: `["${inPlay.token_id}","x"]`,
+        gameStartTime: new Date((inPlay.timestamp - 600) * 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(clob.getMidpoints).mockResolvedValue(
+      new Map([
+        ["tc", 0.6],
+        [inPlay.token_id!, 0.6],
+        [normal.token_id!, 0.6],
+      ]),
+    );
+    vi.mocked(clob.getPriceHistory).mockImplementation(async (_t, o) => [
+      { t: (o.startTs ?? 0) + 120, p: 0.5 },
+    ]);
+    const { writeSetting } = await import("@/lib/settings");
+    const { DEFAULT_RISK_CONFIG } = await import("@/lib/copy/config");
+    await writeSetting(db, "risk", DEFAULT_RISK_CONFIG);
+    const replays = await buildCopyReplays(db, "0xleader", cfg, DEFAULT_SCORE, NOW);
+    expect(replays.map((r) => r.ts)).toEqual([normal.timestamp]);
+  });
+});

@@ -602,3 +602,65 @@ describe("B9: re-derived baseline months leave out bots, like recorded ones", ()
     expect(r.months[0].baselinePicks).not.toContain("0xbot");
   });
 });
+
+describe("the backtest leaves out what the engine can't copy (owner, 2026-11-10)", () => {
+  const oct = Date.UTC(2026, 9, 1) / 1000;
+  const bet = (over: Record<string, unknown>) => ({
+    ...steadyGrinder(12).positions[0],
+    avgPrice: 0.5,
+    sharesBought: 200,
+    realizedPnl: 100,
+    closed: true,
+    won: true,
+    firstEntryAt: oct + 86_400,
+    lastActivityAt: oct + 2 * 86_400,
+    ...over,
+  });
+  const run = (p: ReturnType<typeof bet>) =>
+    runBacktest(
+      [{ ...steadyGrinder(12), wallet: "0xb", positions: [p] }],
+      cfg,
+      { ...DEFAULT_BACKTEST, months: 1, topK: 3 },
+      NOW,
+      new Map([["2026-10", { strategy: ["0xb"], baseline: [], from: oct }]]),
+    ).months[0].strategyBets;
+
+  it("a sports bet opened after the game started isn't copied; one before it is", () => {
+    expect(run(bet({ conditionId: "g1", gameStartAt: oct + 86_400 - 60 }))).toBe(0);
+    expect(run(bet({ conditionId: "g2", gameStartAt: oct + 86_400 + 60 }))).toBe(1);
+  });
+
+  it("a combo bet isn't copied", () => {
+    expect(
+      run(bet({ conditionId: "0x0307bbccd23ea7621138345520cf6b74890000000000000000000000000000" })),
+    ).toBe(0);
+  });
+
+  it("the rebuilt pick-month leaves out combos and in-play buys too", async () => {
+    const { rebuildPickMonth } = await import("@/lib/jobs/activityHistory");
+    const row = (cond: string, token: string, ts: number) =>
+      ({
+        type: "TRADE",
+        side: "BUY",
+        condition_id: cond,
+        token_id: token,
+        size: 100,
+        usdc_size: 50,
+        timestamp: ts,
+      }) as never;
+    const combo = "0x0307bbccd23ea7621138345520cf6b74890000000000000000000000000000";
+    const r = rebuildPickMonth(
+      [row(combo, "tc", oct + 10), row("live", "tl", oct + 20), row("pre", "tp", oct + 30)],
+      () => 1,
+      0.01,
+      0,
+      {
+        minLeaderUsd: 0,
+        minEntryPrice: 0,
+        maxEntryPrice: 1,
+        gameStart: (c: string) => (c === "live" ? oct : c === "pre" ? oct + 3600 : undefined),
+      },
+    );
+    expect(r.bets).toBe(1);
+  });
+});
