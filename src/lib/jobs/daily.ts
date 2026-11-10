@@ -159,7 +159,7 @@ export async function dailyJob(
   );
   const cleaned = await cleanupStorage(db);
   log(
-    `removed ${cleaned.markets} orphan markets, ${cleaned.trades} old trades, ${cleaned.snapshots} old leaderboard rows, ${cleaned.scores} old rejected scores`,
+    `removed ${cleaned.markets} orphan markets, ${cleaned.trades} old trades, ${cleaned.snapshots} old leaderboard rows, ${cleaned.scores} old rejected scores, ${cleaned.evidence} old rejected skill-evidence rows`,
   );
   return {
     timings,

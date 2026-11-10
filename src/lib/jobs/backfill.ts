@@ -343,7 +343,17 @@ export async function cleanupStorage(
   // and the backtest read other tiers. Followed (even paused) and hidden wallets keep theirs
   // (their pages and the Hidden list join scores).
   rejectedScoreRetentionDays = 30,
-): Promise<{ markets: number; trades: number; snapshots: number; scores: number }> {
+  // Batch 6: a wallet re-picked after its cool-down starts a fresh holdout, and evidence
+  // from an older holdout is never reused (withRunningEvidence), so a rejected wallet's
+  // running evidence is dropped once its cool-down (rotation cooldownDays, 30) is over.
+  rejectedEvidenceAfterDays = 30,
+): Promise<{
+  markets: number;
+  trades: number;
+  snapshots: number;
+  scores: number;
+  evidence: number;
+}> {
   const orphanMarkets = await db.execute(sql`
     delete from markets m
     where not exists (select 1 from trader_positions p where p.condition_id = m.condition_id)
@@ -372,11 +382,25 @@ export async function cleanupStorage(
       and not exists (select 1 from follows f where f.wallet = s.wallet)
       and not exists (select 1 from hidden_traders h where h.wallet = s.wallet)
   `);
+  // No score row left means it was a rejected one (only those are deleted, above).
+  const oldEvidence = await db.execute(sql`
+    delete from skill_evidence e
+    where not exists (
+        select 1 from trader_scores s where s.wallet = e.wallet and s.tier <> 'rejected'
+      )
+      and coalesce(
+        (select t.last_checked_at from traders t where t.wallet = e.wallet),
+        e.updated_at
+      ) < ${new Date(Date.now() - rejectedEvidenceAfterDays * 86_400_000).toISOString()}::timestamptz
+      and not exists (select 1 from follows f where f.wallet = e.wallet)
+      and not exists (select 1 from hidden_traders h where h.wallet = e.wallet)
+  `);
   return {
     markets: affectedRows(orphanMarkets),
     trades: oldTrades.length,
     snapshots: oldSnapshots.length,
     scores: affectedRows(oldScores),
+    evidence: affectedRows(oldEvidence),
   };
 }
 

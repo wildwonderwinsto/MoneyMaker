@@ -74,6 +74,7 @@ beforeEach(async () => {
     trades: 0,
     snapshots: 0,
     scores: 0,
+    evidence: 0,
   });
   vi.mocked(score.scoreAll).mockResolvedValue({
     scored: 6,

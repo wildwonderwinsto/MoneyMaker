@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
 import {
+  evidenceStates,
   follows,
   hiddenTraders,
   jobRuns,
@@ -437,7 +438,7 @@ describe("storage maintenance", () => {
     expect(await db.select().from(traderPnlDaily)).toHaveLength(0);
 
     const cleaned = await cleanupStorage(db);
-    expect(cleaned).toEqual({ markets: 1, trades: 1, snapshots: 0, scores: 0 });
+    expect(cleaned).toEqual({ markets: 1, trades: 1, snapshots: 0, scores: 0, evidence: 0 });
     const left = await db.select({ id: markets.conditionId }).from(markets);
     expect(left.map((m) => m.id)).toEqual(["c-keep"]);
   });
@@ -462,6 +463,56 @@ describe("storage maintenance", () => {
     expect(left.map((r) => r.w)).toContain("0xs29");
     expect(left.map((r) => r.w)).not.toContain("0xs31");
     await db.delete(leaderboardSnapshots);
+  });
+
+  it("drops Rejected wallets' running skill evidence after the 30-day cool-down (batch 6)", async () => {
+    // A wallet re-picked after its cool-down starts a fresh holdout, and evidence from an
+    // older holdout is never reused, so these rows were dead weight kept forever.
+    const at = (days: number) => new Date(Date.now() - days * 86_400_000);
+    const ws = ["0xe-old", "0xe-new", "0xe-gone", "0xe-cand", "0xe-fol", "0xe-hid"];
+    await db.insert(traders).values([
+      { wallet: "0xe-old", lastCheckedAt: at(31) }, // rejected, cool-down over: dropped
+      { wallet: "0xe-new", lastCheckedAt: at(10) }, // rejected, still cooling down: kept
+      { wallet: "0xe-gone", lastCheckedAt: at(40) }, // score already cleaned up: dropped
+      { wallet: "0xe-cand", lastCheckedAt: at(31) }, // candidate: kept
+      { wallet: "0xe-fol", lastCheckedAt: at(31) }, // followed: kept
+      { wallet: "0xe-hid", lastCheckedAt: at(31) }, // hidden: kept
+    ]);
+    const score = (wallet: string, tier: string) => ({
+      wallet,
+      tier: tier as "rejected",
+      score: 1,
+      passed: false,
+      nResolved: 0,
+      nEvents: 0,
+      computedAt: at(10),
+    });
+    await db
+      .insert(traderScores)
+      .values([
+        score("0xe-old", "rejected"),
+        score("0xe-new", "rejected"),
+        score("0xe-cand", "candidate"),
+        score("0xe-fol", "rejected"),
+        score("0xe-hid", "rejected"),
+      ]);
+    await db.insert(follows).values({ wallet: "0xe-fol", enabled: false });
+    await db.insert(hiddenTraders).values({ wallet: "0xe-hid" });
+    const state = { logSkill: [0], logNoEdge: 0, events: 1, bets: 1, eventKeys: [1] };
+    await db
+      .insert(evidenceStates)
+      .values(ws.map((wallet) => ({ wallet, holdoutFrom: at(60), state })));
+    const cleaned = await cleanupStorage(db);
+    const left = (await db.select({ w: evidenceStates.wallet }).from(evidenceStates)).map(
+      (r) => r.w,
+    );
+    expect(left.sort()).toEqual(["0xe-cand", "0xe-fol", "0xe-hid", "0xe-new"]);
+    expect(cleaned.evidence).toBe(2);
+    await db.delete(evidenceStates);
+    await db.delete(traderScores).where(inArray(traderScores.wallet, ws));
+    await db.delete(follows).where(inArray(follows.wallet, ws));
+    await db.delete(hiddenTraders);
+    await db.delete(traders).where(inArray(traders.wallet, ws));
   });
 
   it("drops Rejected wallets' scores after 30 days, keeping followed and hidden ones (owner, 2026-11-09)", async () => {
