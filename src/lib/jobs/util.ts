@@ -1,4 +1,4 @@
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, lt, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { jobRuns } from "@/lib/db/schema";
@@ -20,6 +20,22 @@ export async function runJob<T extends Record<string, unknown>>(
   job: string,
   fn: (log: (msg: string) => void) => Promise<T>,
 ): Promise<T> {
+  // A run killed mid-way (timeout, cancelled workflow) never records a result and would show
+  // as "running" forever (J11). No real run lasts 3 hours (the daily workflow stops at 120 min).
+  await db
+    .update(jobRuns)
+    .set({
+      status: "error",
+      finishedAt: new Date(),
+      error: "Interrupted: the run stopped without recording a result (timeout or killed process)",
+    })
+    .where(
+      and(
+        eq(jobRuns.job, job),
+        eq(jobRuns.status, "running"),
+        lt(jobRuns.startedAt, new Date(Date.now() - 3 * 3_600_000)),
+      ),
+    );
   const [run] = await db.insert(jobRuns).values({ job, status: "running" }).returning();
   const log = (msg: string) => console.log(`[${job}] ${msg}`);
   try {

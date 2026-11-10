@@ -834,3 +834,27 @@ describe("pick-month rebuild and bot-free baseline (#9)", () => {
     });
   });
 });
+
+describe("interrupted job runs (J11)", () => {
+  it("a run killed mid-way stops showing as running once the next one starts", async () => {
+    const { runJob } = await import("@/lib/jobs/util");
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
+    const [killed] = await db
+      .insert(jobRuns)
+      .values({ job: "j11", status: "running", startedAt: hoursAgo(4) })
+      .returning();
+    const [recent] = await db
+      .insert(jobRuns)
+      .values({ job: "j11", status: "running", startedAt: hoursAgo(1) })
+      .returning();
+    await runJob(db, "j11", async () => ({}));
+    const rows = await db.select().from(jobRuns).where(eq(jobRuns.job, "j11"));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(killed.id)).toMatchObject({ status: "error" });
+    expect(byId.get(killed.id)!.error).toMatch(/interrupted/i);
+    expect(byId.get(killed.id)!.finishedAt).not.toBeNull();
+    expect(byId.get(recent.id)!.status).toBe("running"); // could still be going
+    expect(rows.filter((r) => r.status === "ok")).toHaveLength(1);
+    await db.delete(jobRuns).where(eq(jobRuns.job, "j11"));
+  });
+});
