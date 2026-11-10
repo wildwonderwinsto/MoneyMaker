@@ -4,6 +4,7 @@ import { EyeOff, RotateCcw } from "lucide-react";
 import { useState, useTransition } from "react";
 
 import { setHiddenAction } from "@/app/actions";
+import { confirmHide } from "@/components/hide-confirm";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -30,13 +31,14 @@ export function HideButton({
           ? "Show this trader in Top traders again"
           : "Not interested: hide from Top traders, unfollow, and sell what was copied from them"
       }
-      onClick={() =>
+      onClick={() => {
+        if (!confirmHide(hidden, (m) => window.confirm(m))) return;
         start(async () => {
           setError(null);
           const res = await setHiddenAction(wallet, !hidden);
           if (!res.ok) setError(res.message);
-        })
-      }
+        });
+      }}
     >
       {hidden ? <RotateCcw aria-hidden /> : <EyeOff aria-hidden />}
       {hidden ? "Restore" : "No"}
