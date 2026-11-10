@@ -1,6 +1,9 @@
 "use client";
 
+import { cn } from "cn";
+import { Lock, LockOpen } from "lucide-react";
 import { useState, useTransition } from "react";
+import { useFormStatus } from "react-dom";
 
 import {
   lockAction,
@@ -55,18 +58,19 @@ export function FollowRowControls({
           disabled={pending}
           onCheckedChange={(on) => start(async () => setState(await setFollowAction(wallet, on)))}
         />
-        {!enabled && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-muted-foreground hover:text-no"
-            disabled={pending}
-            title="Remove from this list. Open copies still close when this trader sells."
-            onClick={() => start(async () => setState(await removeFollowAction(wallet)))}
-          >
-            Remove
-          </Button>
-        )}
+        {/* Always takes its space (hidden while copying) so every row's controls line up. */}
+        <Button
+          size="sm"
+          variant="ghost"
+          className={cn("text-muted-foreground hover:text-no w-20", enabled && "invisible")}
+          disabled={pending || enabled}
+          aria-hidden={enabled}
+          tabIndex={enabled ? -1 : undefined}
+          title="Remove from this list. Open copies still close when this trader sells."
+          onClick={() => start(async () => setState(await removeFollowAction(wallet)))}
+        >
+          Remove
+        </Button>
       </div>
       {state && !state.ok && <FormMessage state={state} />}
     </div>
@@ -76,9 +80,25 @@ export function FollowRowControls({
 export function LockButton() {
   return (
     <form action={lockAction}>
-      <Button type="submit" variant="outline" size="sm">
-        Lock
-      </Button>
+      <LockSubmit />
     </form>
+  );
+}
+
+/** The padlock closes while locking. */
+function LockSubmit() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" variant="outline" size="sm" disabled={pending} className="group">
+      {pending ? (
+        <Lock
+          aria-hidden
+          className="animate-in zoom-in-75 spin-in-12 duration-300 motion-reduce:animate-none"
+        />
+      ) : (
+        <LockOpen aria-hidden className="transition-transform group-hover:-rotate-12" />
+      )}
+      {pending ? "Locking…" : "Lock"}
+    </Button>
   );
 }

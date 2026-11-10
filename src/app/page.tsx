@@ -8,7 +8,9 @@ import { isAdmin } from "@/lib/admin";
 import { TraderCard } from "@/components/trader-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/format";
+import { getDb } from "@/lib/db/client";
 import { getJobRuns, getTierCounts, getTraderList, type TierFilter } from "@/lib/queries";
+import { getScoringConfig } from "@/lib/settings";
 
 const CATEGORIES = ["all", "politics", "sports", "crypto", "economics", "tech", "culture"];
 const TIERS: Array<{ value: TierFilter; label: string; adminOnly?: boolean }> = [
@@ -50,10 +52,11 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
   const tier = (tiers.find((t) => t.value === sp.tier)?.value ?? "verified") as TierFilter;
   const category = CATEGORIES.includes(String(sp.category)) ? String(sp.category) : "all";
 
-  const [list, { tiers: counts, hidden }, runs] = await Promise.all([
+  const [list, { tiers: counts, hidden }, runs, scoring] = await Promise.all([
     getTraderList({ tier, category: category === "all" ? undefined : category }),
     getTierCounts(),
     getJobRuns(20),
+    getScoringConfig(getDb()),
   ]);
   const lastScore = runs.find((r) => (r.job === "daily" || r.job === "score") && r.status === "ok");
   const verifiedCount = (counts.elite ?? 0) + (counts.verified ?? 0);
@@ -125,7 +128,12 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {list.map((t) => (
-                <TraderCard key={t.wallet} t={t} admin={admin} />
+                <TraderCard
+                  key={t.wallet}
+                  t={t}
+                  admin={admin}
+                  copyDelaySeconds={scoring.copyDelaySeconds}
+                />
               ))}
             </div>
           )}

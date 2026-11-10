@@ -10,7 +10,14 @@ import { FollowRowControls, LockButton } from "@/components/settings-forms";
 import { SettingsEditor } from "@/components/settings/settings-editor";
 import { StorageCard } from "@/components/storage-card";
 import { LockedAction } from "@/components/locked-action";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isAdmin } from "@/lib/admin";
 import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
@@ -53,7 +60,13 @@ async function SettingsContent() {
       <Card id="access" className="scroll-mt-24 gap-4 py-4 sm:gap-6 sm:py-6">
         <CardHeader className="px-4 sm:px-6">
           <CardTitle className="flex items-center gap-2">
-            {admin ? <ShieldCheck className="text-yes size-4" /> : <Lock className="size-4" />}
+            {/* Keyed by state: the icon pops in again each time it locks or unlocks. */}
+            <span
+              key={admin ? "open" : "locked"}
+              className="animate-in zoom-in-50 spin-in-12 fade-in inline-flex duration-500 motion-reduce:animate-none"
+            >
+              {admin ? <ShieldCheck className="text-yes size-4" /> : <Lock className="size-4" />}
+            </span>
             {admin ? "Unlocked" : "View only"}
           </CardTitle>
           <CardDescription>
@@ -65,19 +78,24 @@ async function SettingsContent() {
                 ? "Visitors can look but not change anything. Enter the admin password to make changes."
                 : "Changes are locked because ADMIN_PASSWORD is not set on the server."}
           </CardDescription>
-        </CardHeader>
-        <CardContent className="px-4 sm:px-6">
-          {admin ? (
-            passwordSet && <LockButton />
-          ) : passwordSet ? (
-            <UnlockForm />
-          ) : (
-            <p className="text-muted-foreground text-sm">
-              In Render, open the service → Environment, add <code>ADMIN_PASSWORD</code> (at least 8
-              characters) and save. After the redeploy, come back here and enter it to unlock.
-            </p>
+          {admin && passwordSet && (
+            <CardAction className="self-center">
+              <LockButton />
+            </CardAction>
           )}
-        </CardContent>
+        </CardHeader>
+        {!admin && (
+          <CardContent className="px-4 sm:px-6">
+            {passwordSet ? (
+              <UnlockForm />
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                In Render, open the service → Environment, add <code>ADMIN_PASSWORD</code> (at least
+                8 characters) and save. After the redeploy, come back here and enter it to unlock.
+              </p>
+            )}
+          </CardContent>
+        )}
       </Card>
 
       <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
@@ -104,7 +122,10 @@ async function SettingsContent() {
                 <li key={f.wallet} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
                   <Avatar wallet={f.wallet} size={28} />
                   <div className="min-w-0 flex-1">
-                    <Link href={`/traders/${f.wallet}`} className="font-medium hover:underline">
+                    <Link
+                      href={`/traders/${f.wallet}`}
+                      className="block truncate font-medium hover:underline"
+                    >
                       {traderName({ name, wallet: f.wallet })}
                     </Link>
                     <p className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">

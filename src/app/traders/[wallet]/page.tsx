@@ -36,6 +36,8 @@ import {
   traderName,
   usd,
 } from "@/lib/format";
+import { getDb } from "@/lib/db/client";
+import { getScoringConfig } from "@/lib/settings";
 import { getTrader } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Trader" };
@@ -73,7 +75,11 @@ export default function TraderPage({ params }: PageProps<"/traders/[wallet]">) {
 async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">["params"] }) {
   await connection();
   const { wallet } = await params;
-  const [data, admin] = await Promise.all([getTrader(wallet.toLowerCase()), isAdmin()]);
+  const [data, admin, scoring] = await Promise.all([
+    getTrader(wallet.toLowerCase()),
+    isAdmin(),
+    getScoringConfig(getDb()),
+  ]);
   if (!data) notFound();
   const { trader, score, follow, positions, pnl, hidden } = data;
   const metrics = (score?.metrics ?? {}) as {
@@ -86,6 +92,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
     copyOpenReplays?: number;
     copyDelaySeconds?: number;
     nClosed?: number;
+    nHoldout?: number | null;
   };
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
@@ -162,11 +169,19 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
             />
             <StatTile
               label="Wins vs. expected"
-              value={`${pct(metrics.resolvedWinRate, 0)} / ${pct(score.expectedWinRate, 0)}`}
-              hint={`Skill z = ${num(score.zSkill, 2)}`}
+              value={
+                metrics.resolvedWinRate === null || metrics.resolvedWinRate === undefined
+                  ? "—"
+                  : `${pct(metrics.resolvedWinRate, 0)} / ${pct(score.expectedWinRate, 0)}`
+              }
+              hint={
+                typeof metrics.nHoldout === "number" && metrics.nHoldout > 0
+                  ? `Skill z = ${num(score.zSkill, 2)} · ${metrics.nHoldout} bets since picked`
+                  : "Measured only on bets placed since they were picked; none settled yet"
+              }
             />
             <StatTile
-              label={`If copied ${copiedLate(metrics.copyDelaySeconds)}`}
+              label={`If copied ${copiedLate(metrics.copyDelaySeconds, scoring.copyDelaySeconds)}`}
               value={pct(score.copyAdjRoi, 1, { sign: true })}
               tone={score.copyAdjRoi === null ? undefined : score.copyAdjRoi >= 0 ? "gain" : "loss"}
               hint={

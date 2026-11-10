@@ -14,10 +14,20 @@ function cumulative(monthly: Array<{ pnl: number }> | undefined): number[] {
   return (monthly ?? []).map((m) => (sum += m.pnl));
 }
 
-export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) {
+export function TraderCard({
+  t,
+  admin,
+  copyDelaySeconds,
+}: {
+  t: TraderListItem;
+  admin: boolean;
+  /** Today's copy-delay setting, for scores computed before the delay was stored. */
+  copyDelaySeconds?: number;
+}) {
   const metrics = t.metrics as {
     monthlyPnl?: Array<{ month: string; pnl: number }>;
     resolvedWinRate?: number | null;
+    nHoldout?: number | null;
     nCopyReplays?: number;
     copyReplayDays?: number | null;
     copyDelaySeconds?: number;
@@ -27,8 +37,8 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
   const passed = t.checks.filter((c) => c.ok).length;
 
   return (
-    <Card className="hover:border-primary/40 gap-0 py-0 transition-colors">
-      <Link href={`/traders/${t.wallet}`} className="block p-4 pb-3">
+    <Card className="hover:border-primary/40 flex flex-col gap-0 py-0 transition-colors">
+      <Link href={`/traders/${t.wallet}`} className="flex flex-1 flex-col p-4 pb-3">
         <div className="flex items-start gap-3">
           <Avatar wallet={t.wallet} src={t.profileImage} />
           <div className="min-w-0 flex-1">
@@ -54,10 +64,24 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
           <div>
             <dt className="text-muted-foreground text-xs">Win rate vs. expected</dt>
             <dd className="font-medium tabular-nums">
-              {pct(metrics.resolvedWinRate, 0)}{" "}
-              <span className="text-muted-foreground font-normal">
-                / {pct(t.expectedWinRate, 0)}
-              </span>
+              {/* Measured only on bets placed since the trader was picked (forward holdout). */}
+              {metrics.resolvedWinRate === null || metrics.resolvedWinRate === undefined ? (
+                <span className="text-muted-foreground text-xs font-normal">
+                  No settled bets since picked yet
+                </span>
+              ) : (
+                <>
+                  {pct(metrics.resolvedWinRate, 0)}{" "}
+                  <span className="text-muted-foreground font-normal">
+                    / {pct(t.expectedWinRate, 0)}
+                  </span>
+                  {typeof metrics.nHoldout === "number" && (
+                    <span className="text-muted-foreground block text-xs font-normal">
+                      {metrics.nHoldout} bets since picked
+                    </span>
+                  )}
+                </>
+              )}
             </dd>
           </div>
           <div>
@@ -72,23 +96,22 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
           </div>
           <div>
             <dt className="text-muted-foreground text-xs">
-              Copied {copiedLate(metrics.copyDelaySeconds)} (cautious)
+              Copied {copiedLate(metrics.copyDelaySeconds, copyDelaySeconds)} (cautious)
             </dt>
             <dd className="font-medium">
               <Signed value={t.copyAdjRoi}>{pct(t.copyAdjRoi, 1, { sign: true })}</Signed>
               {typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0 && (
-                <span className="text-muted-foreground text-xs font-normal">
-                  {" "}
-                  · {metrics.nCopyReplays} trades
+                <span className="text-muted-foreground block text-xs font-normal">
+                  {metrics.nCopyReplays} trades
                   {typeof metrics.copyReplayDays === "number" &&
-                    `, ${Math.max(1, Math.round(metrics.copyReplayDays))} days`}
+                    ` · ${Math.max(1, Math.round(metrics.copyReplayDays))} days`}
                 </span>
               )}
             </dd>
           </div>
         </dl>
 
-        <div className="mt-3 flex items-end justify-between gap-2">
+        <div className="mt-auto flex items-end justify-between gap-2 pt-3">
           <div className="text-muted-foreground text-xs">
             <p>
               {usd(t.totalPnl, { compact: true, sign: true })} over {t.nResolved} markets

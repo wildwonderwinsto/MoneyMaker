@@ -35,6 +35,8 @@ export function FollowButton({
       onClick={toggle}
       disabled={pending}
       aria-pressed={optimistic}
+      // Same size either way, so the footer doesn't jump when following.
+      className="min-w-28 justify-center"
     >
       {optimistic ? <Check aria-hidden /> : <Plus aria-hidden />}
       {optimistic ? "Following" : "Follow"}
