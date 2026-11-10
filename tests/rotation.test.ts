@@ -263,6 +263,25 @@ describe("scoring with rotation", () => {
     expect(again.firstCheckedAt!.getTime()).toBe(first);
   });
 
+  it("stores the copy delay the copy check used, for the page labels (batch 6)", async () => {
+    // The pages said "copied 2 min late" whatever the delay setting was.
+    await db.insert(traders).values({ wallet: "0xtoday", lastBackfillAt: NOW });
+    await scoreAll(
+      db,
+      { ...cfg, simulations: 100, copyDelaySeconds: 300 },
+      DEFAULT_SCORE,
+      () => {},
+      ["0xtoday"],
+    );
+    const [row] = await db.select().from(traderScores).where(eq(traderScores.wallet, "0xtoday"));
+    expect(row.metrics.copyDelaySeconds).toBe(300);
+    const { copiedLate } = await import("@/lib/format");
+    expect(copiedLate(row.metrics.copyDelaySeconds)).toBe("5 min late");
+    expect(copiedLate(90)).toBe("1.5 min late");
+    expect(copiedLate(30)).toBe("30 s late");
+    expect(copiedLate(undefined)).toBe("late"); // scored before the delay was stored
+  });
+
   it("pools the skill test over everyone tested in the last 30 days", async () => {
     const row = (wallet: string, days: number, e: number | undefined, nHoldout: number) => ({
       wallet,

@@ -314,7 +314,13 @@ export function leaderExits(
   return out;
 }
 
-function scoreRow(wallet: string, m: TraderMetrics, r: ScoreResult, category: string | null) {
+function scoreRow(
+  wallet: string,
+  m: TraderMetrics,
+  r: ScoreResult,
+  category: string | null,
+  copyDelaySeconds: number,
+) {
   return {
     wallet,
     computedAt: new Date(),
@@ -339,7 +345,8 @@ function scoreRow(wallet: string, m: TraderMetrics, r: ScoreResult, category: st
     lastTradeAt: toDate(m.lastTradeAt),
     primaryCategory: m.primaryCategory ?? category,
     checks: r.checks,
-    metrics: m as unknown as Record<string, unknown>,
+    // The delay the copy check used, so pages label the copy return with it (not "2 min").
+    metrics: { ...m, copyDelaySeconds } as unknown as Record<string, unknown>,
   };
 }
 
@@ -529,7 +536,13 @@ export async function scoreAll(
   });
 
   const rows = [...metrics.entries()].map(([wallet, m]) =>
-    scoreRow(wallet, m, prelim.get(wallet)!, meta.get(wallet)?.category ?? null),
+    scoreRow(
+      wallet,
+      m,
+      prelim.get(wallet)!,
+      meta.get(wallet)?.category ?? null,
+      cfg.copyDelaySeconds,
+    ),
   );
   for (const part of chunk(rows, 200)) {
     await db

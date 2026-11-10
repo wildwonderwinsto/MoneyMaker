@@ -56,6 +56,16 @@ export function bytes(x: number | null | undefined) {
   return `${i === 0 ? Math.round(v) : v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
 }
 
+/**
+ * "5 min late" for the copy delay a trader's copy check used (stored with the score);
+ * just "late" for scores computed before the delay was stored.
+ */
+export function copiedLate(seconds: unknown): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "late";
+  if (seconds < 60) return `${Math.round(seconds)} s late`;
+  return `${Math.round((seconds / 60) * 10) / 10} min late`;
+}
+
 export function shortAddress(wallet: string) {
   return `${wallet.slice(0, 6)}…${wallet.slice(-4)}`;
 }

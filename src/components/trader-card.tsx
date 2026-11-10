@@ -6,7 +6,7 @@ import { FollowButton } from "@/components/follow-button";
 import { HideButton } from "@/components/hide-button";
 import { LockedAction } from "@/components/locked-action";
 import { Card } from "@/components/ui/card";
-import { pct, traderName, usd } from "@/lib/format";
+import { copiedLate, pct, traderName, usd } from "@/lib/format";
 import type { TraderListItem } from "@/lib/queries";
 
 function cumulative(monthly: Array<{ pnl: number }> | undefined): number[] {
@@ -20,6 +20,7 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
     resolvedWinRate?: number | null;
     nCopyReplays?: number;
     copyReplayDays?: number | null;
+    copyDelaySeconds?: number;
   };
   const curve = cumulative(metrics.monthlyPnl);
   const name = traderName(t);
@@ -70,7 +71,9 @@ export function TraderCard({ t, admin }: { t: TraderListItem; admin: boolean }) 
             <dd className="font-medium tabular-nums">{pct(t.profitableMonthsPct, 0)}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground text-xs">Copied 2 min late (cautious)</dt>
+            <dt className="text-muted-foreground text-xs">
+              Copied {copiedLate(metrics.copyDelaySeconds)} (cautious)
+            </dt>
             <dd className="font-medium">
               <Signed value={t.copyAdjRoi}>{pct(t.copyAdjRoi, 1, { sign: true })}</Signed>
               {typeof metrics.nCopyReplays === "number" && metrics.nCopyReplays > 0 && (

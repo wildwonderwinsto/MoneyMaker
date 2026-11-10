@@ -26,6 +26,7 @@ import type { ScoreCheck } from "@/lib/db/schema";
 import { positionsNote } from "@/lib/explain";
 import {
   cents,
+  copiedLate,
   num,
   pct,
   polymarketMarketUrl,
@@ -82,6 +83,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
     copyAdjRoiMean?: number | null;
     copyReplayDays?: number | null;
     copyOpenReplays?: number;
+    copyDelaySeconds?: number;
   };
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
@@ -158,7 +160,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               hint={`Skill z = ${num(score.zSkill, 2)}`}
             />
             <StatTile
-              label="If copied 2 min late"
+              label={`If copied ${copiedLate(metrics.copyDelaySeconds)}`}
               value={pct(score.copyAdjRoi, 1, { sign: true })}
               tone={score.copyAdjRoi === null ? undefined : score.copyAdjRoi >= 0 ? "gain" : "loss"}
               hint={
