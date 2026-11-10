@@ -372,8 +372,10 @@ async function HedgePanel({
   const db = getDb();
   const [account, cfg] = await Promise.all([ensureDefaultAccount(db), getRiskConfig(db)]);
   // The admin may use any available cash for a manual hedge; show what that costs.
+  // Visitors only see cached prices: their page loads never call Polymarket (UI-17).
   const q = await quoteHedge(db, account.id, positionId, cfg, {
     maxCost: Number.POSITIVE_INFINITY,
+    cachedOnly: !admin,
   }).catch(() => ({ ok: false, message: "Couldn't load the order book" }) as const);
   const ours = q.ok ? (q.position?.outcome ?? "your side") : "your side";
   const other = q.ok ? (q.opposite?.outcome ?? "the other side") : "the other side";

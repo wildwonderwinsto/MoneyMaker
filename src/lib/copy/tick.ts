@@ -16,7 +16,7 @@ import { and, asc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import type { Db } from "@/lib/db/client";
 import { cursors, follows, paperFills, paperPositions, signals, traders } from "@/lib/db/schema";
 import { holdLease, type HeldLease } from "@/lib/lease";
-import { getBook, getMidpoints, type OrderBook } from "@/lib/polymarket/clob";
+import { getBook, getCachedBook, getMidpoints, type OrderBook } from "@/lib/polymarket/clob";
 import {
   getActivity,
   getPositions,
@@ -56,7 +56,7 @@ import {
 } from "./engine";
 import { simulateSell, type Fill } from "./fillSim";
 import { oppositeToken, planHedge, type HedgeMode, type HedgeQuote } from "./hedge";
-import { getMarketInfo, payoutPerShare } from "./markets";
+import { getMarketInfo, getStoredMarketInfo, payoutPerShare } from "./markets";
 
 export interface TickStats {
   skipped?: string;
@@ -1375,12 +1375,15 @@ export interface HedgeQuotes {
 }
 
 /** Live hedge quotes (both modes) for one copied position. Nothing is bought. */
+/** How old a cached book a visitor's hedge quote may use. */
+const HEDGE_QUOTE_CACHE_MS = 5 * 60_000;
+
 export async function quoteHedge(
   db: Db,
   accountId: number,
   positionId: number,
   cfg: RiskConfig,
-  opts: { maxCost?: number } = {},
+  opts: { maxCost?: number; cachedOnly?: boolean } = {},
 ): Promise<HedgeQuotes> {
   const [position] = await db
     .select()
@@ -1395,7 +1398,10 @@ export async function quoteHedge(
     .where(and(eq(paperPositions.hedgeOf, position.id), eq(paperPositions.status, "open")));
   if (existing) return { ok: false, message: "Already hedged", position };
 
-  const market = (await getMarketInfo(db, [position.conditionId])).get(position.conditionId);
+  // Visitors (cachedOnly) never trigger Polymarket requests: stored market, cached book.
+  const market = opts.cachedOnly
+    ? await getStoredMarketInfo(db, position.conditionId)
+    : (await getMarketInfo(db, [position.conditionId])).get(position.conditionId);
   const opposite = market
     ? oppositeToken(market.tokenIds, market.outcomes, position.tokenId)
     : null;
@@ -1403,8 +1409,12 @@ export async function quoteHedge(
     return { ok: false, message: "Only two-outcome markets can be hedged", position };
   }
   if (market.closed) return { ok: false, message: "Market is closed", position };
+  const cached = opts.cachedOnly ? getCachedBook(opposite.tokenId, HEDGE_QUOTE_CACHE_MS) : null;
+  if (opts.cachedOnly && !cached) {
+    return { ok: false, message: "Unlock to see a live hedge quote.", position };
+  }
   const [book, state] = await Promise.all([
-    getBook(opposite.tokenId),
+    cached ? cached.book : getBook(opposite.tokenId),
     loadAccountState(db, accountId),
   ]);
   const maxCost = Math.max(

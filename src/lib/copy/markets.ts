@@ -1,4 +1,4 @@
-import { inArray, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { markets } from "@/lib/db/schema";
@@ -27,6 +27,12 @@ const toInfo = (m: MarketRow): MarketInfo => ({
   payouts: m.payouts,
   takerFeeRate: m.takerFeeRate,
 });
+
+/** Stored market info only, never a Gamma request (pages opened by visitors, UI-17). */
+export async function getStoredMarketInfo(db: Db, conditionId: string): Promise<MarketInfo | null> {
+  const [row] = await db.select().from(markets).where(eq(markets.conditionId, conditionId));
+  return row ? toInfo(row) : null;
+}
 
 /** USDC paid per share of `tokenId` once the market is settled; null while it isn't. */
 export function payoutPerShare(m: MarketInfo, tokenId: string): number | null {

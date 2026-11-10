@@ -56,7 +56,29 @@ export async function getBook(tokenId: string): Promise<OrderBook> {
     schema: RawBook,
     limiter: clobLimiter,
   });
-  return normalizeBook(raw);
+  const book = normalizeBook(raw);
+  rememberBook(book);
+  return book;
+}
+
+/**
+ * The last book fetched per token (by the engine or an admin), so pages a visitor opens can
+ * show prices without making Polymarket requests themselves (UI-17). In-process: the engine
+ * runs in the same server. Bounded: the oldest entries go first.
+ */
+const bookCache = new Map<string, { book: OrderBook; at: number }>();
+const BOOK_CACHE_MAX = 2000;
+
+export function rememberBook(book: OrderBook, at = Date.now()): void {
+  bookCache.delete(book.tokenId);
+  bookCache.set(book.tokenId, { book, at });
+  if (bookCache.size > BOOK_CACHE_MAX) bookCache.delete(bookCache.keys().next().value!);
+}
+
+/** A book fetched within `maxAgeMs`, or null. Never makes a request. */
+export function getCachedBook(tokenId: string, maxAgeMs: number, now = Date.now()) {
+  const hit = bookCache.get(tokenId);
+  return hit && now - hit.at <= maxAgeMs ? hit : null;
 }
 
 /** Midpoint prices for many tokens in one request (POST body: [{token_id}]). */

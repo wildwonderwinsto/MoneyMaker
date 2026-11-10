@@ -229,6 +229,21 @@ describe("real-time copying", () => {
 });
 
 describe("hedging", () => {
+  it("a visitor's hedge quote uses cached data only, never a Polymarket request (UI-17)", async () => {
+    const pos = await openCopy();
+    const cfg = { ...DEFAULT_RISK_CONFIG, hedgeMaxCostPct: 1 };
+    vi.mocked(clob.getBook).mockClear();
+    vi.mocked(gamma.getMarketsByConditionIds).mockClear();
+    const none = await quoteHedge(db, pos.accountId, pos.id, cfg, { cachedOnly: true });
+    expect(none.ok).toBe(false); // nothing cached yet for the No side
+    clob.rememberBook(books[NO]);
+    const cached = await quoteHedge(db, pos.accountId, pos.id, cfg, { cachedOnly: true });
+    expect(cached.ok).toBe(true);
+    expect(cached.opposite).toEqual({ tokenId: NO, outcome: "No" });
+    expect(clob.getBook).not.toHaveBeenCalled();
+    expect(gamma.getMarketsByConditionIds).not.toHaveBeenCalled();
+  });
+
   it("quotes both hedge modes and buys a lock hedge on request", async () => {
     const pos = await openCopy();
     const cfg = { ...DEFAULT_RISK_CONFIG, hedgeMaxCostPct: 1 };
