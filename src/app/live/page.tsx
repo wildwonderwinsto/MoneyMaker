@@ -15,7 +15,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { explain } from "@/lib/explain";
 import { cents, num, polymarketMarketUrl, timeAgo, traderName, usd } from "@/lib/format";
 import { groupSignals, sectionsByAge, summarize, type SignalGroup } from "@/lib/live";
-import { getEngineStatus, getSignals, type EngineStatusView, type SignalRow } from "@/lib/queries";
+import {
+  getEngineStatus,
+  getLast24hSummary,
+  getSignals,
+  type EngineStatusView,
+  type SignalRow,
+} from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Live" };
 
@@ -50,7 +56,11 @@ const DECISION_LABEL = { copied: "Copied", closed: "Sold", skipped: "Skipped" } 
 // The ?show= filter is applied in the browser (LiveFeed), so switching tabs needs no server trip.
 async function LiveContent() {
   await connection();
-  const [all, status] = await Promise.all([getSignals(200), getEngineStatus()]);
+  const [all, status, summary] = await Promise.all([
+    getSignals(200),
+    getEngineStatus(),
+    getLast24hSummary(),
+  ]);
   const groups = groupSignals(all.map((r) => ({ ...r.signal, row: r })));
 
   return (
@@ -58,7 +68,7 @@ async function LiveContent() {
       <LiveSync />
       <div className="space-y-4 lg:sticky lg:top-20 lg:order-last">
         <EngineCard status={status} />
-        <SummaryCard summary={summarize(groups)} />
+        <SummaryCard summary={summary} />
         <Card className="hidden gap-3 border-dashed py-4 lg:flex">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

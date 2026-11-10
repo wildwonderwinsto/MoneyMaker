@@ -37,6 +37,7 @@ import {
   type ScoreTier,
 } from "@/lib/db/schema";
 import { resultRows } from "@/lib/lease";
+import { groupSignals, summarize } from "@/lib/live";
 import { getRiskConfig, getScoringConfig } from "@/lib/settings";
 
 export type TierFilter = ScoreTier | "all" | "followed" | "hidden";
@@ -209,6 +210,34 @@ export async function getSignals(limit = 150) {
   }));
 }
 export type SignalRow = Awaited<ReturnType<typeof getSignals>>[number];
+
+/**
+ * The Live page's "Last 24 hours" card, over every signal of the last 24 hours (UI-15: it
+ * was built from the feed's newest 200, so a busy day was undercounted). Only the columns
+ * grouping needs, in the feed's order.
+ */
+export async function getLast24hSummary(now = Date.now()) {
+  const rows = await getDb()
+    .select({
+      id: signals.id,
+      wallet: signals.wallet,
+      tokenId: signals.tokenId,
+      side: signals.side,
+      decision: signals.decision,
+      reason: signals.reason,
+      reasonCode: signals.reasonCode,
+      groupId: signals.groupId,
+      leaderTs: signals.leaderTs,
+      leaderPrice: signals.leaderPrice,
+      leaderSize: signals.leaderSize,
+      leaderUsdc: signals.leaderUsdc,
+    })
+    .from(signals)
+    // detected_at is indexed and never before the trade; summarize() keeps trades < 24 h old.
+    .where(gte(signals.detectedAt, new Date(now - 86_400_000)))
+    .orderBy(desc(signals.detectedAt), desc(signals.leaderTs));
+  return summarize(groupSignals(rows), now);
+}
 
 export async function getFollowList() {
   return (

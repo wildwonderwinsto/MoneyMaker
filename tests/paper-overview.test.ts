@@ -131,3 +131,33 @@ describe("Live page fingerprint (UI-08)", () => {
     expect(await getLiveVersion()).not.toBe(v3);
   });
 });
+
+describe("Live page 'Last 24 hours' (UI-15)", () => {
+  it("counts every signal of the last 24 hours, not just the newest 200", async () => {
+    const { signals } = await import("@/lib/db/schema");
+    const { getLast24hSummary } = await import("@/lib/queries");
+    const now = Date.now();
+    await db.insert(signals).values(
+      Array.from({ length: 250 }, (_, i) => ({
+        id: `s${i}`,
+        wallet: `0xw${i}`, // different traders: nothing groups together
+        leaderTs: new Date(now - 60_000 - i * 60_000),
+        conditionId: "c",
+        tokenId: "t",
+        side: "BUY",
+        leaderPrice: 0.5,
+        leaderSize: 10,
+        leaderUsdc: 5,
+        decision: "skipped" as const,
+        reason: "Leader trade too small ($5.00)",
+        reasonCode: "leader_too_small" as const,
+        source: "poll" as const,
+        accountId,
+      })),
+    );
+    const s = await getLast24hSummary(now);
+    expect(s.total).toBe(250);
+    expect(s.skipped).toBe(250);
+    expect(s.topSkipReasons[0]).toMatchObject({ n: 250 });
+  });
+});
