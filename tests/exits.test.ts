@@ -585,3 +585,21 @@ describe("skips that can never be retried don't block ones that can (N1/N2)", ()
     expect(await openShares()).toEqual([40]);
   });
 });
+
+describe("copies in one batch share the order book (C-F16)", () => {
+  it("the second copy fills only what the first left in the book", async () => {
+    // Only 50 shares for sale at 50¢; each $20 copy wants 40.
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => ({
+      ...book(id),
+      asks: [{ price: 0.5, size: 50 }],
+    }));
+    // Two separate orders (40 s apart, so not merged), seen in the same poll.
+    rows = [
+      act({ transaction_hash: "0xb1", timestamp: t0 + 10 }),
+      act({ transaction_hash: "0xb2", timestamp: t0 + 50 }),
+    ];
+    await runTick(db, (t0 + 60) * 1000);
+    const total = (await openShares()).reduce((a, x) => a + x, 0);
+    expect(total).toBeCloseTo(50, 6); // was 80: both copies filled from the same 50
+  });
+});

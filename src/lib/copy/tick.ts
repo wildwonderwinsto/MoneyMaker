@@ -742,6 +742,9 @@ async function processTrades(
     if (decision.action === "buy") ctx.stats.copied++;
     else if (decision.action === "sell") ctx.stats.closed++;
     else ctx.stats.ignored++;
+    if (decision.action === "buy") consumeBook(books, t.tokenId, "asks", decision.fill.shares);
+    if (decision.action === "sell") consumeBook(books, t.tokenId, "bids", decision.fill.shares);
+    if (hedgeExit) consumeBook(books, hedgeExit.hedge.tokenId, "bids", hedgeExit.fill.shares);
     if (decision.action !== "skip") state = await loadAccountState(db, ctx.accountId);
   }
   return failedAt;
@@ -854,6 +857,29 @@ async function estimateUnlisted(
 interface HedgeExit {
   hedge: PaperPosition;
   fill: Fill;
+}
+
+/**
+ * Take a fill's shares out of the book it filled against, so a later decision in the same
+ * batch can't fill the same liquidity again (C-F16). A fill always takes the best levels
+ * first, so removing from the top is exactly what it used.
+ */
+function consumeBook(
+  books: Map<string, OrderBook | null>,
+  tokenId: string,
+  side: "asks" | "bids",
+  shares: number,
+): void {
+  const book = books.get(tokenId);
+  if (!book || !(shares > 0)) return;
+  let left = shares;
+  const levels: OrderBook["asks"] = [];
+  for (const level of book[side]) {
+    const take = Math.min(level.size, left);
+    left -= take;
+    if (level.size - take > 1e-9) levels.push({ ...level, size: level.size - take });
+  }
+  books.set(tokenId, { ...book, [side]: levels });
 }
 
 /** When the leader exits, sell the same share of any hedge so it never stands alone. */
@@ -1153,9 +1179,11 @@ async function retrySkippedSells(db: Db, ctx: EngineCtx) {
       }
       return true;
     });
-    if (sold) {
+    if (sold && decision.action === "sell") {
       ctx.stats.closed++;
       ctx.stats.retried++;
+      consumeBook(books, t.tokenId, "bids", decision.fill.shares);
+      if (hedgeExit) consumeBook(books, hedgeExit.hedge.tokenId, "bids", hedgeExit.fill.shares);
       state = await loadAccountState(db, ctx.accountId);
     }
   }
@@ -1267,9 +1295,10 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
       await applyBuy(tx, ctx.accountId, t, market, decision.fill);
       return true;
     });
-    if (copied) {
+    if (copied && decision.action === "buy") {
       ctx.stats.copied++;
       ctx.stats.retried++;
+      consumeBook(books, t.tokenId, "asks", decision.fill.shares);
       state = await loadAccountState(db, ctx.accountId);
     }
   }
