@@ -191,6 +191,7 @@ export async function applyBuy(
     shares: fill.shares,
     avgPrice: fill.avgPrice,
     notional: fill.notional,
+    fee: fill.fee,
     slippageBps: trade.price > 0 ? ((fill.avgPrice - trade.price) / trade.price) * 10_000 : null,
   });
   return positionId;
@@ -249,6 +250,8 @@ export async function applySell(
     shares: sold,
     avgPrice: fill.avgPrice,
     notional,
+    // Pro rata like the proceeds: only the shares we actually had were sold.
+    fee: fill.shares > 0 ? fill.fee * (sold / fill.shares) : 0,
     slippageBps: trade.price > 0 ? ((trade.price - fill.avgPrice) / trade.price) * 10_000 : null,
     realizedPnl: pnl,
   });
@@ -289,6 +292,7 @@ export async function settlePosition(
     shares: position.shares,
     avgPrice: payoutPerShare,
     notional: payout,
+    fee: 0,
     realizedPnl: payout - position.costBasis,
   });
   return payout - position.costBasis;

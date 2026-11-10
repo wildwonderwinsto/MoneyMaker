@@ -437,6 +437,11 @@ export const paperFills = pgTable(
     slippageBps: doublePrecision(),
     /** Profit or loss locked in by this fill (sells and settlements); null for buys. */
     realizedPnl: money(),
+    /**
+     * Fees inside this fill (taker fee + any extra), already in `notional` (C-F21). 0 for
+     * settlements; null for fills recorded before fees were stored.
+     */
+    fee: money(),
     ts: createdAt(),
   },
   (t) => [index().on(t.accountId, t.ts), index().on(t.signalId), index().on(t.positionId)],

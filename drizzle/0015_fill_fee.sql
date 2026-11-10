@@ -1,0 +1,1 @@
+ALTER TABLE "paper_fills" ADD COLUMN "fee" numeric(18, 6);

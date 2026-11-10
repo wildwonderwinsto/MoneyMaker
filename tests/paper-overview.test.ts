@@ -7,9 +7,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDefaultAccount } from "@/lib/copy/account";
 import type { Db } from "@/lib/db/client";
-import { paperFills, paperPositions } from "@/lib/db/schema";
+import { paperAccounts, paperFills, paperPositions } from "@/lib/db/schema";
 import { runTick } from "@/lib/copy/tick";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getLiveVersion, getPaperOverview } from "@/lib/queries";
 
 import { createTestDb } from "./helpers/db";
@@ -213,5 +213,66 @@ describe("daily loss limit before the day's first snapshot (C-F19)", () => {
       .insert(equitySnapshots)
       .values({ accountId, ts: new Date(), equity: 900, cash: 900, positionsValue: 0 });
     expect(await dailyLossPct(db, accountId, 850)).toBeCloseTo(50 / 900, 9);
+  });
+});
+
+describe("each fill stores its fee (C-F21)", () => {
+  it("buy, capped sell and settlement record the fee inside their notional", async () => {
+    const { applyBuy, applySell, settlePosition } = await import("@/lib/copy/account");
+    const { simulateBuy, simulateSell } = await import("@/lib/copy/fillSim");
+    const m = {
+      conditionId: "cf",
+      question: "q",
+      slug: null,
+      image: null,
+      endDate: null,
+      closed: false,
+      tokenIds: ["Y", "N"],
+      outcomes: ["Yes", "No"],
+      winnerIndex: null,
+      takerFeeRate: 0.05,
+    };
+    const tr = (id: string, side: "BUY" | "SELL") =>
+      ({
+        id,
+        wallet: "0xl",
+        ts: 1,
+        conditionId: "cf",
+        tokenId: "Y",
+        side,
+        price: 0.5,
+        size: 1,
+        usdc: 1,
+      }) as never;
+    // $51.25 at 50¢ with a 5% rate: 100 shares, fee 100·0.05·0.25 = 1.25.
+    const b = simulateBuy([{ price: 0.5, size: 1000 }], 51.25, 0.6, 0, 0.05);
+    await db.transaction((tx) => applyBuy(tx, accountId, tr("fb", "BUY"), m, b));
+    // Sell 150 (only 100 held): fee 150·0.05·0.24 = 1.8, of which 100/150 is ours = 1.2.
+    const [pos] = await db
+      .select()
+      .from(paperPositions)
+      .where(eq(paperPositions.conditionId, "cf"));
+    const sl = simulateSell([{ price: 0.6, size: 1000 }], 150, 0, 0, 0.05);
+    await db.transaction((tx) => applySell(tx, pos, tr("fs", "SELL"), sl));
+    const fills = await db.select().from(paperFills).where(eq(paperFills.positionId, pos.id));
+    expect(fills.find((f) => f.side === "BUY")!.fee).toBeCloseTo(1.25, 6);
+    expect(fills.find((f) => f.side === "SELL")!.fee).toBeCloseTo(1.2, 6);
+    // A settlement pays no fee.
+    const [p2] = await db
+      .insert(paperPositions)
+      .values({
+        accountId,
+        sourceWallet: "0xl",
+        conditionId: "cf2",
+        tokenId: "Y2",
+        shares: 10,
+        avgPrice: 0.5,
+        costBasis: 5,
+      })
+      .returning();
+    await db.update(paperAccounts).set({ cash: sql`${paperAccounts.cash} - 5` });
+    await db.transaction((tx) => settlePosition(tx, p2, 1));
+    const [settle] = await db.select().from(paperFills).where(eq(paperFills.positionId, p2.id));
+    expect(settle.fee).toBe(0);
   });
 });
