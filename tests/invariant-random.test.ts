@@ -19,7 +19,7 @@ import {
   settlePosition,
 } from "@/lib/copy/account";
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
-import type { LeaderTrade, MarketInfo } from "@/lib/copy/engine";
+import { decideSell, type LeaderTrade, type MarketInfo } from "@/lib/copy/engine";
 import { simulateBuy, simulateSell } from "@/lib/copy/fillSim";
 import { executeHedge, exitTrader } from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
@@ -229,8 +229,57 @@ describe("AUDIT: money invariant under random operation sequences", () => {
             settlePosition(tx, p, payouts[m.tokenIds.indexOf(p.tokenId)]),
           );
         }
+      } else if (x < 0.92) {
+        // A merge or a floored sell through the production decision (decideSell): merges have
+        // no trader price, so the floor is measured from the book midpoint (audit N5).
+        const copies = open.filter((p) => p.kind === "copy");
+        if (copies.length === 0) continue;
+        const p = copies[Math.floor(r() * copies.length)];
+        const merge = r() < 0.5;
+        const sellFloorPct = r() < 0.7 ? Math.round(r() * 50) / 100 : 0;
+        op = merge ? "mergeFloored" : "sellFloored";
+        const bids = randomLevels(r, "bid");
+        const d = decideSell({
+          trade: {
+            id: `m${seq++}`,
+            wallet: p.sourceWallet,
+            ts: 0,
+            conditionId: p.conditionId,
+            tokenId: p.tokenId,
+            side: "SELL",
+            price: merge ? 0 : (bids[0]?.price ?? 0.5),
+            size: 1,
+            usdc: 0,
+            outcome: null,
+            title: null,
+            slug: null,
+          },
+          ourShares: p.shares,
+          leaderSoldFraction: r() < 0.3 ? 1 : r(),
+          book: {
+            tokenId: p.tokenId,
+            bids,
+            asks: randomLevels(r, "ask"),
+            tickSize: 0.01,
+            minOrderSize: 1,
+            timestamp: 0,
+          },
+          feeRate: FEE,
+          cfg: { ...DEFAULT_RISK_CONFIG, sellFloorPct },
+        });
+        if (d.action !== "sell") continue;
+        totalFees += d.fill.fee;
+        const t = { id: `ms${seq++}`, price: d.fill.avgPrice } as LeaderTrade;
+        await db.transaction((tx) => applySell(tx, p, t, d.fill));
       } else if (x < 0.97) {
         op = "exitTrader";
+        // Hide with and without a sell floor (measured from the midpoint).
+        await writeSetting(db, "risk", {
+          ...DEFAULT_RISK_CONFIG,
+          hedgeMaxCostPct: 1,
+          hedgeMaxPrice: 0.99,
+          sellFloorPct: r() < 0.5 ? 0 : 0.2,
+        });
         const res = await exitTrader(db, WALLETS[Math.floor(r() * 2)]);
         expect(res.skipped).toBeUndefined();
       } else {
