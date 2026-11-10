@@ -43,7 +43,11 @@ const LEADER = "0xleader";
 const COND = "0xcond";
 const YES = "111";
 const NO = "222";
-const t0 = Math.floor(Date.now() / 1000);
+// Reset at the start of every test (beforeEach): the database stamps copies with the real
+// clock (opened_at), so test times must start from "now", not from when the file loaded. On a
+// slow CI run, 30+ s passed before later tests ran and their copies looked newer than the
+// trader's sells.
+let t0 = Math.floor(Date.now() / 1000);
 
 let db: Db;
 let close: () => Promise<void>;
@@ -104,6 +108,7 @@ const signalOf = async (hash: string) =>
   (await db.select().from(signals)).find((s) => s.id.startsWith(hash));
 
 beforeEach(async () => {
+  t0 = Math.floor(Date.now() / 1000);
   ({ db, close } = await createTestDb());
   await db.insert(follows).values({ wallet: LEADER });
   await db.insert(cursors).values({ wallet: LEADER, lastTs: t0 - 60 });
