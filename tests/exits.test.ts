@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as account from "@/lib/copy/account";
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { mergeFills, type LeaderTrade } from "@/lib/copy/engine";
-import { exitTrader, leaderSoldFraction, runTick } from "@/lib/copy/tick";
+import { executeHedge, exitTrader, leaderSoldFraction, runTick } from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
 import { cursors, follows, paperPositions, signals } from "@/lib/db/schema";
 import * as clob from "@/lib/polymarket/clob";
@@ -494,6 +494,27 @@ describe("the sell floor when there's no trader price (batch 6)", () => {
     const sig = await signalOf("0xmergefloor");
     expect(sig?.decision).toBe("closed");
     expect((sig?.details as { limitPrice?: number }).limitPrice).toBeCloseTo(0.396, 6);
+  });
+
+  it("a hedge sold with the copy respects the floor too (owner, 2026-11-10)", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    const [copy] = await db.select().from(paperPositions);
+    const hedged = await executeHedge(db, copy.accountId, copy.id, "lock", DEFAULT_RISK_CONFIG, {
+      maxCost: Number.POSITIVE_INFINITY,
+    });
+    expect(hedged.ok).toBe(true);
+    await writeSetting(db, "risk", floor20);
+    // Yes still has deep bids; the hedge's No side is thin (10 at 49¢, then 20¢).
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) =>
+      id === NO ? thin(id) : book(id),
+    );
+    rows.push(act({ transaction_hash: "0xsellall", side: "SELL", size: 200, timestamp: t0 + 30 }));
+    vi.mocked(data.getPositions).mockResolvedValue(page([])); // leader fully out
+    await runTick(db, (t0 + 40) * 1000);
+    const open = await db.select().from(paperPositions).where(eq(paperPositions.status, "open"));
+    // Copy gone; hedge: 10 sold at 49¢, 30 kept rather than dumped at 20¢ (floor 39.6¢).
+    expect(open.map((p) => [p.kind, Number(p.shares.toFixed(6))])).toEqual([["hedge", 30]]);
   });
 
   it("Hide with the floor off still sells everything", async () => {

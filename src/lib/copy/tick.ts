@@ -869,7 +869,11 @@ function planHedgeExit(
   const hedge = openHedge(state, position.id);
   const book = hedge ? books.get(hedge.tokenId) : null;
   if (!hedge || !book || book.bids.length === 0) return null;
-  const fill = simulateSell(book.bids, hedge.shares * fraction, 0, cfg.takerFeeBps, feeRate);
+  // The sell floor applies to the hedge too, measured from its own book's midpoint (the
+  // trader's price is for the other side). What can't sell above it stays open.
+  const ref = bookMidpoint(book);
+  const floor = cfg.sellFloorPct > 0 && ref !== null ? ref * (1 - cfg.sellFloorPct) : 0;
+  const fill = simulateSell(book.bids, hedge.shares * fraction, floor, cfg.takerFeeBps, feeRate);
   return fill.shares > 0 ? { hedge, fill } : null;
 }
 
