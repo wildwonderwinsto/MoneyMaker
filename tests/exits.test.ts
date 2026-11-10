@@ -469,6 +469,33 @@ describe("the sell floor when there's no trader price (batch 6)", () => {
     expect((await openShares())[0]).toBeCloseTo(30, 6);
   });
 
+  it("a leader merge sells only what the floor allows below the market midpoint", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    await writeSetting(db, "risk", floor20);
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => thin(id));
+    rows.push(
+      act({
+        type: "MERGE",
+        transaction_hash: "0xmergefloor",
+        token_id: "",
+        side: null,
+        price: 0,
+        size: 200,
+        usdc_size: 200,
+        outcome_index: 999,
+        timestamp: t0 + 30,
+      }),
+    );
+    vi.mocked(data.getPositions).mockResolvedValue(page([])); // fully merged out
+    await runTick(db, (t0 + 40) * 1000);
+    // Floor 49.5¢ × 0.8 = 39.6¢: 10 shares sell at 49¢, 30 stay open (not dumped at 20¢).
+    expect((await openShares())[0]).toBeCloseTo(30, 6);
+    const sig = await signalOf("0xmergefloor");
+    expect(sig?.decision).toBe("closed");
+    expect((sig?.details as { limitPrice?: number }).limitPrice).toBeCloseTo(0.396, 6);
+  });
+
   it("Hide with the floor off still sells everything", async () => {
     rows = [act({ transaction_hash: "0xbuy" })];
     await runTick(db, (t0 + 20) * 1000);

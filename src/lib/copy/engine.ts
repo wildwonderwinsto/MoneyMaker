@@ -259,7 +259,11 @@ export function decideSell(ctx: SellContext): Decision {
   const shares = ctx.ourShares * fraction;
   // By default exits take whatever the book offers: getting out matters more than the
   // price. With a floor, shares that would sell too far below the trader's price are held.
-  const floor = cfg.sellFloorPct > 0 ? ctx.trade.price * (1 - cfg.sellFloorPct) : 0;
+  // A leader merge has no per-side price (recorded as 0): the floor is measured from the
+  // market midpoint instead (batch 6; it used to be 0, i.e. no floor at all).
+  const midpoint = ctx.trade.price > 0 ? null : bookMidpoint(book);
+  const ref = midpoint ?? ctx.trade.price;
+  const floor = cfg.sellFloorPct > 0 ? ref * (1 - cfg.sellFloorPct) : 0;
   const fill = simulateSell(book.bids, shares, floor, cfg.takerFeeBps, ctx.feeRate ?? 0);
   if (fill.shares <= 0) {
     return floor > 0
@@ -268,6 +272,7 @@ export function decideSell(ctx: SellContext): Decision {
           leaderPrice: ctx.trade.price,
           limitPrice: floor,
           sellFloorPct: cfg.sellFloorPct,
+          ...(midpoint !== null && { midpoint }),
         })
       : skip("No buyers in the order book", "no_buyers");
   }
@@ -281,6 +286,7 @@ export function decideSell(ctx: SellContext): Decision {
       fillPrice: fill.avgPrice,
       fills: ctx.trade.ids?.length ?? 1,
       ...(floor > 0 && { limitPrice: floor, partial: fill.partial }),
+      ...(floor > 0 && midpoint !== null && { midpoint }),
     },
   };
 }

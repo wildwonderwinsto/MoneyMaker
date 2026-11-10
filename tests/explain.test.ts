@@ -54,3 +54,15 @@ describe("candidate history note", () => {
     expect(positionsNote("candidate", 12)).toBeNull();
   });
 });
+
+describe("sell floor on a leader merge (batch 6)", () => {
+  it("explains the floor against the midpoint, not 'sold at 0¢'", async () => {
+    const e = explain({
+      reason: "Best bid 20.0¢ is below your sell floor",
+      code: "sell_floor",
+      details: { bestBid: 0.2, leaderPrice: 0, limitPrice: 0.396, midpoint: 0.495 },
+    });
+    expect(e.body.join(" ")).toContain("midpoint (49.5¢)");
+    expect(e.body.join(" ")).not.toContain("sold at 0");
+  });
+});

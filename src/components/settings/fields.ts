@@ -362,7 +362,7 @@ export const RISK_GROUPS: Group[] = [
         kind: "number",
         name: "sellFloorPct",
         label: "Lowest sell price vs. the trader",
-        help: "When copying a sell, don't sell for more than this much below the trader's price. A big sell often wipes out the buyers, leaving only much lower bids. Shares that can't sell above the floor stay open. 0 = always sell at whatever buyers offer.",
+        help: "When copying a sell, don't sell for more than this much below the trader's price. A big sell often wipes out the buyers, leaving only much lower bids. Shares that can't sell above the floor stay open. When there is no trader price (hiding a trader, or a trader merging Yes + No shares) it's measured from the market midpoint. 0 = always sell at whatever buyers offer.",
         unit: "pct",
         min: 0,
         max: 100,

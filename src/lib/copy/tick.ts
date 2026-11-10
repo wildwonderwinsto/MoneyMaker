@@ -426,7 +426,7 @@ async function pollLeaders(db: Db, ctx: EngineCtx, wallets: string[]) {
  * A MERGE turns YES+NO pairs back into $1 each, so the leader's holding on each side drops by
  * `size`: added to `candidates` as a sell of `size` on each of our copies there, sized by the
  * normal sell path (merged ÷ what they held). The leader got $1 a pair, so there is no
- * per-side price and no sell floor applies. A CONVERSION (negRisk) is not reliably tied to one
+ * per-side price: the sell floor is measured from the market midpoint (decideSell). A CONVERSION (negRisk) is not reliably tied to one
  * market's NO side (verified live: one row can stand for ~9 markets), so it is only recorded
  * as a skipped signal for the Live page. Returns, per wallet, the time of a conversion whose
  * signal failed to record (the cursor is held there).

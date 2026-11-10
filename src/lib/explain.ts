@@ -258,6 +258,18 @@ export function explain(opts: {
       const bid = num(d, "bestBid");
       const paid = num(d, "leaderPrice");
       const floor = num(d, "limitPrice");
+      const mid = num(d, "midpoint");
+      if (mid !== null) {
+        // A leader merge: no trader sell price, so the floor is measured from the midpoint.
+        return {
+          title: "Held: buyers too far below the market price",
+          body: [
+            `The trader merged Yes + No shares back into cash, so there's no sell price to follow; your floor is measured from the market midpoint (${c(mid)}). The best buyer was offering only ${bid !== null ? c(bid) : "much less"}${floor !== null ? `, under your floor of ${c(floor)}` : ""}.`,
+            "The position stays open. It's sold with the trader's next exit if buyers come back, or settles when the market ends.",
+          ],
+          setting: "Lowest sell price vs. the trader",
+        };
+      }
       return {
         title: "Held: buyers too far below the trader's price",
         body: [
