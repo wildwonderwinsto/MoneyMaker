@@ -8,7 +8,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureDefaultAccount } from "@/lib/copy/account";
 import type { Db } from "@/lib/db/client";
 import { paperFills, paperPositions } from "@/lib/db/schema";
-import { getPaperOverview } from "@/lib/queries";
+import { runTick } from "@/lib/copy/tick";
+import { eq } from "drizzle-orm";
+import { getLiveVersion, getPaperOverview } from "@/lib/queries";
 
 import { createTestDb } from "./helpers/db";
 
@@ -89,5 +91,43 @@ describe("win rate (UI-06)", () => {
     const p = await getPaperOverview();
     expect(p.winRate).toBe(0);
     expect(p.finishedCount).toBe(1);
+  });
+});
+
+describe("Live page fingerprint (UI-08)", () => {
+  it("changes when a cron-only tick runs, a fill lands or a price is marked", async () => {
+    const v0 = await getLiveVersion();
+    // ENGINE_LOOP=off: cron calls runTick directly; the runner's status is never written.
+    await runTick(db, Date.now(), { copy: false });
+    const v1 = await getLiveVersion();
+    expect(v1).not.toBe(v0);
+
+    const [pos] = await db
+      .insert(paperPositions)
+      .values({ ...closed("a", 0, 0), status: "open", shares: 10, costBasis: 5 })
+      .returning({ id: paperPositions.id });
+    const v2 = await getLiveVersion();
+    expect(v2).not.toBe(v1);
+
+    await new Promise((r) => setTimeout(r, 5));
+    await db
+      .update(paperPositions)
+      .set({ currentPrice: 0.7, updatedAt: new Date() })
+      .where(eq(paperPositions.id, pos.id));
+    const v3 = await getLiveVersion();
+    expect(v3).not.toBe(v2);
+
+    await db.insert(paperFills).values({
+      accountId,
+      positionId: pos.id,
+      kind: "settlement",
+      side: "SETTLE",
+      shares: 10,
+      avgPrice: 1,
+      notional: 10,
+      realizedPnl: 5,
+      ts: new Date(Date.now() + 1000),
+    });
+    expect(await getLiveVersion()).not.toBe(v3);
   });
 });

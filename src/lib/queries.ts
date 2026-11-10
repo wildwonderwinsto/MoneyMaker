@@ -574,14 +574,35 @@ export async function getEngineStatus() {
 export type EngineStatusView = Awaited<ReturnType<typeof getEngineStatus>>;
 
 /**
- * A cheap fingerprint of what the Live page shows: the newest signal and the engine's last
- * check / real-time batch. The page polls it and re-renders only when it changes.
+ * A cheap fingerprint of what the Live page shows: the newest signal, the newest fill
+ * (buys, sells, settlements), the latest position change (incl. price marks), the last
+ * engine run (the tick lease row is touched on every run, also cron-only with
+ * ENGINE_LOOP=off, where the runner's status is never written) and the last real-time
+ * batch. The page polls it and re-renders only when it changes (UI-08).
  */
 export async function getLiveVersion(): Promise<string> {
   const db = getDb();
   const [[latest], status] = await Promise.all([
-    db.select({ at: sql<string | null>`max(${signals.detectedAt})::text` }).from(signals),
+    db
+      .select({
+        signal: sql<string | null>`(select max(${signals.detectedAt}) from ${signals})::text`,
+        fill: sql<string | null>`(select max(${paperFills.ts}) from ${paperFills})::text`,
+        position: sql<
+          string | null
+        >`(select max(${paperPositions.updatedAt}) from ${paperPositions})::text`,
+        tick: sql<
+          string | null
+        >`(select ${appSettings.updatedAt} from ${appSettings} where ${appSettings.key} = 'lease:tick')::text`,
+      })
+      .from(sql`(select 1) as one`),
     readEngineStatus(db),
   ]);
-  return [latest?.at, status.lastTickAt, status.lastStreamBatchAt].join("|");
+  return [
+    latest?.signal,
+    latest?.fill,
+    latest?.position,
+    latest?.tick,
+    status.lastTickAt,
+    status.lastStreamBatchAt,
+  ].join("|");
 }
