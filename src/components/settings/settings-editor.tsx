@@ -21,6 +21,7 @@ import { DEFAULT_SCORING_CONFIG, ScoringConfigSchema } from "@/lib/scoring/confi
 
 import {
   fromDisplay,
+  humanIssue,
   RISK_GROUPS,
   SCORING_GROUPS,
   toDisplay,
@@ -116,7 +117,11 @@ export function SettingsEditor({
         const field = allFields(groups).find((f) => f.name === key);
         errs[key] = Number.isNaN(current[key])
           ? "Enter a number"
-          : humanIssue(issue.message, field);
+          : humanIssue(
+              issue.message,
+              field,
+              field?.kind === "number" ? toDisplay(field.unit, Number(current[key])) : undefined,
+            );
       }
       setErrors(errs);
       setState({ ok: false, message: "Fix the highlighted fields." });
@@ -286,17 +291,6 @@ function NumberStepper({
       </button>
     </div>
   );
-}
-
-function humanIssue(message: string, field: Field | undefined): string {
-  if (!field || field.kind !== "number") return message;
-  const unit = UNIT_SUFFIX[field.unit];
-  const show = (x: number) => (unit === "$" ? `$${x}` : `${x}${unit ? ` ${unit}` : ""}`);
-  if (field.min !== undefined && field.max !== undefined)
-    return `Use ${show(field.min)} to ${show(field.max)}`;
-  if (field.min !== undefined) return `Use at least ${show(field.min)}`;
-  if (field.max !== undefined) return `Use at most ${show(field.max)}`;
-  return message;
 }
 
 function FieldRow({

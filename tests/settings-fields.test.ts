@@ -128,3 +128,28 @@ describe("settings that no longer change anything are gone (batch 6)", () => {
     expect(Math.round(p * (MC_SIMULATIONS + 1)) / (MC_SIMULATIONS + 1)).toBeCloseTo(p, 12);
   });
 });
+
+describe("error messages under a field (batch 6)", () => {
+  const field = (name: string) => {
+    const f = RISK_GROUPS.flatMap((g) => g.fields).find((x) => x.name === name)!;
+    return f;
+  };
+  it("shows the real reason when the value is inside the field's range", async () => {
+    const { humanIssue } = await import("@/components/settings/fields");
+    const minAboveMax = RiskConfigSchema.safeParse({ minEntryPrice: 0.6, maxEntryPrice: 0.4 });
+    const msg = minAboveMax.error!.issues[0].message;
+    // Was "Use 0 ¢ to 100 ¢", although 60¢ is inside that range.
+    expect(humanIssue(msg, field("minEntryPrice"), 60)).toBe(msg);
+    const zeroCap = RiskConfigSchema.safeParse({ maxPositionPct: 0 });
+    expect(humanIssue(zeroCap.error!.issues[0].message, field("maxPositionPct"), 0)).toBe(
+      "Most in one market must be above 0",
+    );
+  });
+  it("names the range when the value is outside it", async () => {
+    const { humanIssue } = await import("@/components/settings/fields");
+    expect(humanIssue("Too big", field("maxPositionPct"), 150)).toBe("Use 0 % to 100 %");
+    expect(humanIssue("Too small", field("maxSignalAgeSeconds"), 0.1)).toBe(
+      "Use 0.5 min to 10080 min",
+    );
+  });
+});

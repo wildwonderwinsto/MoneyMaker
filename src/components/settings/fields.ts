@@ -715,6 +715,26 @@ export const SCORING_GROUPS: Group[] = [
   },
 ];
 
+/** The message under a field whose value the schema rejected. */
+export function humanIssue(message: string, field: Field | undefined, shown?: number): string {
+  if (!field || field.kind !== "number") return message;
+  // Inside the field's range the range isn't the problem (e.g. min above max, a cap of 0):
+  // show the schema's own reason instead of a range the value already satisfies.
+  const inRange =
+    shown !== undefined &&
+    Number.isFinite(shown) &&
+    (field.min === undefined || shown >= field.min) &&
+    (field.max === undefined || shown <= field.max);
+  if (inRange) return message;
+  const unit = UNIT_SUFFIX[field.unit];
+  const show = (x: number) => (unit === "$" ? `$${x}` : `${x}${unit ? ` ${unit}` : ""}`);
+  if (field.min !== undefined && field.max !== undefined)
+    return `Use ${show(field.min)} to ${show(field.max)}`;
+  if (field.min !== undefined) return `Use at least ${show(field.min)}`;
+  if (field.max !== undefined) return `Use at most ${show(field.max)}`;
+  return message;
+}
+
 /**
  * A follow's sizing weight as typed in its box: null (no change) when blank, not a number
  * or outside 0–5. A blank box used to become `Number("")` = 0×, silently pausing copies.
