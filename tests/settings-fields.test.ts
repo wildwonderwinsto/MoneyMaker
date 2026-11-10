@@ -153,3 +153,33 @@ describe("error messages under a field (batch 6)", () => {
     );
   });
 });
+
+describe("scoring bounds (owner, 2026-11-10)", () => {
+  it.each([
+    ["maxTradesPerDay", 0],
+    ["maxTradesPerDay", -5],
+    ["roiShrinkK", -1],
+    ["roiShrinkK", 1001],
+    ["copyLossZ", 5],
+    ["minEntryPrice", -0.1],
+    ["maxEntryPrice", 1.2],
+  ])("rejects %s = %d", (field, v) => {
+    const r = ScoringConfigSchema.safeParse({ [field]: v });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0].path).toEqual([field]);
+  });
+  it("rejects an entry band whose minimum is above its maximum, naming the field", () => {
+    const r = ScoringConfigSchema.safeParse({ minEntryPrice: 0.6, maxEntryPrice: 0.4 });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0].path).toEqual(["minEntryPrice"]);
+  });
+  it("accepts the defaults and the edges", () => {
+    for (const v of [
+      { maxTradesPerDay: 0.5 },
+      { roiShrinkK: 0 },
+      { roiShrinkK: 1000 },
+      { minEntryPrice: 0, maxEntryPrice: 1 },
+    ])
+      expect(ScoringConfigSchema.safeParse(v).success).toBe(true);
+  });
+});
