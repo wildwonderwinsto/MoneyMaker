@@ -442,8 +442,9 @@ function EquityTable({ rows }: { rows: Row[] }) {
         Show data table ({table.length} snapshots)
       </summary>
       <p className="text-muted-foreground mt-2">
-        Equity = cash + open positions at market price. Each row is one snapshot; “Change” is since
-        the row below it, and “Trades” counts what happened in between.
+        Equity = cash + open positions at the midpoint price (selling now would usually get a bit
+        less). Each row is one snapshot; “Change” is since the row below it, and “Trades” counts
+        what happened in between.
       </p>
       <div className="mt-2 max-h-72 overflow-auto rounded-md border">
         <table className="w-full text-left tabular-nums">

@@ -81,8 +81,9 @@ async function PaperContent() {
         <CardHeader className="px-3 sm:px-6">
           <CardTitle>Equity</CardTitle>
           <CardDescription>
-            Cash + open positions at market prices. B marks a buy, S a sell or settlement: hover or
-            tap one for the trade and what it made or lost.
+            Cash + open positions at midpoint prices (halfway between the best bid and ask; selling
+            now would usually get a bit less). B marks a buy, S a sell or settlement: hover or tap
+            one for the trade and what it made or lost.
           </CardDescription>
         </CardHeader>
         <CardContent className="px-3 sm:px-6">
