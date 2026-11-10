@@ -53,8 +53,6 @@ export const ScoringConfigSchema = z
     copyLossZ: z.number().min(0).max(4).default(2),
     /** Fewer replayed copies than this = not enough evidence; the copy check can't pass. */
     minCopyReplays: z.number().int().min(1).default(25),
-    /** Replay only leader buys at least this big (the copy engine ignores smaller ones). */
-    minReplayLeaderUsd: z.number().min(0).default(25),
     /** Above 0: at 0 or below every trader would count as a bot. */
     maxTradesPerDay: z.number().gt(0).default(200),
     maxBothSidesRatio: z.number().min(0).max(1).default(0.3),

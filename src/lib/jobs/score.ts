@@ -38,6 +38,7 @@ import {
 } from "@/lib/scoring/metrics";
 import { scoreTrader, type ScoreResult } from "@/lib/scoring/score";
 import { eBenjaminiHochbergThreshold } from "@/lib/scoring/stats";
+import { getRiskConfig } from "@/lib/settings";
 
 import { recentProfile } from "./activityHistory";
 import { chunk, mapPool, toDate, toEpoch } from "./util";
@@ -177,6 +178,9 @@ export async function buildCopyReplays(
   opts: ScoreOptions,
   now: number,
 ): Promise<CopyReplay[]> {
+  // Same minimum as the copy engine's "Ignore trader trades under" (owner, 2026-11-10): it
+  // used to be a separate scoring setting that could drift from what is actually copied.
+  const { minLeaderUsd } = await getRiskConfig(db);
   const start = Math.floor(now - opts.replayLookbackDays * 86_400);
   const trades: Activity[] = await collect(
     paginate((cursor) => getActivity({ user: wallet, type: "TRADE", start, cursor }), {
@@ -211,7 +215,7 @@ export async function buildCopyReplays(
   const buys = rows.filter(
     (t) =>
       t.side === "BUY" &&
-      t.usdcSize >= cfg.minReplayLeaderUsd &&
+      t.usdcSize >= minLeaderUsd &&
       t.price > cfg.minEntryPrice &&
       t.price < 0.97 &&
       toEpoch(t.ts)! < now - cfg.copyDelaySeconds - 900,

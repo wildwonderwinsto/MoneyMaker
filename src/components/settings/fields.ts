@@ -634,15 +634,6 @@ export const SCORING_GROUPS: Group[] = [
       },
       {
         kind: "number",
-        name: "minReplayLeaderUsd",
-        label: "Replay trades of at least",
-        help: "Only the trader's buys of at least this size are replayed. Keep it equal to “Ignore trader trades under” in the copy settings, so the replay matches what would be copied.",
-        unit: "usd",
-        min: 0,
-        step: 1,
-      },
-      {
-        kind: "number",
         name: "maxTradesPerDay",
         label: "Max trades per day",
         help: "More than this, on average over their lifetime or over the last 30 days, looks like a bot you can't keep up with.",

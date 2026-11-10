@@ -84,7 +84,7 @@ describe("buildCopyReplays", () => {
 });
 
 describe("replay settings (batch 6 sweep)", () => {
-  it("copyDelaySeconds, copySlippage and minReplayLeaderUsd change the replays", async () => {
+  it("copyDelaySeconds and copySlippage change the replays", async () => {
     vi.mocked(data.getActivity).mockResolvedValue({
       data: [buy(0), buy(1), buy(2)],
       pagination: { has_more: false, next_cursor: null },
@@ -108,6 +108,16 @@ describe("replay settings (batch 6 sweep)", () => {
     expect(base).toHaveLength(3);
     expect(await prices({ ...cfg, copyDelaySeconds: 30 })).not.toEqual(base);
     expect(await prices({ ...cfg, copySlippage: 0.05 })).not.toEqual(base);
-    expect(await prices({ ...cfg, minReplayLeaderUsd: 100 })).toEqual([]); // buys are $50
+  });
+
+  it("replays only trades the engine would copy: its 'Ignore trader trades under' (owner, 2026-11-10)", async () => {
+    const { writeSetting } = await import("@/lib/settings");
+    const { DEFAULT_RISK_CONFIG } = await import("@/lib/copy/config");
+    const n = async () => (await buildCopyReplays(db, "0xleader", cfg, DEFAULT_SCORE, NOW)).length;
+    await writeSetting(db, "risk", { ...DEFAULT_RISK_CONFIG, minLeaderUsd: 100 });
+    expect(await n()).toBe(0); // the buys are $50: the engine wouldn't copy them
+    await writeSetting(db, "risk", { ...DEFAULT_RISK_CONFIG, minLeaderUsd: 40 });
+    expect(await n()).toBe(3);
+    expect(Object.keys(cfg)).not.toContain("minReplayLeaderUsd");
   });
 });
