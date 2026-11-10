@@ -39,6 +39,11 @@ vi.mock("@/lib/polymarket/data", async (importOriginal) => ({
   getUserPnl: vi.fn(),
   getActivity: vi.fn(),
 }));
+// No network in tests: the pick-month rebuild values held shares with CLOB midpoints.
+vi.mock("@/lib/polymarket/clob", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/polymarket/clob")>()),
+  getMidpoints: vi.fn(async () => new Map<string, number>()),
+}));
 const noActivity = () =>
   vi.mocked(data.getActivity).mockResolvedValue({
     data: [],
