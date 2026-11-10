@@ -10,6 +10,8 @@ import postgres from "postgres";
 import { isPgliteUrl, openPglite } from "./pglite";
 
 export const MIGRATIONS_FOLDER = path.join(process.cwd(), "drizzle");
+/** Advisory lock key for migrations (any fixed number used nowhere else). */
+const MIGRATION_LOCK = 728_461_903;
 
 /** Apply all pending SQL migrations in ./drizzle to the given database URL. */
 export async function runMigrations(url: string): Promise<void> {
@@ -27,7 +29,14 @@ export async function runMigrations(url: string): Promise<void> {
   // Single connection; migrations must not run through a pipelining pool.
   const client = postgres(url, { max: 1, prepare: false, ssl: isLocal ? false : "require" });
   try {
-    await migratePostgres(drizzlePostgres({ client }), { migrationsFolder: MIGRATIONS_FOLDER });
+    // Render's build and the daily workflow both migrate; a deploy during a daily run must
+    // not apply the same migration twice (audit J13). A session lock on this one connection.
+    await client`select pg_advisory_lock(${MIGRATION_LOCK})`;
+    try {
+      await migratePostgres(drizzlePostgres({ client }), { migrationsFolder: MIGRATIONS_FOLDER });
+    } finally {
+      await client`select pg_advisory_unlock(${MIGRATION_LOCK})`;
+    }
   } finally {
     await client.end({ timeout: 5 });
   }
