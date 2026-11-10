@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as account from "@/lib/copy/account";
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { mergeFills, type LeaderTrade } from "@/lib/copy/engine";
-import { leaderSoldFraction, runTick } from "@/lib/copy/tick";
+import { exitTrader, leaderSoldFraction, runTick } from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
 import { cursors, follows, paperPositions, signals } from "@/lib/db/schema";
 import * as clob from "@/lib/polymarket/clob";
@@ -437,5 +437,44 @@ describe("leader exits by merge or conversion (owner, 2026-11-09)", () => {
     rows = [merge(100, "0xother")];
     await runTick(db, (t0 + 40) * 1000);
     expect(await signalOf("0xother")).toBeUndefined();
+  });
+});
+
+describe("the sell floor when there's no trader price (batch 6)", () => {
+  // After the copy: 10 shares bid at 49¢, then nothing until 20¢. Midpoint (49 + 50) / 2.
+  const thin = (tokenId: string) => ({
+    ...book(tokenId),
+    bids: [
+      { price: 0.49, size: 10 },
+      { price: 0.2, size: 10_000 },
+    ],
+  });
+  const floor20 = {
+    ...DEFAULT_RISK_CONFIG,
+    sizingMode: "fixed" as const,
+    fixedUsd: 20,
+    sellFloorPct: 0.2,
+  };
+
+  it("Hide sells only what the floor allows below the market midpoint", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    expect(await openShares()).toEqual([40]);
+    await writeSetting(db, "risk", floor20);
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => thin(id));
+    // Floor 49.5¢ × 0.8 = 39.6¢: the 10 shares at 49¢ go, the 30 that would fetch 20¢ stay.
+    const r = await exitTrader(db, LEADER, (t0 + 40) * 1000);
+    expect(r).toMatchObject({ sold: 1, left: 1 });
+    expect(r.proceeds).toBeCloseTo(10 * 0.49, 6);
+    expect((await openShares())[0]).toBeCloseTo(30, 6);
+  });
+
+  it("Hide with the floor off still sells everything", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => thin(id));
+    const r = await exitTrader(db, LEADER, (t0 + 40) * 1000);
+    expect(r).toMatchObject({ sold: 1, left: 0 });
+    expect(await openShares()).toEqual([]);
   });
 });

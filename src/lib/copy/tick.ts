@@ -43,6 +43,7 @@ import {
 } from "./account";
 import type { RiskConfig } from "./config";
 import {
+  bookMidpoint,
   decideBuy,
   decideSell,
   mergeFills,
@@ -1506,7 +1507,17 @@ export async function exitTrader(
         out.left++;
         continue;
       }
-      const fill = simulateSell(book.bids, p.shares, 0, cfg.takerFeeBps, market.takerFeeRate ?? 0);
+      // The sell floor applies here too (UI-11). There's no trader price, so it's measured
+      // from the market midpoint; what can't sell above it stays open.
+      const ref = bookMidpoint(book);
+      const floor = cfg.sellFloorPct > 0 && ref !== null ? ref * (1 - cfg.sellFloorPct) : 0;
+      const fill = simulateSell(
+        book.bids,
+        p.shares,
+        floor,
+        cfg.takerFeeBps,
+        market.takerFeeRate ?? 0,
+      );
       if (fill.shares <= 0) {
         out.left++;
         continue;

@@ -234,6 +234,17 @@ export interface SellContext {
   cfg: RiskConfig;
 }
 
+/**
+ * What a sell floor is measured from when there is no trader sell price (a Hide, a leader
+ * merge): the book's midpoint, or the best bid when nobody is selling. Null without bids.
+ */
+export function bookMidpoint(book: OrderBook): number | null {
+  const bid = book.bids[0]?.price;
+  if (bid === undefined) return null;
+  const ask = book.asks[0]?.price;
+  return ask === undefined ? bid : (bid + ask) / 2;
+}
+
 export function decideSell(ctx: SellContext): Decision {
   const { cfg, book } = ctx;
   if (ctx.ourShares <= 1e-9) return skip("No copied position to close", "no_position");
