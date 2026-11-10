@@ -238,94 +238,112 @@ export async function getPaperOverview() {
   // Per finished position: what we bought and how we got out (sells + settlement).
   const fillSum = (expr: string, where: string) =>
     sql<number>`coalesce((select sum(${sql.raw(expr)}) from paper_fills f where f.position_id = ${paperPositions.id} and ${sql.raw(where)}), 0)::float8`;
-  const [closed, equity, byTrader, allPositions, markers, totals] = await Promise.all([
-    db
-      .select({
-        ...getTableColumns(paperPositions),
-        boughtShares: fillSum("f.shares", "f.side = 'BUY'"),
-        boughtUsd: fillSum("f.notional", "f.side = 'BUY'"),
-        exitShares: fillSum("f.shares", "f.side <> 'BUY'"),
-        exitUsd: fillSum("f.notional", "f.side <> 'BUY'"),
-        soldShares: fillSum("f.shares", "f.side = 'SELL'"),
-        settlement: sql<
-          string | null
-        >`(select f.side from paper_fills f where f.position_id = ${paperPositions.id} and f.kind = 'settlement' order by f.ts desc limit 1)`,
-      })
-      .from(paperPositions)
-      .where(and(eq(paperPositions.accountId, account.id), ne(paperPositions.status, "open")))
-      .orderBy(desc(paperPositions.closedAt))
-      .limit(100),
-    db
-      .select()
-      .from(equitySnapshots)
-      .where(and(eq(equitySnapshots.accountId, account.id), gte(equitySnapshots.ts, since)))
-      .orderBy(asc(equitySnapshots.ts)),
-    db
-      .select({
-        wallet: paperPositions.sourceWallet,
-        name: traders.name,
-        realized: sql<number>`sum(${paperPositions.realizedPnl})::float8`,
-        openCost: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.costBasis} else 0 end)::float8`,
-        openValue: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.shares} * coalesce(${paperPositions.currentPrice}, ${paperPositions.avgPrice}) else 0 end)::float8`,
-        trades: sql<number>`count(*)::int`,
-      })
-      .from(paperPositions)
-      .leftJoin(traders, eq(traders.wallet, paperPositions.sourceWallet))
-      .where(eq(paperPositions.accountId, account.id))
-      .groupBy(paperPositions.sourceWallet, traders.name),
-    db
-      .select({
-        id: paperPositions.id,
-        sourceWallet: paperPositions.sourceWallet,
-        title: paperPositions.title,
-        outcome: paperPositions.outcome,
-        image: paperPositions.image,
-        status: paperPositions.status,
-        kind: paperPositions.kind,
-        shares: paperPositions.shares,
-        costBasis: paperPositions.costBasis,
-        avgPrice: paperPositions.avgPrice,
-        currentPrice: paperPositions.currentPrice,
-        realizedPnl: paperPositions.realizedPnl,
-        openedAt: paperPositions.openedAt,
-        closedAt: paperPositions.closedAt,
-        invested: sql<number>`coalesce((select sum(f.notional) from paper_fills f where f.position_id = ${paperPositions.id} and f.side = 'BUY'), 0)::float8`,
-      })
-      .from(paperPositions)
-      .where(eq(paperPositions.accountId, account.id))
-      .orderBy(desc(paperPositions.openedAt))
-      .limit(1000),
-    // Buys, sells and settlements to mark on the equity chart.
-    db
-      .select({
-        id: paperFills.id,
-        ts: paperFills.ts,
-        side: paperFills.side,
-        kind: paperFills.kind,
-        notional: paperFills.notional,
-        shares: paperFills.shares,
-        avgPrice: paperFills.avgPrice,
-        realizedPnl: paperFills.realizedPnl,
-        positionId: paperFills.positionId,
-        title: paperPositions.title,
-        outcome: paperPositions.outcome,
-      })
-      .from(paperFills)
-      .leftJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
-      .where(and(eq(paperFills.accountId, account.id), gte(paperFills.ts, since)))
-      .orderBy(asc(paperFills.ts))
-      .limit(2000),
-    // Account-wide totals (the lists above are capped): realized includes partial sells
-    // of positions that are still open.
-    db
-      .select({
-        realized: sql<number>`coalesce(sum(${paperPositions.realizedPnl}), 0)::float8`,
-        finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open')::int`,
-        wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.realizedPnl} > 0)::int`,
-      })
-      .from(paperPositions)
-      .where(eq(paperPositions.accountId, account.id)),
-  ]);
+  const [closed, equity, byTrader, allPositions, markersDesc, totals, investedRows] =
+    await Promise.all([
+      db
+        .select({
+          ...getTableColumns(paperPositions),
+          boughtShares: fillSum("f.shares", "f.side = 'BUY'"),
+          boughtUsd: fillSum("f.notional", "f.side = 'BUY'"),
+          exitShares: fillSum("f.shares", "f.side <> 'BUY'"),
+          exitUsd: fillSum("f.notional", "f.side <> 'BUY'"),
+          soldShares: fillSum("f.shares", "f.side = 'SELL'"),
+          settlement: sql<
+            string | null
+          >`(select f.side from paper_fills f where f.position_id = ${paperPositions.id} and f.kind = 'settlement' order by f.ts desc limit 1)`,
+        })
+        .from(paperPositions)
+        .where(and(eq(paperPositions.accountId, account.id), ne(paperPositions.status, "open")))
+        .orderBy(desc(paperPositions.closedAt))
+        .limit(100),
+      db
+        .select()
+        .from(equitySnapshots)
+        .where(and(eq(equitySnapshots.accountId, account.id), gte(equitySnapshots.ts, since)))
+        .orderBy(asc(equitySnapshots.ts)),
+      db
+        .select({
+          wallet: paperPositions.sourceWallet,
+          name: traders.name,
+          realized: sql<number>`sum(${paperPositions.realizedPnl})::float8`,
+          openCost: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.costBasis} else 0 end)::float8`,
+          openValue: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.shares} * coalesce(${paperPositions.currentPrice}, ${paperPositions.avgPrice}) else 0 end)::float8`,
+          trades: sql<number>`count(*)::int`,
+          open: sql<number>`count(*) filter (where ${paperPositions.status} = 'open')::int`,
+          finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy')::int`,
+          wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy' and ${paperPositions.realizedPnl} > 0)::int`,
+        })
+        .from(paperPositions)
+        .leftJoin(traders, eq(traders.wallet, paperPositions.sourceWallet))
+        .where(eq(paperPositions.accountId, account.id))
+        .groupBy(paperPositions.sourceWallet, traders.name),
+      db
+        .select({
+          id: paperPositions.id,
+          sourceWallet: paperPositions.sourceWallet,
+          title: paperPositions.title,
+          outcome: paperPositions.outcome,
+          image: paperPositions.image,
+          status: paperPositions.status,
+          kind: paperPositions.kind,
+          shares: paperPositions.shares,
+          costBasis: paperPositions.costBasis,
+          avgPrice: paperPositions.avgPrice,
+          currentPrice: paperPositions.currentPrice,
+          realizedPnl: paperPositions.realizedPnl,
+          openedAt: paperPositions.openedAt,
+          closedAt: paperPositions.closedAt,
+          invested: sql<number>`coalesce((select sum(f.notional) from paper_fills f where f.position_id = ${paperPositions.id} and f.side = 'BUY'), 0)::float8`,
+        })
+        .from(paperPositions)
+        .where(eq(paperPositions.accountId, account.id))
+        .orderBy(desc(paperPositions.openedAt))
+        .limit(1000),
+      // Buys, sells and settlements to mark on the equity chart.
+      db
+        .select({
+          id: paperFills.id,
+          ts: paperFills.ts,
+          side: paperFills.side,
+          kind: paperFills.kind,
+          notional: paperFills.notional,
+          shares: paperFills.shares,
+          avgPrice: paperFills.avgPrice,
+          realizedPnl: paperFills.realizedPnl,
+          positionId: paperFills.positionId,
+          title: paperPositions.title,
+          outcome: paperPositions.outcome,
+        })
+        .from(paperFills)
+        .leftJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
+        .where(and(eq(paperFills.accountId, account.id), gte(paperFills.ts, since)))
+        // The newest 2,000 (put back in time order below), not the oldest.
+        .orderBy(desc(paperFills.ts), desc(paperFills.id))
+        .limit(2000),
+      // Account-wide totals (the lists above are capped): realized includes partial sells
+      // of positions that are still open.
+      db
+        .select({
+          realized: sql<number>`coalesce(sum(${paperPositions.realizedPnl}), 0)::float8`,
+          // Win rate over finished copies; hedges are insurance, not bets on the trader.
+          finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy')::int`,
+          wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy' and ${paperPositions.realizedPnl} > 0)::int`,
+        })
+        .from(paperPositions)
+        .where(eq(paperPositions.accountId, account.id)),
+      // Money put in per trader (all buys), for per-trader return.
+      db
+        .select({
+          wallet: paperPositions.sourceWallet,
+          invested: sql<number>`coalesce(sum(${paperFills.notional}), 0)::float8`,
+        })
+        .from(paperFills)
+        .innerJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
+        .where(and(eq(paperFills.accountId, account.id), eq(paperFills.side, "BUY")))
+        .groupBy(paperPositions.sourceWallet),
+    ]);
+  const markers = markersDesc.reverse();
+  const investedBy = new Map(investedRows.map((r) => [r.wallet, r.invested]));
 
   const { realized, finished, wins } = totals[0];
   return {
@@ -340,7 +358,7 @@ export async function getPaperOverview() {
     realized,
     winRate: finished ? wins / finished : null,
     finishedCount: finished,
-    byTrader: summarizeByTrader(byTrader, allPositions),
+    byTrader: summarizeByTrader(byTrader, allPositions, investedBy),
     markers,
   };
 }
@@ -359,33 +377,45 @@ interface PositionSummary {
   invested: number;
 }
 
-/** Per leader: how much money they made us, on how much capital, and their positions. */
+/**
+ * Per leader: how much money they made us, on how much capital, and their positions.
+ * Totals come from SQL over every position (`rows`, `investedBy`); `positions` is the capped
+ * list shown on the page and is used only for listing (UI-04: totals were summed from it).
+ */
 function summarizeByTrader<
-  T extends { wallet: string; name: string | null },
+  T extends {
+    wallet: string;
+    name: string | null;
+    realized: number;
+    openCost: number;
+    openValue: number;
+    open: number;
+    finished: number;
+    wins: number;
+  },
   P extends PositionSummary,
->(rows: T[], positions: P[]) {
+>(rows: T[], positions: P[], investedBy: Map<string, number>) {
   const pnlOf = (p: P) =>
     p.realizedPnl +
     (p.status === "open" ? p.shares * (p.currentPrice ?? p.avgPrice) - p.costBasis : 0);
   return rows
     .map((t) => {
       const mine = positions.filter((p) => p.sourceWallet === t.wallet);
-      const realized = mine.reduce((a, p) => a + p.realizedPnl, 0);
-      const total = mine.reduce((a, p) => a + pnlOf(p), 0);
-      const invested = mine.reduce((a, p) => a + p.invested, 0);
-      const finished = mine.filter((p) => p.status !== "open" && p.kind === "copy");
-      const wins = finished.filter((p) => p.realizedPnl > 0).length;
+      const realized = t.realized ?? 0;
+      const unrealized = (t.openValue ?? 0) - (t.openCost ?? 0);
+      const total = realized + unrealized;
+      const invested = investedBy.get(t.wallet) ?? 0;
       return {
         wallet: t.wallet,
         name: t.name,
         realized,
-        unrealized: total - realized,
+        unrealized,
         total,
         invested,
         roi: invested > 0 ? total / invested : null,
-        open: mine.filter((p) => p.status === "open").length,
-        wins,
-        losses: finished.length - wins,
+        open: t.open,
+        wins: t.wins,
+        losses: t.finished - t.wins,
         positions: mine.map((p) => ({ ...p, pnl: pnlOf(p) })),
       };
     })
