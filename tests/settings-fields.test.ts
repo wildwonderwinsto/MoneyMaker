@@ -100,3 +100,31 @@ describe("caps that would silently block every buy at 0", () => {
     expect(RiskConfigSchema.safeParse({ [field]: 0.01 }).success).toBe(true);
   });
 });
+
+describe("settings that no longer change anything are gone (batch 6)", () => {
+  it("minZ and simulations aren't stored settings; old saved values are dropped, the rest kept", async () => {
+    const { parseSetting } = await import("@/lib/settings");
+    const keys = Object.keys(ScoringConfigSchema.shape);
+    expect(keys).not.toContain("minZ");
+    expect(keys).not.toContain("simulations");
+    const legacy = parseSetting(ScoringConfigSchema, {
+      minZ: 9,
+      simulations: 100,
+      minResolved: 60,
+    });
+    expect(legacy.minResolved).toBe(60);
+    expect(legacy).not.toHaveProperty("minZ");
+    expect(legacy).not.toHaveProperty("simulations");
+  });
+
+  it("the display-only luck p-value still runs at its fixed precision", async () => {
+    const { monteCarloPValue, MC_SIMULATIONS } = await import("@/lib/scoring/metrics");
+    expect(MC_SIMULATIONS).toBe(2000);
+    const bet = { avgPrice: 0.5, sharesBought: 10, won: true } as never;
+    const p = monteCarloPValue([bet], DEFAULT_SCORING_CONFIG, "0xw")!;
+    // One coin flip won: about half of 2,000 random draws match it.
+    expect(p).toBeGreaterThan(0.4);
+    expect(p).toBeLessThan(0.6);
+    expect(Math.round(p * (MC_SIMULATIONS + 1)) / (MC_SIMULATIONS + 1)).toBeCloseTo(p, 12);
+  });
+});

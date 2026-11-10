@@ -286,6 +286,9 @@ export function updateEvidence(
  * resolved outcome from its entry price and count how often random luck matches the
  * trader's hold-to-resolution PnL. Deterministically seeded per wallet.
  */
+/** Draws for the luck p-value (display only since audit R2; was the `simulations` setting). */
+export const MC_SIMULATIONS = 2000;
+
 export function monteCarloPValue(
   positions: PositionRecord[],
   cfg: ScoringConfig,
@@ -300,15 +303,16 @@ export function monteCarloPValue(
   const actual = bets.reduce((a, p, i) => a + shares[i] * ((p.won ? 1 : 0) - prices[i]), 0);
 
   const rand = seededRandom(hashString(seedKey));
+  const draws = cfg.simulations ?? MC_SIMULATIONS;
   let atLeast = 0;
-  for (let s = 0; s < cfg.simulations; s++) {
+  for (let s = 0; s < draws; s++) {
     let sim = 0;
     for (let i = 0; i < prices.length; i++) {
       sim += shares[i] * ((rand() < prices[i] ? 1 : 0) - prices[i]);
     }
     if (sim >= actual) atLeast++;
   }
-  return (atLeast + 1) / (cfg.simulations + 1);
+  return (atLeast + 1) / (draws + 1);
 }
 
 // ---------------------------------------------------------------------------

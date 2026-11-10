@@ -73,7 +73,7 @@ describe("metric building blocks", () => {
     const flip = coinFlipper();
     const grind = steadyGrinder();
     expect(Math.abs(skillZ(flip.positions, cfg).z!)).toBeLessThan(2);
-    expect(skillZ(grind.positions, cfg).z!).toBeGreaterThan(cfg.minZ);
+    expect(skillZ(grind.positions, cfg).z!).toBeGreaterThan(2); // z is display-only (was minZ)
   });
 
   it("concentration measures share of gross profit per market", () => {
@@ -284,7 +284,7 @@ describe("sequential skill test (owner decision 2026-11-09, S2; audit R2, R6)", 
     const { input } = withPostPick(bets);
     const m = computeMetrics(input, cfg);
     expect(m.nHoldout).toBe(60);
-    expect(m.zSkill!).toBeLessThan(cfg.minZ);
+    expect(m.zSkill!).toBeLessThan(2); // z is display-only (was minZ)
     expect(tierOf(input).tier).toBe("candidate");
   });
 

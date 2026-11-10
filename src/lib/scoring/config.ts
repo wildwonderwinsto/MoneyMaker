@@ -10,11 +10,6 @@ export const ScoringConfigSchema = z.object({
   /** Minimum distinct events, so 40 bets on one election don't count as 40 samples. */
   minEvents: z.number().int().min(1).default(25),
   /**
-   * Wins vs. price-implied expectation, in standard deviations. Shown and part of the score;
-   * no longer a pass/fail check (the sequential skill test decides, audit R2).
-   */
-  minZ: z.number().default(2),
-  /**
    * Sequential skill test (owner decision 2026-11-09, design S2): smallest edge worth
    * copying, in win-probability points. A Candidate is Rejected once their post-pick bets
    * show, with 95% confidence, an edge below this.
@@ -24,8 +19,6 @@ export const ScoringConfigSchema = z.object({
   maxCandidateDays: z.number().int().min(30).default(180),
   /** False discovery rate for the Monte Carlo skill test across all candidates. */
   fdrQ: z.number().min(0).max(1).default(0.1),
-  /** Outcome simulations per trader for the randomization test. */
-  simulations: z.number().int().min(100).max(20000).default(2000),
   /** Entry prices outside this band are near-certain and excluded from skill tests. */
   minEntryPrice: z.number().default(0.02),
   maxEntryPrice: z.number().default(0.98),
@@ -72,7 +65,13 @@ export const ScoringConfigSchema = z.object({
   eliteScore: z.number().min(0).max(100).default(70),
 });
 
-export type ScoringConfig = z.infer<typeof ScoringConfigSchema>;
+export type ScoringConfig = z.infer<typeof ScoringConfigSchema> & {
+  /**
+   * Not a setting (removed in batch 6: nothing depends on it): Monte Carlo draws for the
+   * display-only luck p-value. Defaults to MC_SIMULATIONS; quick internal runs pass fewer.
+   */
+  simulations?: number;
+};
 
 /**
  * Bot check, recent part (owner decision 2026-11-08, "mostly"): a wallet whose last 30 days
