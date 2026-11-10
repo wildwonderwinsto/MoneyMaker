@@ -512,6 +512,34 @@ export async function getJobRuns(limit = 10) {
   return getDb().select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(limit);
 }
 
+/**
+ * Background job runs and storage for the Settings page. Visitors get each run's name,
+ * status and times only, and no storage numbers (owner decision 2026-11-10): error text can
+ * hold hosts, URLs and stack lines, and the storage card lists every table. Filtered here so
+ * nothing else reaches the page; visitors also don't trigger the catalog queries.
+ */
+export async function getSettingsDiagnostics(admin: boolean, limit = 8) {
+  if (!admin) {
+    const runs = await getDb()
+      .select({
+        id: jobRuns.id,
+        job: jobRuns.job,
+        status: jobRuns.status,
+        startedAt: jobRuns.startedAt,
+        finishedAt: jobRuns.finishedAt,
+      })
+      .from(jobRuns)
+      .orderBy(desc(jobRuns.startedAt))
+      .limit(limit);
+    return { runs, storage: null };
+  }
+  const [runs, storage] = await Promise.all([
+    getJobRuns(limit),
+    getStorageStats().catch(() => null),
+  ]);
+  return { runs, storage };
+}
+
 /** Supabase Free plan database size limit (projects go read-only above it). */
 export const STORAGE_LIMIT_BYTES = 500 * 1024 * 1024;
 

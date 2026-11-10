@@ -17,7 +17,7 @@ import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
 import { getDb } from "@/lib/db/client";
 import { env } from "@/lib/env";
 import { timeAgo, traderName } from "@/lib/format";
-import { getFollowList, getJobRuns, getSettings, getStorageStats } from "@/lib/queries";
+import { getFollowList, getSettings, getSettingsDiagnostics } from "@/lib/queries";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -38,13 +38,12 @@ export default function SettingsPage() {
 async function SettingsContent() {
   await connection();
   const db = getDb();
-  const [admin, settings, followList, runs, account, storage] = await Promise.all([
-    isAdmin(),
+  const admin = await isAdmin();
+  const [settings, followList, { runs, storage }, account] = await Promise.all([
     getSettings(),
     getFollowList(),
-    getJobRuns(8),
+    getSettingsDiagnostics(admin),
     ensureDefaultAccount(db),
-    getStorageStats().catch(() => null),
   ]);
   const { equity } = await loadAccountState(db, account.id);
   const passwordSet = Boolean(env().ADMIN_PASSWORD);
@@ -180,7 +179,7 @@ async function SettingsContent() {
                   </span>
                   <span className="w-20 shrink-0 font-medium">{r.job}</span>
                   <span className="text-muted-foreground min-w-0 flex-1 truncate">
-                    {r.error ? r.error.split("\n")[0] : ""}
+                    {"error" in r && r.error ? r.error.split("\n")[0] : ""}
                   </span>
                   <span className="text-muted-foreground shrink-0 text-xs">
                     {timeAgo(r.startedAt)}

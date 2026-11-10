@@ -161,3 +161,25 @@ describe("Live page 'Last 24 hours' (UI-15)", () => {
     expect(s.topSkipReasons[0]).toMatchObject({ n: 250 });
   });
 });
+
+describe("Settings diagnostics for visitors (batch 6 step 4)", () => {
+  it("visitors get job name, status and time only, and no storage; admins get everything", async () => {
+    const { jobRuns } = await import("@/lib/db/schema");
+    const { getSettingsDiagnostics } = await import("@/lib/queries");
+    await db.insert(jobRuns).values({
+      job: "daily",
+      status: "error",
+      error: "Error: connect ECONNREFUSED db.internal:5432\n    at secret.ts:1",
+      stats: { backfills: 3 },
+    });
+    const visitor = await getSettingsDiagnostics(false);
+    expect(visitor.storage).toBeNull();
+    expect(visitor.runs).toHaveLength(1);
+    expect(Object.keys(visitor.runs[0]).sort()).toEqual(
+      ["finishedAt", "id", "job", "startedAt", "status"].sort(),
+    );
+    const admin = await getSettingsDiagnostics(true);
+    expect((admin.runs[0] as { error?: string }).error).toContain("ECONNREFUSED");
+    expect(admin.storage?.tables.length).toBeGreaterThan(0);
+  });
+});
