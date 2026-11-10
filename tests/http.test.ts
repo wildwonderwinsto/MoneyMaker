@@ -122,3 +122,27 @@ describe("RateLimiter", () => {
     expect(peak).toBe(2);
   });
 });
+
+describe("RateLimiter concurrency (A10)", () => {
+  it("never runs more than maxConcurrent, even when a caller arrives as a slot frees", async () => {
+    const { RateLimiter } = await import("@/lib/http");
+    const limiter = new RateLimiter(1, 0);
+    let current = 0;
+    let peak = 0;
+    const work = async () => {
+      peak = Math.max(peak, ++current);
+      await new Promise((r) => setTimeout(r, 5));
+      current--;
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const a = limiter.run(() => gate); // A holds the only slot
+    const b = limiter.run(work); // B waits for it
+    for (let i = 0; i < 5; i++) await Promise.resolve(); // A is now awaiting the gate
+    // C's continuation runs right after A's finally frees the slot, before B wakes up.
+    const c = gate.then(() => limiter.run(work));
+    release();
+    await Promise.all([a, b, c]);
+    expect(peak).toBe(1);
+  });
+});

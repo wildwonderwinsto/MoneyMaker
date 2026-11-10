@@ -62,8 +62,11 @@ export class RateLimiter {
     try {
       return await fn();
     } finally {
-      this.active--;
-      this.queue.shift()?.();
+      // Hand the slot straight to the next waiter. Freeing it first let a caller arriving
+      // before the waiter resumed take it too, going over maxConcurrent (audit A10).
+      const next = this.queue.shift();
+      if (next) next();
+      else this.active--;
     }
   }
 
@@ -74,9 +77,11 @@ export class RateLimiter {
 
   private async acquire(): Promise<void> {
     if (this.active >= this.maxConcurrent) {
+      // Woken with the finishing run's slot (`active` already counts it).
       await new Promise<void>((resolve) => this.queue.push(resolve));
+    } else {
+      this.active++;
     }
-    this.active++;
     const now = Date.now();
     const start = Math.max(now, this.nextSlot);
     this.nextSlot = start + this.minIntervalMs;
