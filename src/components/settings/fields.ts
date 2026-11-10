@@ -349,6 +349,7 @@ export const RISK_GROUPS: Group[] = [
         help: "Don't copy (or keep re-checking) trades older than this, e.g. after downtime.",
         unit: "minutes",
         min: 0.5,
+        max: 7 * 24 * 60,
         step: 0.5,
       },
       {

@@ -14,8 +14,16 @@ export const RiskConfigSchema = z
     maxPriceDrift: z.number().min(0).max(0.5).default(0.03),
     /** Don't open positions in markets ending sooner than this. */
     minMinutesToEnd: z.number().min(0).default(10),
-    /** Ignore leader trades older than this (e.g. after downtime). */
-    maxSignalAgeSeconds: z.number().int().min(30).default(120),
+    /**
+     * Ignore leader trades older than this (e.g. after downtime). At most 7 days: a far
+     * larger value made the skipped-trade retry window an invalid date (batch 6).
+     */
+    maxSignalAgeSeconds: z
+      .number()
+      .int()
+      .min(30)
+      .max(7 * 86_400)
+      .default(120),
     /**
      * proportional ("match their conviction"): our stake = equity × stakePct × conviction ×
      *   multiplier × weight, where conviction = leader stake ÷ their usual stake per market,
