@@ -454,3 +454,22 @@ describe("the number of checks the pages promise (batch 6)", () => {
     }
   });
 });
+
+describe("recent check fallback display (UI-12)", () => {
+  it("says it judged by P&L direction instead of showing ±100%", async () => {
+    const { buildChecks } = await import("@/lib/scoring/score");
+    const { DAY, inputAt, skilledTrader } = await import("./helpers/skillPipeline");
+    const { computeMetrics } = await import("@/lib/scoring/metrics");
+    const day0 = 1_790_000_000;
+    const input = inputAt(skilledTrader("0xr", 0.05, 2, day0, 60, 3), day0 + 30 * DAY, day0);
+    const base = computeMetrics(input, cfg);
+    const ctx = { eThreshold: 1, candidates: 1 };
+    const recent = (oosRoi: number | null, oosPnl: number | null) =>
+      buildChecks({ ...base, oosRoi, oosPnl }, cfg, ctx).find((c) => c.code === "recent")!;
+    // Verdict unchanged: the sign of the P&L change decides.
+    expect(recent(null, 500)).toMatchObject({ ok: true, value: 1, display: "P&L +$500.00" });
+    expect(recent(null, -20)).toMatchObject({ ok: false, value: -1, display: "P&L −$20.00" });
+    // A real return needs no special display.
+    expect(recent(0.12, 500).display).toBeUndefined();
+  });
+});

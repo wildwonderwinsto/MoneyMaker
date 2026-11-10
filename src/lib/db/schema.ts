@@ -228,6 +228,8 @@ export interface ScoreCheck {
   ok: boolean;
   value: number | null;
   threshold: number | null;
+  /** Shown instead of `value` when the value isn't in the check's usual unit. */
+  display?: string;
 }
 
 /** Latest score per trader (overwritten each scoring run). */

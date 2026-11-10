@@ -52,6 +52,7 @@ const PCT_CHECKS = new Set([
 ]);
 
 function checkValue(c: ScoreCheck): string {
+  if (c.display) return c.display;
   if (c.value === null) return "not measured";
   if (c.code === "skill" || c.code === "no_edge") return `evidence ×${num(c.value, 1)}`;
   if (c.code === "candidate_age") return `${num(c.value, 0)} days`;

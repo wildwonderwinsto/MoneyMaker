@@ -4,6 +4,8 @@
  */
 import type { ScoreCheck, ScoreTier } from "@/lib/db/schema";
 
+import { usd } from "@/lib/format";
+
 import { MAX_REDEEM_MERGE_SHARE, type ScoringConfig } from "./config";
 import { NO_EDGE_EVIDENCE, type TraderMetrics } from "./metrics";
 import { clamp, normalCdf } from "./stats";
@@ -158,12 +160,18 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
       0,
       true,
     ),
-    atLeast(
-      "recent",
-      `Still winning in the last ${cfg.oosDays} days (out of sample)`,
-      oosValue,
-      cfg.minOosRoi + Number.EPSILON,
-    ),
+    {
+      ...atLeast(
+        "recent",
+        `Still winning in the last ${cfg.oosDays} days (out of sample)`,
+        oosValue,
+        cfg.minOosRoi + Number.EPSILON,
+      ),
+      // Too few finished bets for a return: judged by the P&L direction (±1), which the page
+      // used to show as ±100% (UI-12).
+      ...(m.oosRoi === null &&
+        m.oosPnl !== null && { display: `P&L ${usd(m.oosPnl, { sign: true })}` }),
+    },
     atMost(
       "active",
       `Traded in the last ${cfg.maxDaysSinceTrade} days`,
