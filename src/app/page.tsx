@@ -25,7 +25,7 @@ export default function TradersPage({ searchParams }: PageProps<"/">) {
     <>
       <PageHeader
         title="Top traders"
-        description="Polymarket traders ranked by consistency, not luck. Each one is tested against 16 checks: skill beyond what prices predicted, many separate wins (no one-hit wonders), steady months, and still profitable when copied a couple of minutes late."
+        description="Polymarket traders ranked by consistency, not luck. Each one is tested against 19 checks: skill beyond what prices predicted (on bets placed after they were picked), many separate wins (no one-hit wonders), steady months, and still profitable when copied a couple of minutes late."
       />
       <Suspense fallback={<GridSkeleton />}>
         <TraderGrid searchParams={searchParams} />

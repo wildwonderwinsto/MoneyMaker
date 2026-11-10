@@ -15,7 +15,8 @@ with fake money first to prove it works.
 ## How traders get verified
 
 The daily job pulls Polymarket's leaderboards (week / month / all-time × categories). It
-downloads each candidate's full position history and runs 16 checks:
+downloads each candidate's full position history and runs 19 checks (3 of them on bets placed
+after the trader was first picked):
 
 | Question            | Check                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
