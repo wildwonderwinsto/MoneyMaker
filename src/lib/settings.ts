@@ -19,6 +19,14 @@ export function parseSetting<S extends z.ZodType>(schema: S, raw: unknown): z.ou
     const kept = Object.fromEntries(Object.entries(raw).filter(([k]) => !bad.has(k)));
     const retry = schema.safeParse(kept);
     if (retry.success) return retry.data;
+    // A cross-field rule can still fail with its named field at the default (min above a
+    // saved max): add saved values one by one, keeping each that is valid with those kept
+    // so far, instead of resetting the whole group (audit N3).
+    const ok: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (schema.safeParse({ ...ok, [k]: v }).success) ok[k] = v;
+    }
+    return schema.parse(ok);
   }
   return schema.parse({});
 }

@@ -183,3 +183,19 @@ describe("scoring bounds (owner, 2026-11-10)", () => {
       expect(ScoringConfigSchema.safeParse(v).success).toBe(true);
   });
 });
+
+describe("a contradictory saved pair doesn't reset the whole group (N3)", () => {
+  it("keeps every other saved value", async () => {
+    const { parseSetting } = await import("@/lib/settings");
+    const r = parseSetting(RiskConfigSchema, {
+      minEntryPrice: 0.5,
+      maxEntryPrice: 0.01,
+      fixedUsd: 77,
+      stakePct: 0.04,
+    });
+    expect(r.fixedUsd).toBe(77);
+    expect(r.stakePct).toBe(0.04);
+    expect(r.minEntryPrice).toBeLessThanOrEqual(r.maxEntryPrice);
+    expect(RiskConfigSchema.safeParse(r).success).toBe(true);
+  });
+});
