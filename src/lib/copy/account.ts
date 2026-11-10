@@ -1,5 +1,5 @@
 /** Paper account bookkeeping: positions, cash, fills, settlements and equity. */
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import {
@@ -71,7 +71,11 @@ export function exposure(state: AccountState, conditionId: string, wallet: strin
   return { market, trader };
 }
 
-/** Equity at the first snapshot of the current UTC day (null before the first one). */
+/**
+ * Equity at the first snapshot of the current UTC day; before today's first snapshot, the
+ * last one before midnight (the daily loss limit was off until a snapshot was taken, C-F19).
+ * Null only when there is no snapshot at all.
+ */
 export async function startOfDayEquity(
   db: Db,
   accountId: number,
@@ -85,7 +89,14 @@ export async function startOfDayEquity(
     .where(and(eq(equitySnapshots.accountId, accountId), gte(equitySnapshots.ts, dayStart)))
     .orderBy(asc(equitySnapshots.ts))
     .limit(1);
-  return first && first.equity > 0 ? first.equity : null;
+  if (first) return first.equity > 0 ? first.equity : null;
+  const [lastBefore] = await db
+    .select({ equity: equitySnapshots.equity })
+    .from(equitySnapshots)
+    .where(and(eq(equitySnapshots.accountId, accountId), lt(equitySnapshots.ts, dayStart)))
+    .orderBy(desc(equitySnapshots.ts))
+    .limit(1);
+  return lastBefore && lastBefore.equity > 0 ? lastBefore.equity : null;
 }
 
 /** Today's loss as a fraction of start-of-day equity (positive = loss, never negative). */

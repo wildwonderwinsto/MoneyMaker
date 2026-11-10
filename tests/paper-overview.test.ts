@@ -183,3 +183,35 @@ describe("Settings diagnostics for visitors (batch 6 step 4)", () => {
     expect(admin.storage?.tables.length).toBeGreaterThan(0);
   });
 });
+
+describe("daily loss limit before the day's first snapshot (C-F19)", () => {
+  it("measures today's loss from yesterday's last equity until today has a snapshot", async () => {
+    const { equitySnapshots } = await import("@/lib/db/schema");
+    const { dailyLossPct } = await import("@/lib/copy/account");
+    const midnight = new Date();
+    midnight.setUTCHours(0, 0, 0, 0);
+    await db.insert(equitySnapshots).values([
+      {
+        accountId,
+        ts: new Date(midnight.getTime() - 3 * 3_600_000),
+        equity: 1200,
+        cash: 1200,
+        positionsValue: 0,
+      },
+      {
+        accountId,
+        ts: new Date(midnight.getTime() - 5 * 60_000),
+        equity: 1000,
+        cash: 1000,
+        positionsValue: 0,
+      },
+    ]);
+    // Down to $850 before any snapshot today: a 15% loss, not "no loss yet".
+    expect(await dailyLossPct(db, accountId, 850)).toBeCloseTo(0.15, 9);
+    // Once today has a snapshot, it is the start of the day as before.
+    await db
+      .insert(equitySnapshots)
+      .values({ accountId, ts: new Date(), equity: 900, cash: 900, positionsValue: 0 });
+    expect(await dailyLossPct(db, accountId, 850)).toBeCloseTo(50 / 900, 9);
+  });
+});
