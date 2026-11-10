@@ -16,7 +16,7 @@ import { env } from "@/lib/env";
 import { usd } from "@/lib/format";
 import { allowAttempt, clearAttempts, limiterKey } from "@/lib/rate-limit";
 import { ScoringConfigSchema } from "@/lib/scoring/config";
-import { getRiskConfig, writeSetting } from "@/lib/settings";
+import { getRiskConfig, writeSettingIfUnchanged } from "@/lib/settings";
 
 export interface ActionResult {
   ok: boolean;
@@ -179,16 +179,19 @@ export async function resetPaperAction(_prev: ActionResult | null, form: FormDat
 /**
  * Save a settings group. Takes a plain object (not FormData): the client form keeps its
  * own state, so React's automatic form reset can never revert a field after saving.
+ * `base` is what the page loaded; the save is refused if the stored settings have changed
+ * since (a stale tab must not undo newer changes).
  */
 export async function saveSettingsAction(
   kind: "risk" | "scoring",
   values: unknown,
+  base: unknown,
 ): Promise<ActionResult> {
   return adminOnly(async () => {
     const schema = kind === "risk" ? RiskConfigSchema : ScoringConfigSchema;
     const parsed = schema.safeParse(values);
     if (!parsed.success) throw new Error(z.prettifyError(parsed.error));
-    await writeSetting(getDb(), kind, parsed.data);
+    await writeSettingIfUnchanged(getDb(), kind, schema, base, parsed.data);
     if (kind === "risk") await notifyEngine();
     return kind === "risk"
       ? "Saved — the copy engine uses these from its next trade"

@@ -123,7 +123,7 @@ export function SettingsEditor({
       return;
     }
     start(async () => {
-      const res = await saveSettingsAction(kind, parsed.data);
+      const res = await saveSettingsAction(kind, parsed.data, saved);
       setState(res);
       if (res.ok) {
         setSaved(parsed.data as Values);
