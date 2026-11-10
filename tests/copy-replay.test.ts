@@ -82,3 +82,32 @@ describe("buildCopyReplays", () => {
     expect(await db.select().from(traderTrades)).toEqual([]);
   });
 });
+
+describe("replay settings (batch 6 sweep)", () => {
+  it("copyDelaySeconds, copySlippage and minReplayLeaderUsd change the replays", async () => {
+    vi.mocked(data.getActivity).mockResolvedValue({
+      data: [buy(0), buy(1), buy(2)],
+      pagination: { has_more: false, next_cursor: null },
+    } as never);
+    vi.mocked(gamma.getMarketsByConditionIds).mockResolvedValue([]);
+    vi.mocked(clob.getMidpoints).mockResolvedValue(
+      new Map([
+        ["t0", 0.6],
+        ["t1", 0.6],
+        ["t2", 0.6],
+      ]),
+    );
+    // 50¢ a minute after the leader's buy, 60¢ five minutes after.
+    vi.mocked(clob.getPriceHistory).mockImplementation(async (_t, o) => [
+      { t: (o.startTs ?? 0) + 60, p: 0.5 },
+      { t: (o.startTs ?? 0) + 300, p: 0.6 },
+    ]);
+    const prices = async (c: typeof cfg) =>
+      (await buildCopyReplays(db, "0xleader", c, DEFAULT_SCORE, NOW)).map((r) => r.delayedPrice);
+    const base = await prices(cfg); // 2 min late → the 5-minute price
+    expect(base).toHaveLength(3);
+    expect(await prices({ ...cfg, copyDelaySeconds: 30 })).not.toEqual(base);
+    expect(await prices({ ...cfg, copySlippage: 0.05 })).not.toEqual(base);
+    expect(await prices({ ...cfg, minReplayLeaderUsd: 100 })).toEqual([]); // buys are $50
+  });
+});
