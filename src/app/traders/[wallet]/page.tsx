@@ -85,6 +85,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
     copyReplayDays?: number | null;
     copyOpenReplays?: number;
     copyDelaySeconds?: number;
+    nClosed?: number;
   };
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
@@ -148,7 +149,11 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               label="Realized P&L"
               value={usd(score.totalPnl, { compact: true, sign: true })}
               tone={(score.totalPnl ?? 0) >= 0 ? "gain" : "loss"}
-              hint={`${score.nResolved} resolved markets`}
+              hint={
+                typeof metrics.nClosed === "number"
+                  ? `${metrics.nClosed} finished positions`
+                  : `${score.nResolved} resolved markets`
+              }
             />
             <StatTile
               label="Return on risk"
