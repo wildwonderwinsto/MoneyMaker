@@ -1026,6 +1026,10 @@ async function retrySkippedSells(db: Db, ctx: EngineCtx) {
         eq(signals.decision, "skipped"),
         eq(signals.side, "SELL"),
         inArray(signals.reasonCode, [...SELL_RETRYABLE_CODES]),
+        // Only exits of a copy still open (and open at the sell). Skips whose copy is gone
+        // stay "skipped" forever; selected oldest-first under the limit, 200 of them used to
+        // block every newer stranded exit (audit N1).
+        sql`exists (select 1 from ${paperPositions} p where p.account_id = ${signals.accountId} and p.source_wallet = ${signals.wallet} and p.token_id = ${signals.tokenId} and p.kind = 'copy' and p.status = 'open' and p.opened_at <= ${signals.leaderTs})`,
       ),
     )
     .orderBy(asc(signals.leaderTs))
@@ -1164,6 +1168,8 @@ async function retrySkippedSells(db: Db, ctx: EngineCtx) {
 async function retrySkipped(db: Db, ctx: EngineCtx) {
   const { cfg } = ctx;
   const since = new Date((ctx.now - cfg.maxSignalAgeSeconds) * 1000);
+  const followed = [...ctx.weights.keys()];
+  if (followed.length === 0) return;
   const rows = await db
     .select()
     .from(signals)
@@ -1174,6 +1180,10 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
         eq(signals.side, "BUY"),
         inArray(signals.reasonCode, [...RETRYABLE_CODES]),
         gte(signals.leaderTs, since),
+        // Only buys that can still be copied: trader followed, hasn't sold since (filtered
+        // below too). Otherwise 200 dead skips could block newer ones (audit N2).
+        inArray(signals.wallet, followed),
+        sql`not exists (select 1 from ${signals} s2 where s2.account_id = ${signals.accountId} and s2.wallet = ${signals.wallet} and s2.token_id = ${signals.tokenId} and s2.side = 'SELL' and s2.leader_ts > ${signals.leaderTs})`,
       ),
     )
     .orderBy(asc(signals.leaderTs))

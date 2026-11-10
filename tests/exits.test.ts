@@ -11,7 +11,7 @@ import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { mergeFills, type LeaderTrade } from "@/lib/copy/engine";
 import { executeHedge, exitTrader, leaderSoldFraction, runTick } from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
-import { cursors, follows, paperPositions, signals } from "@/lib/db/schema";
+import { cursors, follows, paperAccounts, paperPositions, signals } from "@/lib/db/schema";
 import * as clob from "@/lib/polymarket/clob";
 import * as data from "@/lib/polymarket/data";
 import * as gamma from "@/lib/polymarket/gamma";
@@ -524,5 +524,64 @@ describe("the sell floor when there's no trader price (batch 6)", () => {
     const r = await exitTrader(db, LEADER, (t0 + 40) * 1000);
     expect(r).toMatchObject({ sold: 1, left: 0 });
     expect(await openShares()).toEqual([]);
+  });
+});
+
+describe("skips that can never be retried don't block ones that can (N1/N2)", () => {
+  const dead = (i: number, side: "BUY" | "SELL", wallet: string, accountId: number) => ({
+    id: `dead${side}${i}`,
+    wallet,
+    leaderTs: new Date((t0 - 100 + i * 0.01) * 1000),
+    conditionId: COND,
+    tokenId: "999",
+    side,
+    leaderPrice: 0.5,
+    leaderSize: 10,
+    leaderUsdc: 50,
+    decision: "skipped" as const,
+    reason: side === "SELL" ? "No buyers in the order book" : "Price moved",
+    reasonCode: side === "SELL" ? ("no_buyers" as const) : ("price_moved" as const),
+    source: "poll" as const,
+    accountId,
+  });
+
+  it("a stranded exit is retried even with 200 older skips whose copy is gone (N1)", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    const [copy] = await db.select().from(paperPositions);
+    await db
+      .insert(signals)
+      .values(Array.from({ length: 200 }, (_, i) => dead(i, "SELL", LEADER, copy.accountId)));
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => ({ ...book(id), bids: [] }));
+    rows.push(act({ transaction_hash: "0xsell", side: "SELL", size: 200, timestamp: t0 + 30 }));
+    await runTick(db, (t0 + 40) * 1000);
+    expect((await signalOf("0xsell"))?.reasonCode).toBe("no_buyers");
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => book(id)); // buyers back
+    await runTick(db, (t0 + 60) * 1000);
+    expect(await openShares()).toEqual([]);
+  });
+
+  it("a skipped buy is retried even with 200 older skips that can't be copied (N2)", async () => {
+    await writeSetting(db, "risk", {
+      ...DEFAULT_RISK_CONFIG,
+      sizingMode: "fixed",
+      fixedUsd: 20,
+      maxSignalAgeSeconds: 600,
+    });
+    rows = [act({ transaction_hash: "0xbuy" })];
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => ({
+      ...book(id),
+      asks: [{ price: 0.6, size: 10_000 }], // price ran away
+    }));
+    await runTick(db, (t0 + 20) * 1000);
+    expect((await signalOf("0xbuy"))?.reasonCode).toBe("price_moved");
+    // 200 older skips from a trader no longer followed: never copyable again.
+    const [acct] = await db.select().from(paperAccounts);
+    await db
+      .insert(signals)
+      .values(Array.from({ length: 200 }, (_, i) => dead(i, "BUY", "0xgone", acct.id)));
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => book(id)); // sellers back
+    await runTick(db, (t0 + 40) * 1000);
+    expect(await openShares()).toEqual([40]);
   });
 });
