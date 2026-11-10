@@ -19,6 +19,7 @@ import { quoteHedge } from "@/lib/copy/tick";
 import { getDb } from "@/lib/db/client";
 import { explain } from "@/lib/explain";
 import { cents, num, pct, polymarketMarketUrl, timeAgo, traderName, usd } from "@/lib/format";
+import { chronological } from "@/lib/live";
 import { getPosition, type PositionDetail } from "@/lib/queries";
 import { getRiskConfig } from "@/lib/settings";
 
@@ -159,11 +160,12 @@ async function PositionDetailView({
 }
 
 function Timeline({ data }: { data: PositionDetail }) {
-  type Item = { ts: Date; key: string; node: React.ReactNode };
+  type Item = { ts: Date; key: string; kind: "trader" | "ours"; node: React.ReactNode };
   const items: Item[] = [
     ...data.fills.map((f) => ({
       ts: f.ts,
       key: `f${f.id}`,
+      kind: "ours" as const,
       node: (
         <>
           <p className="font-medium">
@@ -200,6 +202,7 @@ function Timeline({ data }: { data: PositionDetail }) {
     ...data.leaderTrades.map((s) => ({
       ts: s.leaderTs,
       key: `s${s.id}`,
+      kind: "trader" as const,
       node: (
         <>
           <p>
@@ -224,22 +227,25 @@ function Timeline({ data }: { data: PositionDetail }) {
         </>
       ),
     })),
-  ].sort((a, b) => b.ts.getTime() - a.ts.getTime());
+  ];
+  const story = chronological(items);
+  const p = data.position;
+  const value = p.shares * (p.currentPrice ?? p.avgPrice);
 
   return (
     <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
       <CardHeader className="px-4 sm:px-6">
         <CardTitle>What happened</CardTitle>
         <CardDescription>
-          Our fills and the trader&apos;s trades in this outcome, newest first.
+          The trader&apos;s trades in this outcome and our copies of them, oldest first.
         </CardDescription>
       </CardHeader>
       <CardContent className="px-4 sm:px-6">
-        {items.length === 0 ? (
+        {story.length === 0 ? (
           <p className="text-muted-foreground text-sm">No trades recorded.</p>
         ) : (
           <ol className="relative space-y-4 border-l pl-4">
-            {items.map((it) => (
+            {story.map((it) => (
               <li key={it.key} className="relative text-sm">
                 <span
                   className="bg-border absolute top-1.5 -left-[21px] size-2.5 rounded-full ring-4 ring-[var(--card)]"
@@ -251,11 +257,43 @@ function Timeline({ data }: { data: PositionDetail }) {
                     day: "numeric",
                     hour: "numeric",
                     minute: "2-digit",
+                    second: "2-digit",
                   })}
                 </p>
                 {it.node}
               </li>
             ))}
+            <li className="relative text-sm">
+              <span
+                className={cn(
+                  "absolute top-1.5 -left-[21px] size-2.5 rounded-full ring-4 ring-[var(--card)]",
+                  p.status === "open"
+                    ? "bg-primary animate-pulse motion-reduce:animate-none"
+                    : "bg-muted-foreground",
+                )}
+                aria-hidden
+              />
+              {p.status === "open" ? (
+                <p>
+                  <span className="font-medium">Still open</span>{" "}
+                  <span className="text-muted-foreground">
+                    {num(p.shares, 1)} shares, worth {usd(value)} at the midpoint (
+                    <Signed value={value - p.costBasis}>
+                      {usd(value - p.costBasis, { sign: true })}
+                    </Signed>
+                    )
+                  </span>
+                </p>
+              ) : (
+                <p>
+                  <span className="font-medium">Closed</span>{" "}
+                  <span className="text-muted-foreground">
+                    {p.closedAt ? `${timeAgo(p.closedAt)} · ` : ""}result{" "}
+                    <Signed value={p.realizedPnl}>{usd(p.realizedPnl, { sign: true })}</Signed>
+                  </span>
+                </p>
+              )}
+            </li>
           </ol>
         )}
       </CardContent>

@@ -57,11 +57,13 @@ export function bytes(x: number | null | undefined) {
 }
 
 /**
- * "5 min late" for the copy delay a trader's copy check used (stored with the score);
- * just "late" for scores computed before the delay was stored.
+ * "5 min late" for the copy delay a trader's copy check used (stored with the score). Scores
+ * computed before the delay was stored use `fallback` (today's setting), else just "late".
  */
-export function copiedLate(seconds: unknown): string {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "late";
+export function copiedLate(seconds: unknown, fallback?: number): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) {
+    return fallback === undefined ? "late" : copiedLate(fallback);
+  }
   if (seconds < 60) return `${Math.round(seconds)} s late`;
   return `${Math.round((seconds / 60) * 10) / 10} min late`;
 }
@@ -71,8 +73,9 @@ export function shortAddress(wallet: string) {
 }
 
 export function traderName(t: { name?: string | null; wallet: string }) {
-  // Polymarket auto-generates names like "0xabc…-1789545517033" for anonymous users.
-  if (!t.name || /^0x[0-9a-f]{40}/i.test(t.name)) return shortAddress(t.wallet);
+  // Polymarket auto-generates names like "0xabc…-1789545517033" for anonymous users, and
+  // some are a (sometimes cut-off) address: any long run of hex after 0x is not a name.
+  if (!t.name || /^0x[0-9a-f]{20,}/i.test(t.name)) return shortAddress(t.wallet);
   return t.name;
 }
 

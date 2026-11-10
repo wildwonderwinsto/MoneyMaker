@@ -66,3 +66,36 @@ describe("sell floor on a leader merge (batch 6)", () => {
     expect(e.body.join(" ")).not.toContain("sold at 0");
   });
 });
+
+describe("display helpers (UI polish 2026-11-10)", () => {
+  it("shortens any hex-only name like a wallet, not just exact 40-character ones", async () => {
+    const { traderName } = await import("@/lib/format");
+    const wallet = "0x94d6530c8d6cf9a89c7f2e6a9cf4f2cb50df1210";
+    expect(traderName({ name: "0x94d6530C8d6CF9A89c7F2E6a9CF4f2Cb50dF121", wallet })).toBe(
+      "0x94d6…1210",
+    );
+    expect(traderName({ name: "CrazyCat-Kiwi", wallet })).toBe("CrazyCat-Kiwi");
+    expect(traderName({ name: "0xKitty", wallet })).toBe("0xKitty"); // a real name
+  });
+
+  it("puts the trader's trade before our copy of it, oldest first", async () => {
+    const { chronological } = await import("@/lib/live");
+    const at = (s: number) => new Date(Date.UTC(2026, 10, 9, 21, 41, s));
+    const items = [
+      { key: "f1", kind: "ours" as const, ts: at(5) },
+      { key: "s1", kind: "trader" as const, ts: at(0) },
+      { key: "f0", kind: "ours" as const, ts: at(0) },
+      { key: "s0", kind: "trader" as const, ts: at(0) },
+    ];
+    expect(chronological(items).map((i) => i.key)).toEqual(["s1", "s0", "f0", "f1"]);
+  });
+});
+
+describe("copy-delay label fallback (UI polish 2026-11-10)", () => {
+  it("uses today's setting for scores computed before the delay was stored", async () => {
+    const { copiedLate } = await import("@/lib/format");
+    expect(copiedLate(undefined, 120)).toBe("2 min late");
+    expect(copiedLate(300, 120)).toBe("5 min late"); // the stored delay wins
+    expect(copiedLate(undefined)).toBe("late");
+  });
+});

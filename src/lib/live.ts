@@ -97,3 +97,12 @@ export function summarize<T extends GroupableSignal>(groups: SignalGroup<T>[], n
     topSkipReasons: [...reasons.values()].sort((a, b) => b.n - a.n).slice(0, 3),
   };
 }
+
+/**
+ * A position's story, oldest first. At the same moment the trader's trade comes first: our
+ * fill is a copy of it, so it can't have happened before.
+ */
+export function chronological<T extends { ts: Date; kind: "trader" | "ours" }>(items: T[]): T[] {
+  const rank = { trader: 0, ours: 1 } as const;
+  return [...items].sort((a, b) => a.ts.getTime() - b.ts.getTime() || rank[a.kind] - rank[b.kind]);
+}
