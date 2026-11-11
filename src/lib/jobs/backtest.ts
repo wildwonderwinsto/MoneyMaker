@@ -9,7 +9,14 @@ import {
   traders,
   traderScores,
 } from "@/lib/db/schema";
-import { runBacktest, type BacktestParams, type RecordedPicks } from "@/lib/scoring/backtest";
+import {
+  methodResult,
+  runBacktest,
+  type BacktestParams,
+  type MethodResult,
+  type PickMonthResult,
+  type RecordedPicks,
+} from "@/lib/scoring/backtest";
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "@/lib/scoring/config";
 
 import { getMidpoints } from "@/lib/polymarket/clob";
@@ -204,6 +211,68 @@ export async function rebuildRecordedMonths(
   return { rebuilt: todo.length, partial };
 }
 
+export interface MonthInProgress {
+  month: string;
+  /** When the picks were recorded: only bets opened from then on count (epoch seconds). */
+  from: number;
+  asOf: number;
+  strategy: MethodResult;
+  baseline: MethodResult;
+}
+
+/**
+ * The current month so far (owner, 2026-11-10): its recorded picks rebuilt from their own
+ * activity up to now, the same way finished months are rebuilt; still-held shares at the
+ * settled payout, else today's price. Provisional, so it's recomputed each run and never
+ * written to the rows (the finished month is rebuilt once, after it ends). Null when this
+ * month has no recorded picks.
+ */
+export async function monthToDate(
+  db: Db,
+  params: BacktestParams,
+  now = new Date(),
+): Promise<MonthInProgress | null> {
+  const month = monthKey(now);
+  const rows = await db
+    .select()
+    .from(monthlySelections)
+    .where(eq(monthlySelections.month, month))
+    .orderBy(asc(monthlySelections.rank));
+  if (rows.length === 0) return null;
+  const [y, m] = month.split("-").map(Number);
+  const start = Date.UTC(y, m - 1, 1) / 1000;
+  const to = Math.floor(now.getTime() / 1000);
+  const results: Record<"strategy" | "baseline", PickMonthResult[]> = {
+    strategy: [],
+    baseline: [],
+  };
+  let from = Infinity;
+  for (const row of rows) {
+    // The same top-K the finished month will use.
+    if (results[row.method].length >= params.topK) continue;
+    const since = Math.max(start, Math.floor(row.recordedAt.getTime() / 1000));
+    from = Math.min(from, since);
+    const w = await fetchActivityWindow(row.wallet, since, to + 1);
+    const value = await holdValues(db, w.rows);
+    const starts = params.skipInPlay ? await gameStarts(db, w.rows) : new Map<string, number>();
+    const r = rebuildPickMonth(
+      w.rows,
+      (t) => value.get(t),
+      params.copySlippage,
+      params.takerFeeRate,
+      { ...params, gameStart: (c) => starts.get(c) },
+    );
+    results[row.method].push({ ...r, partial: w.partial });
+  }
+  return {
+    month,
+    from,
+    asOf: to,
+    strategy: methodResult(results.strategy),
+    baseline: methodResult(results.baseline),
+  };
+}
+
 /** Per token: settled payout from the markets table, else today's midpoint. */
 /** Sports game starts (epoch seconds) from stored markets, for the in-play rule. */
 async function gameStarts(db: Db, rows: { condition_id: string }[]) {
@@ -284,11 +353,18 @@ export async function backtestJob(
   );
 
   const result = runBacktest([...inputs.values()], cfg, params, now, recorded);
+  // The month in progress is shown on its own; a failed lookup mustn't lose the run.
+  let inProgress: MonthInProgress | null = null;
+  try {
+    inProgress = await monthToDate(db, params, new Date(now * 1000));
+  } catch (err) {
+    log(`month-to-date not computed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const [run] = await db
     .insert(backtestRuns)
     .values({
       params: { ...params, traders: inputs.size },
-      summary: { ...result.summary, months: result.months },
+      summary: { ...result.summary, months: result.months, inProgress },
       strategyCurve: result.strategyCurve,
       baselineCurve: result.baselineCurve,
     })

@@ -48,18 +48,28 @@ Each trader's page shows every check, why it passed or failed, and their Proven 
 thresholds can be changed in **Settings**. The Traders page has a tab per tier (with counts
 and a short explanation on hover), then Following, Everyone and Hidden.
 
-A walk-forward **backtest** asks: "if I had picked traders this way each month, using only
-what was known then, how would copying them have done?" It compares against simply copying
-last month's top earners. Past months re-derived from today's leaderboards only contain
-traders who survived, so each month's real picks (top Proven/Elite/Verified traders and the month
-leaderboard's top earners, bots left out) are also **recorded as they happen**. Recorded
-months replace the re-derived ones; once a month is over, each pick's month is rebuilt from
-their own activity. That removes survivorship from the picks, but it is still an estimate:
-pick-months cut short by the 6,000-row cap are left out (and counted on the page), shares
-still held are valued once at rebuild time, each bet is booked in the month it was opened,
-and the copy delay is modelled as slippage. Re-derived months are weaker still: survivorship
-can favour the strategy and the baseline differently, so even the gap between them is only
-a rough guide.
+The **backtest** asks: "does picking traders this way make money when you copy them,
+compared with simply copying last month's top earners?" Only one kind of evidence answers it:
+**picks saved at the time and followed forward**. On each month's first daily run the
+strategy's top Proven/Elite/Verified traders and the month leaderboard's top earners (bots
+left out) are saved. Their copies are then rebuilt from their own activity, from the moment
+they were picked, with the engine's filters, slippage and Polymarket's taker fee. The current
+month is shown as it goes ("November so far", provisional: open bets at today's prices) and
+becomes final when it ends. Remaining limits: pick-months cut short by the 6,000-row cap are
+left out (and counted), held shares are valued once at rebuild time, each bet is booked in
+the month it was opened, and the copy delay is modelled as slippage.
+
+The page's **verdict** uses saved-pick months only. Under 3 finished months it says "too
+early" (months swing a lot); after that it gives the average monthly gap between the
+strategy and the baseline with a 90% range, and calls a result only when that range leaves
+out zero. Months with fewer than 3 picked traders are flagged: they mostly show one trader's
+luck.
+
+Past months are also **re-derived** as a hindsight simulation, shown below for context and
+never used in the verdict. Its picks come from the traders whose history is stored today, and
+pruning keeps mostly those who pass the checks today, so it leans on hindsight. On local data
+the same 6 months gave the strategy +593% over all 63 stored traders but +215% over the 33
+that pass today (the baseline −6.7% vs +66.5%): the pool alone decides the answer.
 
 ## How copying works (paper)
 

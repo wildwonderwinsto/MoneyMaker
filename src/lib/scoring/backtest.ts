@@ -216,11 +216,33 @@ function portfolioReturn(
   return { ret: perTrader.length ? mean(perTrader) : 0, bets };
 }
 
+export interface MethodResult {
+  /** Equal-weight average of the counted picks' copy returns; null = nothing counted. */
+  ret: number | null;
+  picks: number;
+  /** Picks counted (not partial). */
+  counted: number;
+  partial: number;
+  bets: number;
+}
+
 /**
- * A recorded month's return from its picks' rebuilt activity (#9): per pick, copy P&L over
- * dollars staked (0 if they opened nothing, like idle cash), averaged over picks; partial
- * pick-months are left out. Null when not every pick has been rebuilt yet.
+ * One method's month from its picks' rebuilt activity (#9): per pick, copy P&L over dollars
+ * staked (0 if they opened nothing, like idle cash), averaged over picks. Partial pick-months
+ * (the row cap cut the window) are left out. Shared by finished and in-progress months.
  */
+export function methodResult(results: PickMonthResult[]): MethodResult {
+  const full = results.filter((r) => !r.partial);
+  return {
+    ret: full.length ? mean(full.map((r) => (r.staked > 0 ? r.pnl / r.staked : 0))) : null,
+    picks: results.length,
+    counted: full.length,
+    partial: results.length - full.length,
+    bets: full.reduce((a, r) => a + r.bets, 0),
+  };
+}
+
+/** A recorded month's return from its picks' rebuilt activity; null until all are rebuilt. */
 function rebuiltReturn(
   rec: RecordedPicks | undefined,
   method: "strategy" | "baseline",
@@ -228,13 +250,60 @@ function rebuiltReturn(
 ): { ret: number; bets: number; partial: number; rebuilt: number } | null {
   const results = picks.map((w) => rec?.results?.[`${method}:${w}`]);
   if (!picks.length || results.some((r) => r === undefined)) return null;
-  const full = (results as PickMonthResult[]).filter((r) => !r.partial);
-  return {
-    ret: full.length ? mean(full.map((r) => (r.staked > 0 ? r.pnl / r.staked : 0))) : 0,
-    bets: full.reduce((a, r) => a + r.bets, 0),
-    partial: results.length - full.length,
-    rebuilt: results.length,
-  };
+  const r = methodResult(results as PickMonthResult[]);
+  return { ret: r.ret ?? 0, bets: r.bets, partial: r.partial, rebuilt: r.picks };
+}
+
+/** Recorded months needed before the record says anything (months swing a lot). */
+export const MIN_RECORDED_MONTHS = 3;
+/** Fewer strategy picks than this in a month = mostly one trader's luck. */
+export const THIN_MONTH_PICKS = 3;
+
+export interface Verdict {
+  /** none: no recorded month yet; too_early: fewer than MIN_RECORDED_MONTHS. */
+  kind: "none" | "too_early" | "ahead" | "behind" | "unclear";
+  months: number;
+  /** Average monthly gap, strategy minus baseline, over recorded months. */
+  meanGap: number | null;
+  /** 90% range for the average gap (t-distribution over months); null under 2 months. */
+  low: number | null;
+  high: number | null;
+  /** Recorded months with fewer than THIN_MONTH_PICKS strategy picks. */
+  thinMonths: number;
+}
+
+/** Two-sided 90% t critical values by degrees of freedom (1–30); 1.645 beyond. */
+const T90 = [
+  6.314, 2.92, 2.353, 2.132, 2.015, 1.943, 1.895, 1.86, 1.833, 1.812, 1.796, 1.782, 1.771, 1.761,
+  1.753, 1.746, 1.74, 1.734, 1.729, 1.725, 1.721, 1.717, 1.714, 1.711, 1.708, 1.706, 1.703, 1.701,
+  1.699, 1.697,
+];
+
+/**
+ * What the track record can say. Only months whose picks were recorded at the time count:
+ * re-derived months pick from today's stored traders (survivors), and the pool alone swung
+ * the result by hundreds of points in a local check. The gap is paired by month.
+ */
+export function recordedVerdict(months: BacktestMonth[]): Verdict {
+  const rec = months.filter((m) => m.recorded);
+  const gaps = rec.map((m) => m.strategyReturn - m.baselineReturn);
+  const n = gaps.length;
+  const thinMonths = rec.filter((m) => m.strategyPicks.length < THIN_MONTH_PICKS).length;
+  if (n === 0) {
+    return { kind: "none", months: 0, meanGap: null, low: null, high: null, thinMonths };
+  }
+  const meanGap = mean(gaps);
+  let low: number | null = null;
+  let high: number | null = null;
+  if (n >= 2) {
+    const sd = Math.sqrt(gaps.reduce((a, g) => a + (g - meanGap) ** 2, 0) / (n - 1));
+    const half = (T90[n - 2] ?? 1.645) * (sd / Math.sqrt(n));
+    low = meanGap - half;
+    high = meanGap + half;
+  }
+  const kind =
+    n < MIN_RECORDED_MONTHS ? "too_early" : low! > 0 ? "ahead" : high! < 0 ? "behind" : "unclear";
+  return { kind, months: n, meanGap, low, high, thinMonths };
 }
 
 function maxDrawdown(curve: CurvePoint[]): number {
