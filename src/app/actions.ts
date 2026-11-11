@@ -23,6 +23,7 @@ import { usd } from "@/lib/format";
 import { allowAttempt, clearAttempts, limiterKey } from "@/lib/rate-limit";
 import { ScoringConfigSchema } from "@/lib/scoring/config";
 import { getRiskConfig, writeSettingIfUnchanged } from "@/lib/settings";
+import { startOver } from "@/lib/start-over";
 
 export interface ActionResult {
   ok: boolean;
@@ -236,6 +237,24 @@ export async function saveSettingsAction(
       ? "Saved — the copy engine uses these from its next trade"
       : "Saved — applies from the next daily scoring run";
   });
+}
+
+/**
+ * Settings → Storage → Start over: delete all data, keep settings (owner, 2026-11-10).
+ * The typed confirmation is checked again on the server.
+ */
+export async function startOverAction(confirm: string): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const r = await startOver(getDb(), z.string().max(100).parse(confirm));
+    if (r.ok) {
+      await notifyEngine(); // the follow list is empty now
+      refresh();
+    }
+    return r;
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Something went wrong" };
+  }
 }
 
 /** Buy the other side of a copied position to limit its loss (paper). */

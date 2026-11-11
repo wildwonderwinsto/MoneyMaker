@@ -173,6 +173,11 @@ npm run smoke:polymarket                 # live API sanity check
 - Supabase free: 500 MB. The daily job caps full checks at 210 a day and prunes rejected traders to
   stay well under that. It pauses only after 7 days with no activity, which the 1-minute
   tick prevents.
+- **Start over** (Settings → Database storage, admin only): empties every data table at once
+  (traders, scores, positions, follows, paper trades, signals, backtests, saved monthly
+  picks, markets, job history), frees the space immediately, and resets the paper account to
+  its starting balance. Settings are kept. It asks you to type "delete everything", runs
+  under the engine's lock, and refuses while a daily job is running. There is no undo.
 - GitHub Actions: a private repo gets 2,000 free minutes per month; the daily job uses about
   15–30. Scheduled workflows in _public_ repos switch off after 60 days without commits.
 

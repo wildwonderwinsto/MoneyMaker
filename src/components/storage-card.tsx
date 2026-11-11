@@ -8,6 +8,7 @@
 import { cn } from "cn";
 import { AlertTriangle, CheckCircle2, Database, OctagonAlert } from "lucide-react";
 
+import { StartOver } from "@/components/start-over";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { bytes, num, pct } from "@/lib/format";
 import type { StorageStats } from "@/lib/queries";
@@ -179,6 +180,8 @@ export function StorageCard({ stats }: { stats: StorageStats }) {
             ))}
           </ul>
         </div>
+        {/* Only admins see this card (visitors get job status only). */}
+        <StartOver />
       </CardContent>
     </Card>
   );

@@ -55,6 +55,14 @@ describe("no ADMIN_PASSWORD", () => {
     expect((await resetPaperAction(null, f)).ok).toBe(false);
   });
 
+  it("locks Start over too: nothing is deleted", async () => {
+    await withEnv({ DATABASE_URL: REMOTE, NODE_ENV: "development" });
+    const { startOverAction } = await import("@/app/actions");
+    const r = await startOverAction("delete everything");
+    expect(r.ok).toBe(false);
+    expect(r.message).not.toMatch(/Started over/);
+  });
+
   it("locks Sell all too: nothing is sold", async () => {
     await withEnv({ DATABASE_URL: REMOTE, NODE_ENV: "development" });
     const { sellAllAction } = await import("@/app/actions");
