@@ -9,6 +9,7 @@ import { Suspense } from "react";
 import { Avatar, MarketThumb, Signed, StatTile } from "@/components/common";
 import { HedgeButton } from "@/components/hedge-buttons";
 import { HoverExplain } from "@/components/hover-explain";
+import { LocalTime } from "@/components/local-time";
 import { LockedAction } from "@/components/locked-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -255,13 +256,7 @@ function Timeline({ data }: { data: PositionDetail }) {
                   aria-hidden
                 />
                 <p className="text-muted-foreground text-xs">
-                  {it.ts.toLocaleString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    hour: "numeric",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
+                  <LocalTime ts={it.ts.toISOString()} date />
                 </p>
                 {it.node}
               </li>
@@ -308,8 +303,10 @@ function Scenario({ label, value, base }: { label: string; value: number; base: 
   const better = value - base;
   return (
     <div className="flex items-baseline justify-between gap-2 text-sm">
-      <span className="text-muted-foreground shrink-0 whitespace-nowrap">{label}</span>
-      <span className="text-right tabular-nums">
+      {/* A long outcome name wraps; the amounts never leave the card (a team name like
+          "Marquette Golden Eagles" pushed them off a phone screen). */}
+      <span className="text-muted-foreground min-w-0">{label}</span>
+      <span className="shrink-0 text-right tabular-nums">
         <Signed value={value}>{usd(value, { sign: true })}</Signed>
         {/* Phones: the comparison goes under the amount instead of breaking mid-phrase. */}
         {Math.abs(better) > 0.005 && (

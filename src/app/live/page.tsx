@@ -9,6 +9,7 @@ import { EmptyState, MarketThumb, PageHeader } from "@/components/common";
 import { HoverExplain } from "@/components/hover-explain";
 import { FilterButton, LiveFeed } from "@/components/live-feed";
 import { LiveSync } from "@/components/live-sync";
+import { LocalTime } from "@/components/local-time";
 import { NextTick } from "@/components/next-tick";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -366,11 +367,7 @@ function SignalCard({ group }: { group: SignalGroup<Row> }) {
                     className="flex items-center justify-between gap-3 px-2.5 py-1.5 tabular-nums"
                   >
                     <span className="text-muted-foreground">
-                      {new Date(r.leaderTs).toLocaleTimeString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })}
+                      <LocalTime ts={new Date(r.leaderTs).toISOString()} />
                     </span>
                     <span>
                       {num(r.leaderSize, 1)} @ {cents(r.leaderPrice)}

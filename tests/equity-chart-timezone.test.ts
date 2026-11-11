@@ -32,3 +32,17 @@ describe("EquityChart first render", () => {
     expect(render("Asia/Tokyo")).toBe(utc);
   });
 });
+
+describe("LocalTime first render", () => {
+  it("prints UTC, labelled, whatever the machine's time zone", async () => {
+    const { LocalTime } = await import("@/components/local-time");
+    const at = (timeZone: string) => {
+      process.env.TZ = timeZone;
+      return renderToString(
+        createElement(LocalTime, { ts: "2026-11-11T15:15:45.000Z", date: true }),
+      );
+    };
+    expect(at("UTC")).toContain("Nov 11, 3:15:45 PM UTC");
+    expect(at("America/Chicago")).toBe(at("UTC"));
+  });
+});
