@@ -38,6 +38,7 @@ import {
   usd,
 } from "@/lib/format";
 import { getDb } from "@/lib/db/client";
+import { fetchRecentPositions, positionResult } from "@/lib/jobs/backfill";
 import type { ScoringConfig } from "@/lib/scoring/config";
 import type { TraderMetrics } from "@/lib/scoring/metrics";
 import { provenStatus } from "@/lib/scoring/score";
@@ -57,6 +58,22 @@ const PCT_CHECKS = new Set([
   "copy_loss",
   "recent",
 ]);
+
+/** What the Recent positions table shows: a stored row, or one loaded live. */
+interface PositionView {
+  tokenId: string;
+  conditionId: string;
+  title?: string | null;
+  slug?: string | null;
+  outcome?: string | null;
+  status?: string | null;
+  size?: number | null;
+  avgPrice?: number | null;
+  totalCost?: number | null;
+  realizedPnl?: number | null;
+  unrealizedPnl?: number | null;
+  won: boolean | null;
+}
 
 function CheckRow({ ok, label, value }: { ok: boolean; label: string; value: string }) {
   return (
@@ -157,7 +174,20 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
     getScoringConfig(getDb()),
   ]);
   if (!data) notFound();
-  const { trader, score, follow, positions, pnl, hidden } = data;
+  const { trader, score, follow, pnl, hidden } = data;
+  // Nothing stored (Candidates and Rejected traders are pruned after scoring): an unlocked
+  // admin gets the latest positions live from Polymarket (owner, 2026-11-10). Visitors'
+  // page loads never call Polymarket (UI-17), so they keep the note.
+  let positions: PositionView[] = data.positions;
+  let live: "loaded" | "failed" | null = null;
+  if (positions.length === 0 && admin) {
+    try {
+      positions = await fetchRecentPositions(trader.wallet);
+      live = "loaded";
+    } catch {
+      live = "failed";
+    }
+  }
   const metrics = (score?.metrics ?? {}) as {
     monthlyPnl?: Array<{ month: string; pnl: number }>;
     resolvedWinRate?: number | null;
@@ -347,12 +377,19 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
           <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
             <CardHeader className="px-4 sm:px-6">
               <CardTitle>Recent positions</CardTitle>
-              <CardDescription>Latest 40 markets this trader was active in</CardDescription>
+              <CardDescription>
+                Latest 40 markets this trader was active in
+                {live === "loaded" && " · loaded live from Polymarket (not stored for this tier)"}
+              </CardDescription>
             </CardHeader>
             <CardContent className="px-4 sm:px-6">
               {positions.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
-                  {positionsNote(score?.tier, positions.length)}
+                  {live === "failed"
+                    ? "Couldn't load this trader's positions from Polymarket right now. Reload to try again."
+                    : live === "loaded"
+                      ? "Polymarket has no positions with a known cost for this trader."
+                      : `${positionsNote(score?.tier, positions.length)}${admin ? "" : " Unlock to see the latest ones live."}`}
                 </p>
               ) : (
                 <Table>
@@ -369,16 +406,21 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
                   <TableBody>
                     {positions.map((p) => {
                       const total = (p.realizedPnl ?? 0) + (p.unrealizedPnl ?? 0);
+                      const r = positionResult(p, { live: live === "loaded" });
                       const result =
-                        p.won === true ? (
+                        r === "won" ? (
                           <span className="text-yes font-medium">Won</span>
-                        ) : p.won === false ? (
+                        ) : r === "lost" ? (
                           <span className="text-no font-medium">Lost</span>
+                        ) : r === "sold" || r === "closed" ? (
+                          <span className="text-muted-foreground">
+                            {r === "sold" ? "Sold" : "Closed"}
+                          </span>
                         ) : (
                           <span className="text-muted-foreground">Open</span>
                         );
                       return (
-                        <TableRow key={p.id}>
+                        <TableRow key={p.tokenId}>
                           <TableCell className="max-w-[340px] whitespace-normal md:max-w-[280px] md:truncate lg:max-w-[340px]">
                             {/* Under md: two lines of title, side and result underneath. */}
                             <span className="line-clamp-2 md:line-clamp-none">

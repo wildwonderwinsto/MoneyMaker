@@ -112,6 +112,48 @@ function positionRow(p: Position): typeof traderPositions.$inferInsert {
   };
 }
 
+/**
+ * A trader's latest positions straight from Polymarket's lists (newest first), shaped like
+ * stored rows, for a trader page with nothing stored (Candidates are pruned). Like the
+ * stored list, positions of unknown cost (shares from splits) are left out. Pure (tested).
+ */
+export function recentPositions(open: Position[], closed: Position[], limit: number) {
+  const byToken = new Map<string, ReturnType<typeof positionRow> & { won: boolean | null }>();
+  for (const p of [...closed, ...open]) {
+    const won = p.status === "REDEEMABLE" ? true : p.status === "REDEEMABLE_LOST" ? false : null;
+    byToken.set(p.token_id, { ...positionRow(p), won });
+  }
+  return [...byToken.values()]
+    .filter((r) => (r.totalCost ?? 0) > 0)
+    .sort((a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0))
+    .slice(0, limit);
+}
+
+/** Live recent positions for one trader (2 requests: newest open, newest closed). */
+export async function fetchRecentPositions(wallet: string, limit = 40) {
+  const page = (status: "OPEN" | "CLOSED") =>
+    getPositions({ user: wallet, status, limit, sortBy: "TIMESTAMP" }).then((r) => r.data);
+  const [open, closed] = await Promise.all([page("OPEN"), page("CLOSED")]);
+  return recentPositions(open, closed, limit);
+}
+
+/**
+ * How a position ended, for display: settled (won/lost), exited before settling (sold: the
+ * API's CLOSED, or no shares left), or still open. A sold position used to read "Open".
+ * Stored rows get won/lost from the market's outcome, so CLOSED without one was sold. A
+ * live row can't tell: Polymarket's CLOSED list also holds settled-and-redeemed positions,
+ * so it is just "closed" (its P&L says how it went).
+ */
+export function positionResult(
+  p: { won: boolean | null; status?: string | null; size?: number | null },
+  opts: { live?: boolean } = {},
+): "won" | "lost" | "sold" | "closed" | "open" {
+  if (p.won === true) return "won";
+  if (p.won === false) return "lost";
+  if (p.status === "CLOSED" || (p.size ?? 0) < 1e-6) return opts.live ? "closed" : "sold";
+  return "open";
+}
+
 export async function backfillTrader(
   db: Db,
   wallet: string,
