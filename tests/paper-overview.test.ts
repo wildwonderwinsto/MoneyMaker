@@ -133,6 +133,42 @@ describe("finished trades: each position's own fills (owner, 2026-11-10)", () =>
   });
 });
 
+describe("open positions: most recent trade first (owner, 2026-11-10)", () => {
+  it("lists open positions by their latest buy or sell, newest first", async () => {
+    const open = (i: number, openedMinutesAgo: number) => ({
+      ...closed("a", i, 0),
+      status: "open" as const,
+      shares: 10,
+      costBasis: 5,
+      openedAt: new Date(Date.now() - openedMinutesAgo * 60_000),
+      closedAt: null,
+    });
+    // Opened oldest → newest: A (3 h), B (2 h), C (1 h). A was added to 5 minutes ago.
+    const [a, b, c] = await db
+      .insert(paperPositions)
+      .values([open(1, 180), open(2, 120), open(3, 60)])
+      .returning({ id: paperPositions.id });
+    const fill = (positionId: number, minutesAgo: number) => ({
+      accountId,
+      positionId,
+      kind: "trade" as const,
+      side: "BUY",
+      shares: 5,
+      avgPrice: 0.5,
+      notional: 2.5,
+      ts: new Date(Date.now() - minutesAgo * 60_000),
+    });
+    await db
+      .insert(paperFills)
+      .values([fill(a.id, 180), fill(b.id, 120), fill(c.id, 60), fill(a.id, 5)]);
+    // Stored order differs from the expected one, so the database's own order can't pass.
+    await db.update(paperPositions).set({ currentPrice: 0.6 }).where(eq(paperPositions.id, c.id));
+    const p = await getPaperOverview();
+    expect(p.open.map((x) => x.id)).toEqual([a.id, c.id, b.id]);
+    expect(p.open[0].lastTradeAt?.getTime()).toBeGreaterThan(Date.now() - 6 * 60_000);
+  });
+});
+
 describe("win rate (UI-06)", () => {
   it("counts finished copies only, not hedges", async () => {
     await db.insert(paperPositions).values([

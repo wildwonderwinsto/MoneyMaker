@@ -403,6 +403,30 @@ export async function getPaperOverview() {
   const markers = markersDesc.reverse();
   const investedBy = new Map(investedRows.map((r) => [r.wallet, r.invested]));
 
+  // Open positions, most recent trade first (a later add or partial sell counts as recent);
+  // without an order they came back in whatever order the database stored them.
+  const lastTrade = new Map(
+    (state.open.length
+      ? await db
+          .select({ id: paperFills.positionId, ts: sql<Date>`max(${paperFills.ts})` })
+          .from(paperFills)
+          .where(
+            and(
+              inArray(
+                paperFills.positionId,
+                state.open.map((p) => p.id),
+              ),
+              eq(paperFills.kind, "trade"),
+            ),
+          )
+          .groupBy(paperFills.positionId)
+      : []
+    ).map((r) => [r.id, new Date(r.ts)]),
+  );
+  const open = state.open
+    .map((p) => ({ ...p, lastTradeAt: lastTrade.get(p.id) ?? p.openedAt }))
+    .sort((a, b) => b.lastTradeAt.getTime() - a.lastTradeAt.getTime() || b.id - a.id);
+
   const { realized, finished, wins } = totals[0];
   return {
     account: state.account,
@@ -410,7 +434,7 @@ export async function getPaperOverview() {
     positionsValue: state.positionsValue,
     equity: state.equity,
     totalReturn: state.equity / state.account.startingBalance - 1,
-    open: state.open,
+    open,
     closed,
     equityCurve: equity.map((e) => ({ t: e.ts.toISOString(), equity: e.equity })),
     realized,

@@ -113,7 +113,8 @@ async function PaperContent() {
         <CardHeader className="px-3 sm:px-6">
           <CardTitle>Open positions</CardTitle>
           <CardDescription>
-            Tap a position to see its trades, the trader&apos;s moves and hedge options.
+            Latest trade first. Tap a position to see its trades, the trader&apos;s moves and hedge
+            options.
           </CardDescription>
           {/* Kept for the admin with nothing open, so its result stays after selling out. */}
           {(admin || p.open.length > 0) && (
@@ -238,6 +239,7 @@ function OpenPositions({
                       locked in
                     </span>
                   )}
+                  <span title="Latest buy or sell on this position">{timeAgo(x.lastTradeAt)}</span>
                 </span>
               </span>
               <span className="text-muted-foreground hidden text-right text-sm tabular-nums md:block">
