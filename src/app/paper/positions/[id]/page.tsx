@@ -65,7 +65,10 @@ async function PositionDetailView({
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <Link href="/paper" className="text-muted-foreground hover:text-foreground text-sm">
+      <Link
+        href="/paper"
+        className="text-muted-foreground hover:text-foreground -my-2 inline-block py-2 text-sm"
+      >
         ← Paper trading
       </Link>
 
@@ -305,11 +308,12 @@ function Scenario({ label, value, base }: { label: string; value: number; base: 
   const better = value - base;
   return (
     <div className="flex items-baseline justify-between gap-2 text-sm">
-      <span className="text-muted-foreground">{label}</span>
+      <span className="text-muted-foreground shrink-0 whitespace-nowrap">{label}</span>
       <span className="text-right tabular-nums">
         <Signed value={value}>{usd(value, { sign: true })}</Signed>
+        {/* Phones: the comparison goes under the amount instead of breaking mid-phrase. */}
         {Math.abs(better) > 0.005 && (
-          <span className="text-muted-foreground ml-1 text-xs">
+          <span className="text-muted-foreground block text-xs whitespace-nowrap sm:ml-1 sm:inline">
             ({better > 0 ? "+" : "−"}
             {usd(Math.abs(better))} vs. no hedge)
           </span>
@@ -436,7 +440,7 @@ async function HedgePanel({
           <p className="text-muted-foreground text-sm">{q.message}</p>
         ) : (
           <>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <QuoteCard
                 q={q.lock!}
                 title="Lock in"

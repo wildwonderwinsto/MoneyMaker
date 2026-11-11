@@ -317,9 +317,8 @@ export function ZoomHint() {
       <span className="pointer-coarse:hidden">
         Scroll to zoom · drag to move · double-click to reset
       </span>
-      <span className="hidden pointer-coarse:inline">
-        Pinch to zoom · move two fingers to pan · double-tap to reset
-      </span>
+      {/* Short enough for one line on a phone; two fingers also pan once zoomed. */}
+      <span className="hidden pointer-coarse:inline">Pinch to zoom · double-tap to reset</span>
     </p>
   );
 }

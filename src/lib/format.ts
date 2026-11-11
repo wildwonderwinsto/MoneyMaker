@@ -22,6 +22,31 @@ export function usd(
   return `${sign}${body}`;
 }
 
+const axisFmt = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+const wholeUsdFmt = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+/**
+ * Chart axis labels: never cents, abbreviated from $10K ("$6,500", "$994", "$0", "$19.5K",
+ * "−$6,500"), so a narrow axis never clips them ("$6,500.00" did) and a $1,001 vs $994
+ * equity axis keeps its precision.
+ */
+export function axisUsd(x: number): string {
+  if (!Number.isFinite(x)) return "";
+  const a = Math.abs(x);
+  const body = (a >= 10_000 ? axisFmt : wholeUsdFmt).format(a);
+  return `${x < 0 && Math.round(a) !== 0 ? "−" : ""}${body}`;
+}
+
 export function pct(x: number | null | undefined, digits = 1, opts: { sign?: boolean } = {}) {
   if (x === null || x === undefined || !Number.isFinite(x)) return "—";
   const sign = x < 0 ? "−" : opts.sign && x > 0 ? "+" : "";

@@ -24,7 +24,7 @@ import {
   type TooltipContentProps,
 } from "recharts";
 
-import { cents, num, usd } from "@/lib/format";
+import { axisUsd, cents, num, usd } from "@/lib/format";
 
 import { useChartZoom, ZoomControls, ZoomHint, zoomSurface } from "./zoom";
 
@@ -319,7 +319,7 @@ export function EquityChart({
       </div>
       <div ref={plotRef} className={zoomSurface(zoom)} style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={view} margin={{ top: 10, right: 8, bottom: 0, left: 0 }}>
+          <ComposedChart data={view} margin={{ top: 10, right: 14, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" />
             <XAxis
               dataKey="ts"
@@ -334,7 +334,7 @@ export function EquityChart({
               minTickGap={40}
             />
             <YAxis
-              tickFormatter={(v: number) => usd(v, { compact: true })}
+              tickFormatter={axisUsd}
               tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
               axisLine={false}
               tickLine={false}

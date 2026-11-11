@@ -13,7 +13,7 @@ import {
 
 import { useMemo, useRef } from "react";
 
-import { pct, usd } from "@/lib/format";
+import { axisUsd, pct, usd } from "@/lib/format";
 
 import { useChartZoom, ZoomControls, ZoomHint, zoomSurface } from "./zoom";
 
@@ -135,7 +135,7 @@ export function LineChart({
               minTickGap={32}
             />
             <YAxis
-              tickFormatter={(v: number) => fmt(v, format)}
+              tickFormatter={(v: number) => (format === "usd" ? axisUsd(v) : fmt(v, format))}
               tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
               axisLine={false}
               tickLine={false}

@@ -92,14 +92,16 @@ export function LiveFeed({
             aria-selected={f.value === filter}
             onClick={() => select(f.value)}
             className={cn(
-              "flex-1 rounded-md px-3 py-1.5 text-center text-sm font-medium transition-colors sm:flex-none",
+              // Phones: the count sits under the label, so four tabs with counts up to 200
+              // fit a 320px screen (side by side they spilled past it and forced a zoom-out).
+              "flex min-w-0 flex-1 flex-col items-center rounded-md px-1.5 py-1 text-center text-sm font-medium transition-colors sm:flex-none sm:flex-row sm:px-3 sm:py-1.5",
               f.value === filter
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
             {f.label}
-            <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
+            <span className="text-muted-foreground text-xs tabular-nums sm:ml-1.5">
               {count(f.value)}
             </span>
           </button>

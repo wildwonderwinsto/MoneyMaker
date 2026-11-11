@@ -137,7 +137,7 @@ async function PaperContent() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
         <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
           <CardHeader className="px-3 sm:px-6">
             <CardTitle>Results by trader</CardTitle>
@@ -337,8 +337,9 @@ function TraderResult({ t }: { t: PaperOverview["byTrader"][number] }) {
             <span className="block truncate font-medium">
               {traderName({ name: t.name, wallet: t.wallet })}
             </span>
-            <span className="text-muted-foreground text-xs">
-              {t.wins}W · {t.losses}L · {t.open} open · {usd(t.invested, { compact: true })} put in
+            <span className="text-muted-foreground block text-xs">
+              {t.wins}W · {t.losses}L · {t.open} open ·{" "}
+              <span className="whitespace-nowrap">{usd(t.invested, { compact: true })} put in</span>
             </span>
           </span>
           <span className="text-right">

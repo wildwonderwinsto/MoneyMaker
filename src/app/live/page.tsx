@@ -64,7 +64,7 @@ async function LiveContent() {
   const groups = groupSignals(all.map((r) => ({ ...r.signal, row: r })));
 
   return (
-    <div className="grid items-start gap-4 lg:grid-cols-3 lg:gap-6">
+    <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3 lg:gap-6">
       <LiveSync />
       <div className="space-y-4 lg:sticky lg:top-20 lg:order-last">
         <EngineCard status={status} />

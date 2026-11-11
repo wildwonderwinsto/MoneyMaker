@@ -149,7 +149,7 @@ export function SettingsEditor({
       )}
       {groups.map((g) => (
         <section key={g.id} className="rounded-xl border" aria-labelledby={`${kind}-${g.id}`}>
-          <header className="border-b px-4 py-3">
+          <header className="border-b px-3 py-3 sm:px-4">
             <h3 id={`${kind}-${g.id}`} className="font-semibold">
               {g.title}
             </h3>
@@ -317,12 +317,12 @@ function FieldRow({
   if (f.kind === "boolean") {
     const on = Boolean(draft[f.name]);
     return (
-      <div className="flex items-start justify-between gap-4 px-4 py-3">
+      <div className="flex items-start justify-between gap-4 px-3 py-3 sm:px-4">
         <div className="min-w-0">
           <Label htmlFor={id} className="font-medium">
             {f.label}
           </Label>
-          <p className="text-muted-foreground mt-1 text-sm leading-relaxed">{f.help}</p>
+          <p className="text-muted-foreground mt-1 text-sm leading-normal">{f.help}</p>
         </div>
         {admin ? (
           <Switch id={id} checked={on} onCheckedChange={(v) => onChange(f.name, v)} />
@@ -344,12 +344,12 @@ function FieldRow({
     const value = draft[f.name];
     const selected = f.options.find((o) => o.value === value);
     return (
-      <div className="space-y-2 px-4 py-3">
+      <div className="space-y-2 px-3 py-3 sm:px-4">
         <div>
-          <p className="font-medium" id={`${id}-label`}>
+          <p className="text-sm font-medium" id={`${id}-label`}>
             {f.label}
           </p>
-          {f.help && <p className="text-muted-foreground mt-1 text-sm leading-relaxed">{f.help}</p>}
+          {f.help && <p className="text-muted-foreground mt-1 text-sm leading-normal">{f.help}</p>}
         </div>
         {admin ? (
           <div
@@ -405,12 +405,12 @@ function FieldRow({
   const unit = UNIT_SUFFIX[f.unit];
   const prefix = unit === "$";
   return (
-    <div className="grid gap-2 px-4 py-3 sm:grid-cols-[1fr_11rem] sm:items-start sm:gap-6">
+    <div className="grid grid-cols-1 gap-2 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-start sm:gap-6 sm:px-4">
       <div className="min-w-0">
         <Label htmlFor={id} className="font-medium">
           {f.label}
         </Label>
-        <p className="text-muted-foreground mt-1 text-sm leading-relaxed">{f.help}</p>
+        <p className="text-muted-foreground mt-1 text-sm leading-normal">{f.help}</p>
         {example && <p className="bg-muted/60 mt-2 rounded-md px-2.5 py-1.5 text-xs">{example}</p>}
       </div>
       <div>

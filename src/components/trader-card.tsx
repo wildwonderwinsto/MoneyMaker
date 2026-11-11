@@ -126,9 +126,11 @@ export function TraderCard({
       <div className="flex items-center justify-between gap-2 border-t px-4 py-2.5">
         <Link
           href={`/traders/${t.wallet}`}
-          className="text-muted-foreground hover:text-foreground text-sm"
+          className="text-muted-foreground hover:text-foreground -my-2 py-2 text-sm whitespace-nowrap"
         >
-          Why this score →
+          {/* Narrow cards (phones, two columns): the footer also holds No and Following. */}
+          <span className="lg:hidden">Details →</span>
+          <span className="hidden lg:inline">Why this score →</span>
         </Link>
         {admin ? (
           <div className="flex items-center gap-1">

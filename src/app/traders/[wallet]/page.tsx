@@ -66,7 +66,7 @@ function CheckRow({ ok, label, value }: { ok: boolean; label: string; value: str
         <XCircle className="text-no mt-0.5 size-4 shrink-0" aria-label="Fail" />
       )}
       <span className="flex-1">{label}</span>
-      <span className="text-muted-foreground text-xs tabular-nums">{value}</span>
+      <span className="text-muted-foreground pt-0.5 text-xs tabular-nums">{value}</span>
     </li>
   );
 }
@@ -174,7 +174,10 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <Link href="/" className="text-muted-foreground hover:text-foreground text-sm">
+      <Link
+        href="/"
+        className="text-muted-foreground hover:text-foreground -my-2 inline-block py-2 text-sm"
+      >
         ← All traders
       </Link>
 
@@ -283,7 +286,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
             />
           </div>
 
-          <div className="grid gap-4 sm:gap-6 lg:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-5">
             <Card className="gap-4 py-4 sm:gap-6 sm:py-6 lg:col-span-2">
               <CardHeader className="px-4 sm:px-6">
                 <CardTitle>Why this score</CardTitle>
@@ -342,41 +345,55 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
                   {positionsNote(score?.tier, positions.length)}
                 </p>
               ) : (
-                <Table className="sm:min-w-[640px]">
+                <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Market</TableHead>
-                      <TableHead>Side</TableHead>
-                      <TableHead className="hidden text-right sm:table-cell">Avg price</TableHead>
-                      <TableHead className="hidden text-right sm:table-cell">Invested</TableHead>
+                      <TableHead className="hidden md:table-cell">Side</TableHead>
+                      <TableHead className="hidden text-right md:table-cell">Avg price</TableHead>
+                      <TableHead className="hidden text-right md:table-cell">Invested</TableHead>
                       <TableHead className="text-right">P&L</TableHead>
-                      <TableHead>Result</TableHead>
+                      <TableHead className="hidden md:table-cell">Result</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {positions.map((p) => {
                       const total = (p.realizedPnl ?? 0) + (p.unrealizedPnl ?? 0);
+                      const result =
+                        p.won === true ? (
+                          <span className="text-yes font-medium">Won</span>
+                        ) : p.won === false ? (
+                          <span className="text-no font-medium">Lost</span>
+                        ) : (
+                          <span className="text-muted-foreground">Open</span>
+                        );
                       return (
                         <TableRow key={p.id}>
-                          <TableCell className="max-w-[340px] min-w-36 whitespace-normal sm:truncate">
-                            {p.slug ? (
-                              <a
-                                href={polymarketMarketUrl(p.slug)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="hover:underline"
-                              >
-                                {p.title ?? p.slug}
-                              </a>
-                            ) : (
-                              (p.title ?? p.conditionId)
-                            )}
+                          <TableCell className="max-w-[340px] whitespace-normal md:max-w-[280px] md:truncate lg:max-w-[340px]">
+                            {/* Under md: two lines of title, side and result underneath. */}
+                            <span className="line-clamp-2 md:line-clamp-none">
+                              {p.slug ? (
+                                <a
+                                  href={polymarketMarketUrl(p.slug)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="hover:underline"
+                                >
+                                  {p.title ?? p.slug}
+                                </a>
+                              ) : (
+                                (p.title ?? p.conditionId)
+                              )}
+                            </span>
+                            <span className="text-muted-foreground mt-0.5 block text-xs md:hidden">
+                              {p.outcome ?? "—"} · {result}
+                            </span>
                           </TableCell>
-                          <TableCell>{p.outcome ?? "—"}</TableCell>
-                          <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                          <TableCell className="hidden md:table-cell">{p.outcome ?? "—"}</TableCell>
+                          <TableCell className="hidden text-right tabular-nums md:table-cell">
                             {cents(p.avgPrice)}
                           </TableCell>
-                          <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                          <TableCell className="hidden text-right tabular-nums md:table-cell">
                             {usd(p.totalCost, { compact: true })}
                           </TableCell>
                           <TableCell className="text-right">
@@ -384,15 +401,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
                               {usd(total, { compact: true, sign: true })}
                             </Signed>
                           </TableCell>
-                          <TableCell>
-                            {p.won === true ? (
-                              <span className="text-yes font-medium">Won</span>
-                            ) : p.won === false ? (
-                              <span className="text-no font-medium">Lost</span>
-                            ) : (
-                              <span className="text-muted-foreground">Open</span>
-                            )}
-                          </TableCell>
+                          <TableCell className="hidden md:table-cell">{result}</TableCell>
                         </TableRow>
                       );
                     })}

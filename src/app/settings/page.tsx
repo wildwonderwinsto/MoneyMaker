@@ -119,7 +119,12 @@ async function SettingsContent() {
           ) : (
             <ul className="divide-y">
               {followList.map(({ follow: f, name, tier }) => (
-                <li key={f.wallet} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+                // One layout per width, whatever the name's length: phones put the controls
+                // on their own line under the name; from sm they sit at the end of the row.
+                <li
+                  key={f.wallet}
+                  className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-3 gap-y-2 py-3 sm:grid-cols-[28px_minmax(0,1fr)_auto]"
+                >
                   <Avatar wallet={f.wallet} size={28} />
                   <div className="min-w-0 flex-1">
                     <Link
@@ -128,18 +133,20 @@ async function SettingsContent() {
                     >
                       {traderName({ name, wallet: f.wallet })}
                     </Link>
-                    <p className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
+                    <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                       {tier && <TierBadge tier={tier} />}
-                      since {timeAgo(f.createdAt)}
+                      <span className="whitespace-nowrap">since {timeAgo(f.createdAt)}</span>
                     </p>
                   </div>
-                  {admin ? (
-                    <FollowRowControls wallet={f.wallet} enabled={f.enabled} weight={f.weight} />
-                  ) : (
-                    <span className="text-muted-foreground text-sm tabular-nums">
-                      {f.enabled ? "Copying" : "Paused"} · {f.weight}×
-                    </span>
-                  )}
+                  <div className="col-start-2 sm:col-start-auto">
+                    {admin ? (
+                      <FollowRowControls wallet={f.wallet} enabled={f.enabled} weight={f.weight} />
+                    ) : (
+                      <span className="text-muted-foreground text-sm tabular-nums">
+                        {f.enabled ? "Copying" : "Paused"} · {f.weight}×
+                      </span>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>

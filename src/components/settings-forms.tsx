@@ -31,8 +31,8 @@ export function FollowRowControls({
   const [pending, start] = useTransition();
   const [state, setState] = useState<ActionResult | null>(null);
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-3">
+    <div className="flex flex-col items-start gap-1 sm:items-end">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:gap-3">
         <label className="text-muted-foreground flex items-center gap-1.5 text-xs">
           Weight
           <Input
@@ -43,7 +43,7 @@ export function FollowRowControls({
             max={5}
             step={0.25}
             defaultValue={weight}
-            className="h-8 w-20 text-right tabular-nums"
+            className="h-8 w-16 text-right tabular-nums sm:w-20"
             disabled={pending}
             onBlur={(e) => {
               const v = parseWeight(e.currentTarget.value);
@@ -58,11 +58,15 @@ export function FollowRowControls({
           disabled={pending}
           onCheckedChange={(on) => start(async () => setState(await setFollowAction(wallet, on)))}
         />
-        {/* Always takes its space (hidden while copying) so every row's controls line up. */}
+        {/* From sm the controls end the row: the button keeps its space while copying so every
+            row's switch lines up. Phones start them under the name, so no space is needed. */}
         <Button
           size="sm"
           variant="ghost"
-          className={cn("text-muted-foreground hover:text-no w-20", enabled && "invisible")}
+          className={cn(
+            "text-muted-foreground hover:text-no px-2 sm:w-20",
+            enabled && "hidden sm:invisible sm:inline-flex",
+          )}
           disabled={pending || enabled}
           aria-hidden={enabled}
           tabIndex={enabled ? -1 : undefined}

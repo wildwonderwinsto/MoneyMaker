@@ -13,7 +13,7 @@ import {
   type TooltipContentProps,
 } from "recharts";
 
-import { usd } from "@/lib/format";
+import { axisUsd, usd } from "@/lib/format";
 
 function BarTooltip({ active, payload, label }: TooltipContentProps) {
   if (!active || !payload?.length) return null;
@@ -57,11 +57,11 @@ export function PnlBars({
               minTickGap={8}
             />
             <YAxis
-              tickFormatter={(v: number) => usd(v, { compact: true })}
+              tickFormatter={axisUsd}
               tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
               axisLine={false}
               tickLine={false}
-              width={64}
+              width={52}
             />
             <ReferenceLine y={0} stroke="var(--muted-foreground)" />
             <Tooltip

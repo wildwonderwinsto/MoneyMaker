@@ -138,8 +138,9 @@ async function BacktestContent() {
         <CardHeader className="px-4 sm:px-6">
           <CardTitle>Month by month</CardTitle>
         </CardHeader>
-        <CardContent className="px-4 sm:px-6">
-          <Table>
+        <CardContent className="px-3 sm:px-6">
+          {/* Fits a 320px phone: smaller text there, "recorded" under the month. */}
+          <Table className="text-xs min-[360px]:text-sm">
             <TableHeader>
               <TableRow>
                 <TableHead>Month</TableHead>
@@ -158,7 +159,9 @@ async function BacktestContent() {
                   <TableCell>
                     {m.month}
                     {m.recorded && (
-                      <span className="text-muted-foreground text-xs"> · recorded</span>
+                      <span className="text-muted-foreground block text-xs sm:inline">
+                        <span className="hidden sm:inline"> · </span>recorded
+                      </span>
                     )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">

@@ -71,11 +71,7 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
     <PendingNavProvider>
       <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div
-            className="-mx-3 flex w-[calc(100%+1.5rem)] gap-1 overflow-x-auto px-3 pb-1 sm:mx-0 sm:w-auto sm:px-0 sm:pb-0"
-            role="tablist"
-            aria-label="Category"
-          >
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Category">
             {CATEGORIES.map((c) => (
               <NavTab
                 key={c}
@@ -116,7 +112,7 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
               {(tiers.find((t) => t.value === tier) ?? TIER_TABS[0]).empty(scoring)}
             </EmptyState>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {list.map((t) => (
                 <TraderCard
                   key={t.wallet}
@@ -135,7 +131,7 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
 
 function GridSkeleton() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {Array.from({ length: 6 }, (_, i) => (
         <Skeleton key={i} className="h-64 rounded-xl" />
       ))}

@@ -73,7 +73,8 @@ export function StatTile({
         </p>
         <p
           className={cn(
-            "mt-1 text-lg font-semibold tabular-nums sm:text-2xl",
+            // Under 390px a $10M balance ("$10,234,567.89") didn't fit a half-width tile at text-lg.
+            "mt-1 text-base font-semibold tabular-nums min-[390px]:text-lg sm:text-2xl",
             tone === "gain" && "text-gain",
             tone === "loss" && "text-loss",
           )}
