@@ -210,13 +210,18 @@ export function explain(opts: {
         ],
         setting: code === "market_cap" ? "Most in one market" : "Most with one trader",
       };
-    case "no_cash":
-      return {
-        title: "Skipped: no cash",
-        body: [
-          "The paper account has no cash left to buy with. Money comes back when positions are sold or markets settle.",
-        ],
-      };
+    case "no_cash": {
+      const cash = num(d, "cash");
+      const min = num(d, "minOrderUsd");
+      const body = [
+        cash !== null && min !== null
+          ? `The paper account had $${Math.max(0, cash).toFixed(2)} of cash, less than your smallest order ($${min.toFixed(2)}). This is checked first, so nothing else about the trade was looked at.`
+          : "The paper account has no cash left to buy with.",
+        "Money comes back when positions are sold or markets settle. With re-checks on, the engine copies this trade if cash returns before it is too old.",
+      ];
+      if (retried) body.push(retried);
+      return { title: "Skipped: not enough cash", body, setting: "Smallest order" };
+    }
     case "below_min_order":
       return {
         title: "Skipped: too small to place",

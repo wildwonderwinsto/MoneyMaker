@@ -80,7 +80,10 @@ Copying fast comes first. The server runs the engine itself (`src/instrumentatio
 2. **Checks every 15, 30 or 60 s** (Settings → Speed) poll every trader as a safety net,
    re-check trades skipped because the price ran away, settle resolved markets at $1 or $0,
    mark prices, auto-hedge (if on) and snapshot equity.
-3. Each trade passes the risk rules (price moved too much? sports game already in play?
+3. Cash is checked first: with less than the smallest order left, a buy is skipped right away
+   ("Not enough cash", no order book is fetched) and re-checked while the trade is fresh, in
+   case a sale or settlement brings cash back. Sells are never held up by this.
+   Then each trade passes the risk rules (price moved too much? sports game already in play?
    daily loss limit? caps?), then fills against the **live order book** (real slippage), paying the market's
    real taker fee (`shares × rate × p × (1 − p)`, rate 0–7% by category). Pieces of one
    order are combined first, so sizing and the "too small" filter see the whole order.

@@ -22,6 +22,14 @@ export type SizingResult =
   | { usd: number; details: Details }
   | { usd: 0; reason: string; code: ReasonCode; details: Details };
 
+/**
+ * Whether the account can pay for even the smallest order. Checked before anything else
+ * (owner, 2026-11-11): without it no buy can happen, so nothing else is worth looking up.
+ */
+export function hasCashToBuy(cash: number, cfg: Pick<RiskConfig, "minOrderUsd">): boolean {
+  return cash > 0 && cash >= cfg.minOrderUsd;
+}
+
 /** How many USDC to put into a copied buy, after every risk cap. */
 export function sizeBuy(input: SizingInput, cfg: RiskConfig): SizingResult {
   const { equity, cash, leaderUsd, leaderTypicalUsd, weight } = input;

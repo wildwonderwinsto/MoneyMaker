@@ -264,7 +264,7 @@ export const RISK_GROUPS: Group[] = [
         kind: "number",
         name: "minOrderUsd",
         label: "Smallest order",
-        help: "Skip a copy if, after every limit, it would be smaller than this.",
+        help: "Skip a copy if, after every limit, it would be smaller than this. With less cash than this, buys are skipped before any other check.",
         unit: "usd",
         min: 0,
         step: 0.5,

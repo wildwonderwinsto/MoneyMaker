@@ -71,7 +71,19 @@ async function PaperContent() {
           tone={toneOf(p.totalReturn)}
           hint={p.account.resetAt ? `since reset ${timeAgo(p.account.resetAt)}` : "all time"}
         />
-        <StatTile label="Cash" value={usd(p.cash)} hint={`${p.open.length} open positions`} />
+        <StatTile
+          label="Cash"
+          value={usd(p.cash)}
+          hint={
+            p.outOfCash ? (
+              <span className="text-loss font-medium">
+                Out of cash: buys are paused until a position sells or settles
+              </span>
+            ) : (
+              `${p.open.length} open positions`
+            )
+          }
+        />
         <StatTile
           label="Unrealized P&L"
           value={usd(unrealized, { sign: true })}

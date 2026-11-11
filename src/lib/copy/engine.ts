@@ -10,7 +10,7 @@ import { isComboCondition } from "@/lib/polymarket/gamma";
 
 import type { RiskConfig } from "./config";
 import { simulateBuy, simulateSell, type Fill } from "./fillSim";
-import { sizeBuy } from "./sizing";
+import { hasCashToBuy, sizeBuy } from "./sizing";
 
 export interface LeaderTrade {
   /** Id of the (first) fill; see polymarket/data.ts tradeId. */
@@ -95,6 +95,8 @@ export const RETRYABLE_CODES: ReadonlySet<ReasonCode> = new Set([
   "no_sellers",
   "no_liquidity",
   "no_market",
+  // Cash comes back when a position is sold or a market settles.
+  "no_cash",
 ]);
 
 /**
@@ -109,6 +111,14 @@ export const SELL_RETRYABLE_CODES: ReadonlySet<ReasonCode> = new Set([
 
 export function decideBuy(ctx: BuyContext): Decision {
   const { trade, market, book, cfg, now } = ctx;
+  // Cash first: with none to spend, no other check can lead to a buy.
+  if (!hasCashToBuy(ctx.cash, cfg)) {
+    return skip(
+      `Not enough cash: $${Math.max(0, ctx.cash).toFixed(2)} left, need at least $${cfg.minOrderUsd.toFixed(2)}`,
+      "no_cash",
+      { cash: ctx.cash, minOrderUsd: cfg.minOrderUsd },
+    );
+  }
   const age = now - trade.ts;
   if (age > cfg.maxSignalAgeSeconds) {
     return skip(`Signal is ${Math.round(age / 60)} min old`, "stale", {

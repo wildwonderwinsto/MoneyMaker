@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm";
 
 import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
+import { hasCashToBuy } from "@/lib/copy/sizing";
 import { readEngineStatus } from "@/lib/copy/status";
 import { getDb } from "@/lib/db/client";
 import {
@@ -431,6 +432,8 @@ export async function getPaperOverview() {
   return {
     account: state.account,
     cash: state.cash,
+    // The engine's first check: with less cash than the smallest order, buys are skipped.
+    outOfCash: !hasCashToBuy(state.cash, await getRiskConfig(db)),
     positionsValue: state.positionsValue,
     equity: state.equity,
     totalReturn: state.equity / state.account.startingBalance - 1,
@@ -648,7 +651,7 @@ export async function getSettings() {
 /** Last copy-engine tick (the tick lease row is touched on every run) and follow count. */
 export async function getEngineStatus() {
   const db = getDb();
-  const [[lease], [following], status, risk] = await Promise.all([
+  const [[lease], [following], status, risk, account] = await Promise.all([
     db
       .select({ at: appSettings.updatedAt })
       .from(appSettings)
@@ -659,6 +662,7 @@ export async function getEngineStatus() {
       .where(eq(follows.enabled, true)),
     readEngineStatus(db),
     getRiskConfig(db),
+    ensureDefaultAccount(db),
   ]);
   const lastTickAt = lease?.at ?? null;
   const interval = status.intervalSeconds ?? risk.tickIntervalSeconds;
@@ -672,6 +676,9 @@ export async function getEngineStatus() {
       lastTickAt !== null &&
       Date.now() - lastTickAt.getTime() < Math.max(5 * 60_000, interval * 3_000),
     following: following?.n ?? 0,
+    cash: account.cash,
+    // The engine's first check: with less cash than the smallest order, buys are skipped.
+    outOfCash: !hasCashToBuy(account.cash, risk),
     loop: loopAlive,
     intervalSeconds: interval,
     nextTickAt: loopAlive ? (status.nextTickAt ?? null) : null,

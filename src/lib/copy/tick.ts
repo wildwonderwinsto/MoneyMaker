@@ -57,6 +57,7 @@ import {
 import { simulateSell, type Fill } from "./fillSim";
 import { oppositeToken, planHedge, type HedgeMode, type HedgeQuote } from "./hedge";
 import { getMarketInfo, getStoredMarketInfo, payoutPerShare } from "./markets";
+import { hasCashToBuy } from "./sizing";
 
 export interface TickStats {
   skipped?: string;
@@ -629,9 +630,15 @@ async function processTrades(
     ),
   ]);
   const dayLoss0 = lossFraction(startEquity, state0.equity);
+  // Out of cash, a buy needs no order book, unless a sell in this batch may pay for it.
+  const canPay =
+    hasCashToBuy(state0.cash, cfg) ||
+    (cfg.copySells &&
+      merged.some((t) => t.side === "SELL" && !!openCopy(state0, t.wallet, t.tokenId)));
   const buyMayCopy = (t: LeaderTrade) => {
     const m = info.get(t.conditionId);
     return (
+      canPay &&
       ctx.now - t.ts <= cfg.maxSignalAgeSeconds &&
       t.price <= cfg.maxEntryPrice &&
       t.price >= cfg.minEntryPrice &&
@@ -1198,6 +1205,8 @@ async function retrySkipped(db: Db, ctx: EngineCtx) {
   const since = new Date((ctx.now - cfg.maxSignalAgeSeconds) * 1000);
   const followed = [...ctx.weights.keys()];
   if (followed.length === 0) return;
+  // Still out of cash: no re-check can buy, so don't ask Polymarket for markets and books.
+  if (!hasCashToBuy((await loadAccountState(db, ctx.accountId)).cash, cfg)) return;
   const rows = await db
     .select()
     .from(signals)

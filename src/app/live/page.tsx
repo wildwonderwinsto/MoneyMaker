@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { Activity, ChevronDown, Lock, Radio, Zap } from "lucide-react";
+import { Activity, ChevronDown, Lock, Radio, Wallet, Zap } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { connection } from "next/server";
@@ -135,6 +135,19 @@ function EngineCard({ status }: { status: EngineStatusView }) {
           <span className={cn("size-2 rounded-full", healthy ? "bg-yes" : "bg-no")} aria-hidden />
           {healthy ? "Running" : "Not running"} · last check {timeAgo(status.lastTickAt)}
         </p>
+        {status.outOfCash && (
+          <p className="flex items-start gap-2">
+            <Wallet className="text-loss mt-0.5 size-4 shrink-0" aria-hidden />
+            <span>
+              <strong className="font-medium">Out of cash: buys are paused</strong>
+              <span className="text-muted-foreground">
+                {" "}
+                · {usd(Math.max(0, status.cash))} left. Sells still copy; buying resumes when a
+                position sells or a market settles.
+              </span>
+            </span>
+          </p>
+        )}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-muted-foreground">Next check</span>
           <NextTick
