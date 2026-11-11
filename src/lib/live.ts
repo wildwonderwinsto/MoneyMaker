@@ -1,5 +1,6 @@
 /** Grouping for the Live feed (pure). */
-import { codeFromReason } from "@/lib/explain";
+import type { ReasonCode } from "@/lib/db/schema";
+import { codeFromReason, explain } from "@/lib/explain";
 
 export interface GroupableSignal {
   id: string;
@@ -77,6 +78,16 @@ export function sectionsByAge<T extends GroupableSignal>(
   return sections.filter(([, list]) => list.length > 0);
 }
 
+/**
+ * A skip reason's name for a count of many trades ("Price too high"), not one trade's own
+ * text ("Leader paid 99.9¢ (above 92.0¢ max)"). Reasons with no code keep their text.
+ */
+function skipLabel(code: ReasonCode, reason: string): string {
+  if (code === "other") return reason;
+  const title = explain({ reason, code }).title.replace(/^(Skipped|Held): /, "");
+  return title.charAt(0).toUpperCase() + title.slice(1);
+}
+
 /** Last 24 hours of the feed: counts per decision and the most common skip reasons. */
 export function summarize<T extends GroupableSignal>(groups: SignalGroup<T>[], now = Date.now()) {
   const recent = groups.filter((g) => now - g.head.leaderTs.getTime() < 24 * HOUR);
@@ -85,7 +96,7 @@ export function summarize<T extends GroupableSignal>(groups: SignalGroup<T>[], n
   for (const g of recent) {
     if (g.head.decision !== "skipped") continue;
     const key = g.head.reasonCode ?? codeFromReason(g.head.reason);
-    const r = reasons.get(key) ?? { label: g.head.reason, n: 0 };
+    const r = reasons.get(key) ?? { label: skipLabel(key as ReasonCode, g.head.reason), n: 0 };
     r.n++;
     reasons.set(key, r);
   }

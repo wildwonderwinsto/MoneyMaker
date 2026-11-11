@@ -91,6 +91,25 @@ describe("sectionsByAge / summarize", () => {
   it("counts only the last 24 hours and ranks skip reasons by code", () => {
     const s = summarize(groups, now);
     expect(s).toMatchObject({ total: 4, copied: 1, closed: 1, skipped: 2 });
-    expect(s.topSkipReasons).toEqual([{ label: "Price moved too far", n: 2 }]);
+    expect(s.topSkipReasons).toEqual([{ label: "The price ran away", n: 2 }]);
+  });
+
+  // Production showed "Price moved to 88.0¢ (leader paid 46.4¢) 29×": one trade's numbers
+  // on a count of 29 different trades.
+  it("names a skip reason by its kind, not by one trade's prices", () => {
+    const s = summarize(
+      groupSignals([
+        at(1, { reason: "Leader paid 99.9¢ (above 92.0¢ max)", reasonCode: "price_too_high" }),
+        at(2, { reason: "Leader paid 95.0¢ (above 92.0¢ max)", reasonCode: "price_too_high" }),
+        at(3, { reason: "Not enough cash: $0.40 left, need at least $1.00", reasonCode: null }),
+        at(4, { reason: "Something new", reasonCode: null }),
+      ]),
+      now,
+    );
+    expect(s.topSkipReasons).toEqual([
+      { label: "Price too high", n: 2 },
+      { label: "Not enough cash", n: 1 },
+      { label: "Something new", n: 1 },
+    ]);
   });
 });
