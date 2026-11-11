@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
-import { markets, traders, traderScores } from "@/lib/db/schema";
+import { follows, markets, traderPositions, traders, traderScores } from "@/lib/db/schema";
 import { lightCheck } from "@/lib/jobs/lightCheck";
 import { DEFAULT_ROTATION, pickDailyWallets } from "@/lib/jobs/rotation";
 import * as data from "@/lib/polymarket/data";
@@ -28,7 +28,7 @@ beforeAll(async () => {
 });
 afterAll(async () => close());
 beforeEach(async () => {
-  for (const t of [traderScores, markets, traders]) await db.delete(t);
+  for (const t of [traderPositions, follows, traderScores, markets, traders]) await db.delete(t);
 });
 
 const DAY = 86_400;
@@ -97,9 +97,9 @@ async function strongPostPickBets(wallet: string) {
     })),
   );
   vi.mocked(data.getPositions).mockImplementation(
-    async ({ status }) =>
+    async ({ status, user }) =>
       ({
-        data: status === "CLOSED" ? rows : [],
+        data: status === "CLOSED" ? rows.map((r) => ({ ...r, proxy_wallet: user })) : [],
         pagination: { has_more: false, next_cursor: null },
       }) as never,
   );
@@ -121,6 +121,49 @@ describe("cheap Candidate re-checks", () => {
     const pick = await pickDailyWallets(db, [], opts, new Date(NOW * 1000));
     expect(pick.wallets).toContain("0xc");
     expect(pick.light).not.toContain("0xc");
+  });
+
+  // prunePositions keeps the history of followed traders (paused too) and of traders whose
+  // copy we still hold, but the cheap re-check replaced ALL stored positions with the
+  // post-pick ones before it got there (production: a followed Candidate's page said
+  // "history isn't stored").
+  it("keeps a paused follow's older history; an unfollowed Candidate's is still dropped", async () => {
+    const older = (wallet: string) =>
+      [1, 2, 3].map((i) => ({
+        wallet,
+        conditionId: `old${i}`,
+        tokenId: `old-t${i}`,
+        status: "CLOSED",
+        avgPrice: 0.5,
+        size: 0,
+        sharesBought: 100,
+        totalCost: 50,
+        realizedPnl: 10,
+        firstEntryAt: ago(200 + i),
+        lastActivityAt: ago(190 + i),
+      }));
+    await candidate("0xpaused", 10);
+    await candidate("0xplain", 10);
+    await db.insert(follows).values({ wallet: "0xpaused", enabled: false });
+    await db.insert(traderPositions).values([...older("0xpaused"), ...older("0xplain")]);
+    await strongPostPickBets("0xpaused"); // the API mock answers for either wallet
+    await lightCheck(db, cfg, ["0xpaused", "0xplain"], () => {}, NOW);
+    const stored = async (w: string) =>
+      (await db.select().from(traderPositions).where(eq(traderPositions.wallet, w))).map(
+        (p) => p.tokenId,
+      );
+    const paused = await stored("0xpaused");
+    expect(paused).toEqual(expect.arrayContaining(["old-t1", "old-t2", "old-t3", "t0", "t119"]));
+    expect(paused).toHaveLength(123);
+    expect(await stored("0xplain")).toHaveLength(0); // pruned as before
+    // The older history doesn't leak into the skill test: both saw the same post-pick bets.
+    const skill = async (w: string) => {
+      const [s] = await db.select().from(traderScores).where(eq(traderScores.wallet, w));
+      const m = s.metrics as { nHoldout?: number; eSkill?: number };
+      return [m.nHoldout, m.eSkill];
+    };
+    expect((await skill("0xpaused"))[0]).toBeGreaterThan(0);
+    expect(await skill("0xpaused")).toEqual(await skill("0xplain"));
   });
 
   it("rotation: cheap re-check within 4 weeks of a full one, full after", async () => {

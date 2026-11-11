@@ -6,7 +6,7 @@
  * status OPEN/REDEEMABLE (current_price 0) rather than CLOSED, so BOTH lists are
  * fetched — using CLOSED alone would hide most losses.
  */
-import { and, eq, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import {
@@ -59,8 +59,15 @@ export function typicalStake(
  * Cheap re-check (owner decision 2026-11-09): only the positions opened since `from` (the
  * holdout start). Lists come newest-first by last event, so fetching stops at the first
  * position last active before `from`. Stored like a full backfill; pruned after scoring.
+ * With `keepOlder` (a wallet prunePositions would keep) the positions opened before `from`
+ * stay stored: only the post-pick ones are replaced.
  */
-export async function backfillPostPick(db: Db, wallet: string, from: number): Promise<number> {
+export async function backfillPostPick(
+  db: Db,
+  wallet: string,
+  from: number,
+  keepOlder = false,
+): Promise<number> {
   const since = async (status: "OPEN" | "CLOSED") => {
     const out: Position[] = [];
     for await (const p of paginate(
@@ -79,7 +86,24 @@ export async function backfillPostPick(db: Db, wallet: string, from: number): Pr
     if (row.firstEntryAt && row.firstEntryAt.getTime() >= from * 1000) byToken.set(p.token_id, row);
   }
   const rows = [...byToken.values()];
-  await db.delete(traderPositions).where(eq(traderPositions.wallet, wallet));
+  if (keepOlder) {
+    // Post-pick rows are replaced (by start time, and by token in case a start time moved).
+    await db
+      .delete(traderPositions)
+      .where(
+        and(
+          eq(traderPositions.wallet, wallet),
+          gte(traderPositions.firstEntryAt, new Date(from * 1000)),
+        ),
+      );
+    for (const part of chunk([...byToken.keys()], 400)) {
+      await db
+        .delete(traderPositions)
+        .where(and(eq(traderPositions.wallet, wallet), inArray(traderPositions.tokenId, part)));
+    }
+  } else {
+    await db.delete(traderPositions).where(eq(traderPositions.wallet, wallet));
+  }
   for (const part of chunk(rows, 400)) await db.insert(traderPositions).values(part);
   return rows.length;
 }
@@ -347,13 +371,8 @@ export async function resolveMarkets(
   return { fetched, resolved: updated.length };
 }
 
-/**
- * Remove bulky history for wallets that were rejected. Their score row stays (so the UI
- * can explain why), and `lastBackfillAt` is cleared so later scoring runs skip them
- * instead of re-scoring an empty history. Followed traders (paused too) and traders whose
- * copy we still hold are never pruned: their page and sizing need that history.
- */
-export async function prunePositions(db: Db, wallets: string[]): Promise<number> {
+/** Wallets whose history is never dropped: followed (paused too) or with a copy still open. */
+export async function keptWallets(db: Db): Promise<Set<string>> {
   const [followed, held] = await Promise.all([
     db.select({ w: follows.wallet }).from(follows),
     db
@@ -361,7 +380,17 @@ export async function prunePositions(db: Db, wallets: string[]): Promise<number>
       .from(paperPositions)
       .where(eq(paperPositions.status, "open")),
   ]);
-  const keep = new Set([...followed, ...held].map((r) => r.w));
+  return new Set([...followed, ...held].map((r) => r.w));
+}
+
+/**
+ * Remove bulky history for wallets that were rejected. Their score row stays (so the UI
+ * can explain why), and `lastBackfillAt` is cleared so later scoring runs skip them
+ * instead of re-scoring an empty history. Followed traders (paused too) and traders whose
+ * copy we still hold are never pruned: their page and sizing need that history.
+ */
+export async function prunePositions(db: Db, wallets: string[]): Promise<number> {
+  const keep = await keptWallets(db);
   let removed = 0;
   for (const part of chunk(
     wallets.filter((w) => !keep.has(w)),

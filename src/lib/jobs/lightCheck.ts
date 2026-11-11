@@ -16,7 +16,7 @@ import { computeMetrics, NO_EDGE_EVIDENCE, type TraderMetrics } from "@/lib/scor
 import { buildChecks } from "@/lib/scoring/score";
 import { eBenjaminiHochbergThreshold } from "@/lib/scoring/stats";
 
-import { backfillPostPick, prunePositions, resolveMarkets } from "./backfill";
+import { backfillPostPick, keptWallets, prunePositions, resolveMarkets } from "./backfill";
 import {
   loadEvidence,
   loadInputs,
@@ -54,11 +54,12 @@ export async function lightCheck(
     .where(inArray(traders.wallet, wallets));
   let failed = 0;
   const ok: string[] = [];
+  const keep = await keptWallets(db);
   await mapPool(rows, 2, async (r) => {
     const from = toEpoch(r.holdout ?? r.first);
     if (from === null) return;
     try {
-      await backfillPostPick(db, r.w, from);
+      await backfillPostPick(db, r.w, from, keep.has(r.w));
       ok.push(r.w);
     } catch {
       failed++;
