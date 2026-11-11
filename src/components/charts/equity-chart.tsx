@@ -11,7 +11,7 @@
  *   first, with change and trades per period) sits below.
  */
 import { cn } from "cn";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -116,13 +116,27 @@ const fmtTime = (ts: number, spanMs: number) => {
     ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
     : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
-const fmtFull = (ts: number) =>
+const fmtFull = (ts: number, timeZone?: string) =>
   new Date(ts).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone,
   });
+
+/**
+ * False on the server and during hydration, true right after. The server (UTC on Render)
+ * and the browser print a time differently, and text that differs between the two makes
+ * React throw a hydration error and redraw the page, so the first render uses UTC on both.
+ */
+const subscribeNever = () => () => {};
+const useHydrated = () =>
+  useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false,
+  );
 
 function Tip({ active, payload }: TooltipContentProps) {
   if (!active || !payload?.length) return null;
@@ -398,6 +412,7 @@ export function EquityChart({
 
 /** Newest first: equity at each snapshot, the change since the one before, and trades. */
 function EquityTable({ rows }: { rows: Row[] }) {
+  const hydrated = useHydrated();
   const table = useMemo(() => {
     const out: Array<{
       ts: number;
@@ -459,7 +474,9 @@ function EquityTable({ rows }: { rows: Row[] }) {
           <tbody>
             {table.map((r) => (
               <tr key={r.ts} className="border-t">
-                <td className="px-2.5 py-1.5 whitespace-nowrap">{fmtFull(r.ts)}</td>
+                <td className="px-2.5 py-1.5 whitespace-nowrap">
+                  {fmtFull(r.ts, hydrated ? undefined : "UTC")}
+                </td>
                 <td className="px-2.5 py-1.5 text-right">{usd(r.equity)}</td>
                 <td
                   className={cn(
