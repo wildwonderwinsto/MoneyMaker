@@ -109,7 +109,11 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
         <PendingArea>
           {list.length === 0 ? (
             <EmptyState title="No traders here yet" icon={SearchX}>
-              {(tiers.find((t) => t.value === tier) ?? TIER_TABS[0]).empty(scoring)}
+              {/* Nothing scored at all (a new install, or right after Start over): the tab's
+                  own text ("look at the Candidates") would point at more empty tabs. */}
+              {counts.all === 0 && !inCategory
+                ? "No traders have been scored yet. The daily scoring run finds and checks them; they appear here after it finishes."
+                : (tiers.find((t) => t.value === tier) ?? TIER_TABS[0]).empty(scoring)}
             </EmptyState>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
