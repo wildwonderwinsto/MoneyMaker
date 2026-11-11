@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { codeFromReason, explain, positionsNote } from "@/lib/explain";
+import { codeFromReason, explain, historyNote, positionsNote } from "@/lib/explain";
 
 describe("explain", () => {
   it("explains a price-moved skip with the real numbers, including old signals", () => {
@@ -97,5 +97,12 @@ describe("copy-delay label fallback (UI polish 2026-11-10)", () => {
     expect(copiedLate(undefined, 120)).toBe("2 min late");
     expect(copiedLate(300, 120)).toBe("5 min late"); // the stored delay wins
     expect(copiedLate(undefined)).toBe("late");
+  });
+});
+
+describe("historyNote: Cumulative profit when daily history was pruned", () => {
+  it("says why, and that the chart is by month when months are kept", () => {
+    expect(historyNote("candidate", true)).toMatch(/^By month\. .*Candidates.*next check/);
+    expect(historyNote("rejected", false)).toMatch(/^Day-by-day history is only kept for/);
   });
 });

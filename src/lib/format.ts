@@ -118,3 +118,33 @@ export function timeAgo(date: Date | string | null | undefined, now = Date.now()
 
 export const polymarketProfileUrl = (wallet: string) => `https://polymarket.com/profile/${wallet}`;
 export const polymarketMarketUrl = (slug: string) => `https://polymarket.com/market/${slug}`;
+
+/**
+ * Chart and table date labels. A date-only value ("2026-11-04", or a month "2026-05") is a
+ * calendar day, not an instant: JavaScript reads it as midnight UTC, so it's shown in UTC
+ * (in local time a US browser showed the day before). Full timestamps stay local.
+ */
+export function dateLabel(t: string): string {
+  if (/^\d{4}-\d{2}$/.test(t)) {
+    return new Date(`${t}-01T00:00:00Z`).toLocaleDateString("en-US", {
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  }
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return t;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(/^\d{4}-\d{2}-\d{2}$/.test(t) && { timeZone: "UTC" }),
+  });
+}
+
+/** Cumulative profit at each month end, from monthly P&L (kept with the score). */
+export function monthlyCumulative(
+  months: Array<{ month: string; pnl: number }> | undefined,
+): Array<{ t: string; pnl: number }> {
+  let sum = 0;
+  return (months ?? []).map((m) => ({ t: m.month, pnl: (sum += m.pnl) }));
+}

@@ -13,7 +13,7 @@ import {
 
 import { useMemo, useRef } from "react";
 
-import { axisUsd, pct, usd } from "@/lib/format";
+import { axisUsd, dateLabel, pct, usd } from "@/lib/format";
 
 import { useChartZoom, ZoomControls, ZoomHint, zoomSurface } from "./zoom";
 
@@ -28,12 +28,7 @@ export interface Series {
 
 const fmt = (v: number, f: ValueFormat) => (f === "usd" ? usd(v, { compact: true }) : pct(v));
 
-const fmtX = (t: string) => {
-  const d = new Date(t);
-  return Number.isNaN(d.getTime())
-    ? t
-    : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-};
+const fmtX = dateLabel;
 
 function ChartTooltip({ active, payload, format }: TooltipContentProps & { format: ValueFormat }) {
   if (!active || !payload?.length) return null;

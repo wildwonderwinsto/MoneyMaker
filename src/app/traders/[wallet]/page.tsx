@@ -23,10 +23,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { ScoreCheck } from "@/lib/db/schema";
-import { positionsNote } from "@/lib/explain";
+import { historyNote, positionsNote } from "@/lib/explain";
 import {
   cents,
   copiedLate,
+  monthlyCumulative,
   num,
   pct,
   polymarketMarketUrl,
@@ -171,6 +172,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
   };
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
+  const monthly = monthlyCumulative(metrics.monthlyPnl);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -313,13 +315,21 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               <Card className="gap-4 py-4 sm:gap-6 sm:py-6">
                 <CardHeader className="px-4 sm:px-6">
                   <CardTitle>Cumulative profit</CardTitle>
-                  <CardDescription>Realized + unrealized P&L, daily</CardDescription>
+                  <CardDescription>
+                    {pnl.length > 0
+                      ? "Realized + unrealized P&L, daily"
+                      : historyNote(score.tier, monthly.length > 0)}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="px-4 sm:px-6">
-                  <LineChart
-                    data={pnl.map((p) => ({ t: p.day, pnl: p.pnl }))}
-                    series={[{ key: "pnl", label: "Cumulative P&L", color: "var(--series-1)" }]}
-                  />
+                  {/* Daily history is pruned for Candidates and Rejected traders (storage); the
+                      monthly P&L kept with their score still gives the shape. */}
+                  {pnl.length > 0 || monthly.length > 0 ? (
+                    <LineChart
+                      data={pnl.length > 0 ? pnl.map((p) => ({ t: p.day, pnl: p.pnl })) : monthly}
+                      series={[{ key: "pnl", label: "Cumulative P&L", color: "var(--series-1)" }]}
+                    />
+                  ) : null}
                 </CardContent>
               </Card>
               <Card className="gap-4 py-4 sm:gap-6 sm:py-6">

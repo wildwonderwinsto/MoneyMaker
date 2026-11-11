@@ -343,3 +343,15 @@ export function positionsNote(tier: string | null | undefined, positions: number
   }
   return "Position history is only kept for followed, Proven, Elite, Verified and Watchlist traders.";
 }
+
+/**
+ * The Cumulative profit card's subtitle when the daily P&L history isn't stored (pruned for
+ * Candidates and Rejected traders): the chart falls back to month ends, if there are any.
+ */
+export function historyNote(tier: string | null | undefined, hasMonths: boolean): string {
+  const why =
+    tier === "candidate"
+      ? "Day-by-day history isn't stored for Candidates; it reloads at the next check (about weekly)."
+      : "Day-by-day history is only kept for followed, Proven, Elite, Verified and Watchlist traders.";
+  return hasMonths ? `By month. ${why}` : why;
+}
