@@ -242,12 +242,16 @@ export function provenStatus(m: TraderMetrics, cfg: ScoringConfig): ProvenStatus
   };
 }
 
-/** Weighted composite (0–100). Higher = stronger, more reliable edge. */
+/**
+ * Weighted composite (0–100). Higher = stronger, more reliable edge. Owner, 2026-11-11:
+ * profitable months count for more (15 → 25), taken from skill (30 → 25) and return on
+ * risk (20 → 15), so steady traders sort above streaky ones with a similar record.
+ */
 export function compositeScore(m: TraderMetrics): number {
   const parts = [
-    30 * clamp((m.zSkill ?? 0) / 4),
-    20 * clamp((m.roiShrunk ?? 0) / 0.3),
-    15 * (m.profitableMonthsPct ?? 0),
+    25 * clamp((m.zSkill ?? 0) / 4),
+    15 * clamp((m.roiShrunk ?? 0) / 0.3),
+    25 * (m.profitableMonthsPct ?? 0),
     10 * clamp((m.sharpe ?? 0) / 3),
     10 * (1 - (m.topMarketShare ?? 1)),
     10 * (m.copyAdjRoi === null ? 0.5 : clamp(m.copyAdjRoi / 0.2)),
