@@ -1522,11 +1522,21 @@ export interface ExitResult {
  * right now. Used when the admin hides a trader. Anything that can't be sold stays open:
  * the engine keeps mirroring the trader's sells for it, and settlement pays it out otherwise.
  */
-export async function exitTrader(
-  rawDb: Db,
-  wallet: string,
-  nowMs = Date.now(),
-): Promise<ExitResult> {
+export function exitTrader(rawDb: Db, wallet: string, nowMs = Date.now()): Promise<ExitResult> {
+  return exitPositions(rawDb, wallet, nowMs);
+}
+
+/**
+ * Sell all: every open paper position (copies and hedges, every trader) at the best bids
+ * right now, by the same rules as exitTrader. Following is untouched, so new trades are
+ * still copied.
+ */
+export function exitAll(rawDb: Db, nowMs = Date.now()): Promise<ExitResult> {
+  return exitPositions(rawDb, null, nowMs);
+}
+
+/** Sell the open positions copied from `wallet` (null = all of them). */
+async function exitPositions(rawDb: Db, wallet: string | null, nowMs: number): Promise<ExitResult> {
   const out: ExitResult = { sold: 0, left: 0, proceeds: 0, pnl: 0 };
   const lease = await waitForLease(rawDb, 30);
   if (!lease) return { ...out, skipped: "Engine busy" };
@@ -1539,7 +1549,7 @@ export async function exitTrader(
       .where(
         and(
           eq(paperPositions.accountId, account.id),
-          eq(paperPositions.sourceWallet, wallet),
+          wallet === null ? undefined : eq(paperPositions.sourceWallet, wallet),
           eq(paperPositions.status, "open"),
         ),
       );
@@ -1552,6 +1562,8 @@ export async function exitTrader(
       mapSettled([...new Set(open.map((p) => p.tokenId))], (id) => getBook(id)),
     ]);
     const ts = Math.floor(nowMs / 1000);
+    // The floor is measured from the book as fetched, not one an earlier sale here thinned.
+    const fetched = new Map(books);
     for (const p of open) {
       const market = info.get(p.conditionId);
       const book = books.get(p.tokenId);
@@ -1562,7 +1574,7 @@ export async function exitTrader(
       }
       // The sell floor applies here too (UI-11). There's no trader price, so it's measured
       // from the market midpoint; what can't sell above it stays open.
-      const ref = bookMidpoint(book);
+      const ref = bookMidpoint(fetched.get(p.tokenId) ?? book);
       const floor = cfg.sellFloorPct > 0 && ref !== null ? ref * (1 - cfg.sellFloorPct) : 0;
       const fill = simulateSell(
         book.bids,
@@ -1581,7 +1593,7 @@ export async function exitTrader(
           p,
           {
             id: `exit:${p.id}:${ts}`,
-            wallet,
+            wallet: p.sourceWallet,
             ts,
             conditionId: p.conditionId,
             tokenId: p.tokenId,
@@ -1597,6 +1609,8 @@ export async function exitTrader(
           fill,
         ),
       );
+      // Two positions on one token (e.g. copied from two traders) share its bids (C-F16).
+      consumeBook(books, p.tokenId, "bids", fill.shares);
       out.sold++;
       out.proceeds += fill.notional;
       out.pnl += pnl;

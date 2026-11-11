@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as account from "@/lib/copy/account";
 import { DEFAULT_RISK_CONFIG } from "@/lib/copy/config";
 import { mergeFills, type LeaderTrade } from "@/lib/copy/engine";
-import { executeHedge, exitTrader, leaderSoldFraction, runTick } from "@/lib/copy/tick";
+import { executeHedge, exitAll, exitTrader, leaderSoldFraction, runTick } from "@/lib/copy/tick";
 import type { Db } from "@/lib/db/client";
 import { cursors, follows, paperAccounts, paperPositions, signals } from "@/lib/db/schema";
 import * as clob from "@/lib/polymarket/clob";
@@ -529,6 +529,73 @@ describe("the sell floor when there's no trader price (batch 6)", () => {
     const r = await exitTrader(db, LEADER, (t0 + 40) * 1000);
     expect(r).toMatchObject({ sold: 1, left: 0 });
     expect(await openShares()).toEqual([]);
+  });
+});
+
+describe("Sell all (owner, 2026-11-10)", () => {
+  const L2 = "0xleader2";
+
+  it("sells every open position, copies and hedges, at the best bids", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    const [copy] = await db.select().from(paperPositions);
+    const hedged = await executeHedge(db, copy.accountId, copy.id, "lock", DEFAULT_RISK_CONFIG, {
+      maxCost: Number.POSITIVE_INFINITY,
+    });
+    expect(hedged.ok).toBe(true);
+    expect(await openShares()).toHaveLength(2);
+    const r = await exitAll(db, (t0 + 40) * 1000);
+    expect(r).toMatchObject({ sold: 2, left: 0 });
+    expect(await openShares()).toEqual([]);
+    // Following is untouched: new trades are still copied.
+    expect((await db.select().from(follows)).map((f) => f.enabled)).toEqual([true]);
+  });
+
+  it("positions on the same token share one order book (no liquidity sold twice)", async () => {
+    await db.insert(follows).values({ wallet: L2 });
+    await db.insert(cursors).values({ wallet: L2, lastTs: t0 - 60 });
+    rows = [
+      act({ transaction_hash: "0xbuy" }),
+      act({ proxy_wallet: L2, transaction_hash: "0xbuy2" }),
+    ];
+    await runTick(db, (t0 + 20) * 1000);
+    expect(await openShares()).toEqual([40, 40]);
+    // 50 shares bid at 49¢, then nobody: only 50 of the 80 can sell.
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => ({
+      ...book(id),
+      bids: [{ price: 0.49, size: 50 }],
+    }));
+    const r = await exitAll(db, (t0 + 40) * 1000);
+    expect(r).toMatchObject({ sold: 2, left: 1 });
+    expect(r.proceeds).toBeCloseTo(50 * 0.49, 6);
+    const left = await openShares();
+    expect(left).toHaveLength(1);
+    expect(left[0]).toBeCloseTo(30, 6);
+  });
+
+  it("respects the sell floor and leaves what can't sell open", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    await writeSetting(db, "risk", {
+      ...DEFAULT_RISK_CONFIG,
+      sizingMode: "fixed",
+      fixedUsd: 20,
+      sellFloorPct: 0.2,
+    });
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => ({
+      ...book(id),
+      bids: [
+        { price: 0.49, size: 10 },
+        { price: 0.2, size: 10_000 },
+      ],
+    }));
+    const r = await exitAll(db, (t0 + 40) * 1000);
+    expect(r).toMatchObject({ sold: 1, left: 1 });
+    expect((await openShares())[0]).toBeCloseTo(30, 6);
+  });
+
+  it("with nothing open, sells nothing", async () => {
+    expect(await exitAll(db, (t0 + 40) * 1000)).toEqual({ sold: 0, left: 0, proceeds: 0, pnl: 0 });
   });
 });
 

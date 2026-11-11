@@ -9,7 +9,13 @@ import { checkPasswordAndSetCookie, clearAdminCookie, requireAdmin } from "@/lib
 import { ensureDefaultAccount, resetAccount } from "@/lib/copy/account";
 import { RiskConfigSchema } from "@/lib/copy/config";
 import { notifyEngine } from "@/lib/copy/runner";
-import { executeHedge, exitTrader, withEngineLease, type ExitResult } from "@/lib/copy/tick";
+import {
+  executeHedge,
+  exitAll,
+  exitTrader,
+  withEngineLease,
+  type ExitResult,
+} from "@/lib/copy/tick";
 import { getDb } from "@/lib/db/client";
 import { cursors, follows, hiddenTraders } from "@/lib/db/schema";
 import { env } from "@/lib/env";
@@ -164,6 +170,39 @@ export async function setHiddenAction(wallet: string, hidden: boolean): Promise<
     await db.delete(hiddenTraders).where(eq(hiddenTraders.wallet, w));
     return "Restored to Top traders";
   });
+}
+
+/** What Sell all did, in one line. */
+function sellAllMessage(r: ExitResult): string {
+  if (r.skipped) return "The engine was busy, so nothing was sold. Try again in a moment.";
+  if (r.sold === 0 && r.left === 0) return "No open positions to sell";
+  const parts: string[] = [];
+  if (r.sold > 0) {
+    parts.push(
+      `Sold ${r.sold} position${r.sold === 1 ? "" : "s"} for ${usd(r.proceeds)} (${usd(r.pnl, { sign: true })})`,
+    );
+  }
+  if (r.left > 0) {
+    parts.push(
+      `${r.left} couldn't be sold now (no buyers, market closed, or below your sell floor) and stay open`,
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * Sell every open paper position at the best bids right now (copies and hedges). Following
+ * is untouched: new trades are still copied.
+ */
+export async function sellAllAction(): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const r = await exitAll(getDb());
+    refresh();
+    return { ok: !r.skipped, message: sellAllMessage(r) };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Something went wrong" };
+  }
 }
 
 export async function resetPaperAction(_prev: ActionResult | null, form: FormData) {

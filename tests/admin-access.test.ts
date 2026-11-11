@@ -12,7 +12,13 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
 }));
 const runTick = vi.fn(async () => ({ errors: [] }));
-vi.mock("@/lib/copy/tick", () => ({ runTick, executeHedge: vi.fn(), exitTrader: vi.fn() }));
+const exitAll = vi.fn();
+vi.mock("@/lib/copy/tick", () => ({
+  runTick,
+  executeHedge: vi.fn(),
+  exitTrader: vi.fn(),
+  exitAll,
+}));
 vi.mock("@/lib/copy/runner", () => ({
   getRunner: () => ({ isRunning: false }),
   notifyEngine: async () => {},
@@ -47,6 +53,13 @@ describe("no ADMIN_PASSWORD", () => {
     const f = new FormData();
     f.set("balance", "10");
     expect((await resetPaperAction(null, f)).ok).toBe(false);
+  });
+
+  it("locks Sell all too: nothing is sold", async () => {
+    await withEnv({ DATABASE_URL: REMOTE, NODE_ENV: "development" });
+    const { sellAllAction } = await import("@/app/actions");
+    expect((await sellAllAction()).ok).toBe(false);
+    expect(exitAll).not.toHaveBeenCalled();
   });
 
   it("stays open for local development on PGlite", async () => {

@@ -9,7 +9,15 @@ import { EquityChart } from "@/components/charts/equity-chart";
 import { EmptyState, MarketThumb, PageHeader, Signed, StatTile } from "@/components/common";
 import { ResetPaperForm } from "@/components/forms";
 import { LockedAction } from "@/components/locked-action";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { SellAllButton } from "@/components/sell-all-button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isAdmin } from "@/lib/admin";
 import { cents, num, pct, timeAgo, traderName, usd } from "@/lib/format";
@@ -107,6 +115,12 @@ async function PaperContent() {
           <CardDescription>
             Tap a position to see its trades, the trader&apos;s moves and hedge options.
           </CardDescription>
+          {/* Kept for the admin with nothing open, so its result stays after selling out. */}
+          {(admin || p.open.length > 0) && (
+            <CardAction>
+              {admin ? <SellAllButton open={p.open.length} /> : <LockedAction label="Sell all" />}
+            </CardAction>
+          )}
         </CardHeader>
         <CardContent className="px-3 sm:px-6">
           {p.open.length === 0 ? (
