@@ -82,6 +82,57 @@ describe("equity chart markers (UI-05)", () => {
   });
 });
 
+describe("finished trades: each position's own fills (owner, 2026-11-10)", () => {
+  it("sums a position's fills, not the fills whose id happens to equal the position's id", async () => {
+    // Real data: fill ids run ahead of position ids. A bare "id" in the subquery meant the
+    // fill's own id, so Finished trades showed other positions' buys and no sells.
+    const positions = await db
+      .insert(paperPositions)
+      .values([closed("a", 1, -2), closed("b", 2, 3)])
+      .returning({ id: paperPositions.id });
+    const fill = (positionId: number, side: string, shares: number, notional: number) => ({
+      accountId,
+      positionId,
+      kind: "trade" as const,
+      side,
+      shares,
+      avgPrice: notional / shares,
+      notional,
+    });
+    // An unrelated fill first, so fill ids no longer line up with position ids.
+    const [other] = await db
+      .insert(paperPositions)
+      .values(closed("c", 3, 0))
+      .returning({ id: paperPositions.id });
+    await db
+      .insert(paperFills)
+      .values([
+        fill(other.id, "BUY", 1, 0.5),
+        fill(positions[0].id, "BUY", 40, 20),
+        fill(positions[1].id, "BUY", 50, 25),
+        fill(positions[0].id, "SELL", 40, 18),
+        fill(positions[1].id, "SELL", 50, 28),
+      ]);
+    const p = await getPaperOverview();
+    const byId = new Map(p.closed.map((c) => [c.id, c]));
+    expect(byId.get(positions[0].id)).toMatchObject({
+      boughtShares: 40,
+      boughtUsd: 20,
+      exitUsd: 18,
+    });
+    expect(byId.get(positions[1].id)).toMatchObject({
+      boughtShares: 50,
+      boughtUsd: 25,
+      exitUsd: 28,
+    });
+    const invested = new Map(p.byTrader.map((t) => [t.wallet, t.invested]));
+    expect(invested.get("a")).toBe(20);
+    expect(invested.get("b")).toBe(25);
+    const listed = p.byTrader.flatMap((t) => t.positions);
+    expect(listed.find((x) => x.id === positions[0].id)?.invested).toBe(20);
+  });
+});
+
 describe("win rate (UI-06)", () => {
   it("counts finished copies only, not hedges", async () => {
     await db.insert(paperPositions).values([

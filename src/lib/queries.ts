@@ -280,6 +280,13 @@ export async function getFollowList() {
   );
 }
 
+/**
+ * The outer row's position id, for correlated subqueries over paper_fills. Not
+ * `${paperPositions.id}`: in a single-table select drizzle renders that as a bare "id",
+ * which inside `from paper_fills f` means the fill's own id.
+ */
+const OUTER_POSITION_ID = sql`"paper_positions"."id"`;
+
 export async function getPaperOverview() {
   const db = getDb();
   const account = await ensureDefaultAccount(db);
@@ -288,7 +295,7 @@ export async function getPaperOverview() {
 
   // Per finished position: what we bought and how we got out (sells + settlement).
   const fillSum = (expr: string, where: string) =>
-    sql<number>`coalesce((select sum(${sql.raw(expr)}) from paper_fills f where f.position_id = ${paperPositions.id} and ${sql.raw(where)}), 0)::float8`;
+    sql<number>`coalesce((select sum(${sql.raw(expr)}) from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and ${sql.raw(where)}), 0)::float8`;
   const [closed, equity, byTrader, allPositions, markersDesc, totals, investedRows] =
     await Promise.all([
       db
@@ -301,7 +308,7 @@ export async function getPaperOverview() {
           soldShares: fillSum("f.shares", "f.side = 'SELL'"),
           settlement: sql<
             string | null
-          >`(select f.side from paper_fills f where f.position_id = ${paperPositions.id} and f.kind = 'settlement' order by f.ts desc limit 1)`,
+          >`(select f.side from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and f.kind = 'settlement' order by f.ts desc limit 1)`,
         })
         .from(paperPositions)
         .where(and(eq(paperPositions.accountId, account.id), ne(paperPositions.status, "open")))
@@ -344,7 +351,7 @@ export async function getPaperOverview() {
           realizedPnl: paperPositions.realizedPnl,
           openedAt: paperPositions.openedAt,
           closedAt: paperPositions.closedAt,
-          invested: sql<number>`coalesce((select sum(f.notional) from paper_fills f where f.position_id = ${paperPositions.id} and f.side = 'BUY'), 0)::float8`,
+          invested: sql<number>`coalesce((select sum(f.notional) from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and f.side = 'BUY'), 0)::float8`,
         })
         .from(paperPositions)
         .where(eq(paperPositions.accountId, account.id))
