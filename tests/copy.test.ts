@@ -191,6 +191,23 @@ describe("decideBuy", () => {
     expect(reason({ ...ctx, book: null })).toMatch(/No sellers/);
   });
 
+  // Live run, 2026-11-11: order books aren't fetched for trades under the minimum, so 77 of
+  // 84 were logged "No sellers", re-checked a tick later (one extra book request each) and
+  // only then called too small.
+  it("calls a dust trade too small without needing its order book", () => {
+    const dust = { ...trade, usdc: 10, size: 20 };
+    expect(decideBuy({ ...ctx, trade: dust, book: null })).toMatchObject({
+      action: "skip",
+      code: "leader_too_small",
+      details: { leaderUsd: 10, minLeaderUsd: 25 },
+    });
+    // Same answer with a book whose price ran away: it could never be copied either way.
+    const moved = { ...book, asks: [{ price: 0.6, size: 100 }] };
+    expect(decideBuy({ ...ctx, trade: dust, book: moved })).toMatchObject({
+      code: "leader_too_small",
+    });
+  });
+
   it("caps copied buys per position only when the limit is on", () => {
     expect(decideBuy({ ...ctx, positionBuys: 5 }).action).toBe("buy");
     const capped = { ...cfg, maxBuysPerPosition: 2 };

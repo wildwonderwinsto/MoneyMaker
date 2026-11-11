@@ -225,6 +225,22 @@ describe("decideBuy checks cash before anything else", () => {
   });
 });
 
+describe("a trade under the minimum size", () => {
+  it("is skipped as too small straight away: no order book, no re-check", async () => {
+    await setCash(1000);
+    vi.mocked(data.getActivity).mockResolvedValue(page([activity({ size: 20, usdc_size: 10 })]));
+    await copyOnly(t0 + 30);
+    expect(await signal(`0xtx${t0}`)).toMatchObject({
+      decision: "skipped",
+      reasonCode: "leader_too_small",
+    });
+    vi.mocked(data.getActivity).mockResolvedValue(page([]));
+    await copyOnly(t0 + 45);
+    expect(clob.getBook).not.toHaveBeenCalled();
+    expect(await signal(`0xtx${t0}`)).toMatchObject({ retries: 0 });
+  });
+});
+
 describe("the engine when the account is out of cash", () => {
   it("skips the buy, says why, and fetches no order book", async () => {
     await spendAllCash();

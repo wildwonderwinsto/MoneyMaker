@@ -10,7 +10,7 @@ import { isComboCondition } from "@/lib/polymarket/gamma";
 
 import type { RiskConfig } from "./config";
 import { simulateBuy, simulateSell, type Fill } from "./fillSim";
-import { hasCashToBuy, sizeBuy } from "./sizing";
+import { hasCashToBuy, leaderTooSmall, sizeBuy } from "./sizing";
 
 export interface LeaderTrade {
   /** Id of the (first) fill; see polymarket/data.ts tradeId. */
@@ -168,6 +168,10 @@ export function decideBuy(ctx: BuyContext): Decision {
       { positionBuys: buys, maxBuysPerPosition: cfg.maxBuysPerPosition },
     );
   }
+  // Before the book: none is fetched for a trade this small (see buyMayCopy in tick.ts), and
+  // "No sellers" would be wrong and would be re-checked with a book request every tick.
+  const tooSmall = leaderTooSmall(trade.usdc, cfg);
+  if (tooSmall) return skip(tooSmall.reason, tooSmall.code, tooSmall.details);
   if (!book || book.asks.length === 0) {
     return skip("No sellers in the order book", "no_sellers", { leaderPrice: trade.price });
   }

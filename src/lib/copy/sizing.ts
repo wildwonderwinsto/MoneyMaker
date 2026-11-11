@@ -30,20 +30,28 @@ export function hasCashToBuy(cash: number, cfg: Pick<RiskConfig, "minOrderUsd">)
   return cash > 0 && cash >= cfg.minOrderUsd;
 }
 
+/** The skip for a leader trade under "Ignore trader trades under"; null when it is big enough. */
+export function leaderTooSmall(
+  leaderUsd: number,
+  cfg: Pick<RiskConfig, "minLeaderUsd">,
+): Extract<SizingResult, { usd: 0 }> | null {
+  if (leaderUsd >= cfg.minLeaderUsd) return null;
+  return {
+    usd: 0,
+    reason: `Leader trade too small ($${leaderUsd.toFixed(2)})`,
+    code: "leader_too_small",
+    details: { leaderUsd, minLeaderUsd: cfg.minLeaderUsd },
+  };
+}
+
 /** How many USDC to put into a copied buy, after every risk cap. */
 export function sizeBuy(input: SizingInput, cfg: RiskConfig): SizingResult {
   const { equity, cash, leaderUsd, leaderTypicalUsd, weight } = input;
   if (equity <= 0 || cash <= 0) {
     return { usd: 0, reason: "No cash available", code: "no_cash", details: { cash, equity } };
   }
-  if (leaderUsd < cfg.minLeaderUsd) {
-    return {
-      usd: 0,
-      reason: `Leader trade too small ($${leaderUsd.toFixed(2)})`,
-      code: "leader_too_small",
-      details: { leaderUsd, minLeaderUsd: cfg.minLeaderUsd },
-    };
-  }
+  const tooSmall = leaderTooSmall(leaderUsd, cfg);
+  if (tooSmall) return tooSmall;
 
   let usd: number;
   let conviction: number | null = null;
