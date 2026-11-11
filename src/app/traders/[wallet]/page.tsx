@@ -37,6 +37,10 @@ import {
   usd,
 } from "@/lib/format";
 import { getDb } from "@/lib/db/client";
+import type { ScoringConfig } from "@/lib/scoring/config";
+import type { TraderMetrics } from "@/lib/scoring/metrics";
+import { provenStatus } from "@/lib/scoring/score";
+import { normalCdf } from "@/lib/scoring/stats";
 import { getScoringConfig } from "@/lib/settings";
 import { getTrader } from "@/lib/queries";
 
@@ -52,6 +56,77 @@ const PCT_CHECKS = new Set([
   "copy_loss",
   "recent",
 ]);
+
+function CheckRow({ ok, label, value }: { ok: boolean; label: string; value: string }) {
+  return (
+    <li className="flex items-start gap-2 text-sm">
+      {ok ? (
+        <CheckCircle2 className="text-yes mt-0.5 size-4 shrink-0" aria-label="Pass" />
+      ) : (
+        <XCircle className="text-no mt-0.5 size-4 shrink-0" aria-label="Fail" />
+      )}
+      <span className="flex-1">{label}</span>
+      <span className="text-muted-foreground text-xs tabular-nums">{value}</span>
+    </li>
+  );
+}
+
+/**
+ * The Proven tier's record: the trader's bets since they became Verified, replayed as
+ * copies (late, with slippage and fees). Shown once they've been Verified.
+ */
+function ProvenRecord({
+  metrics,
+  cfg,
+  passed,
+}: {
+  metrics: Partial<TraderMetrics>;
+  cfg: ScoringConfig;
+  passed: boolean;
+}) {
+  if (typeof metrics.sinceVerifiedFrom !== "number") return null;
+  const p = provenStatus(metrics as TraderMetrics, cfg);
+  const since = new Date(metrics.sinceVerifiedFrom * 1000).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const open = metrics.sinceVerifiedOpenCopies ?? 0;
+  return (
+    <div className="mt-5 border-t pt-4">
+      <p className="text-sm font-medium">Proven record</p>
+      <p className="text-muted-foreground mt-0.5 mb-3 text-xs">
+        Their bets since they were verified ({since}), copied late with slippage and fees.
+        {passed ? "" : " Counts only while every check above passes."}
+      </p>
+      <ul className="space-y-2.5">
+        <CheckRow
+          ok={p.days !== null && p.days >= cfg.provenMinDays}
+          label={`At least ${cfg.provenMinDays} days since verified`}
+          value={p.days === null ? "not measured" : `${num(p.days, 0)} days`}
+        />
+        <CheckRow
+          ok={p.copies !== null && p.copies >= cfg.provenMinCopies}
+          label={`At least ${cfg.provenMinCopies} copied bets since verified`}
+          value={
+            p.copies === null
+              ? "not replayed"
+              : `${p.copies} bets${open ? ` (${open} still open)` : ""}`
+          }
+        />
+        <CheckRow
+          ok={p.copyRoi !== null && p.copyRoi > 0}
+          label={
+            "Copying them made money since" +
+            (cfg.copyRoiZ > 0 ? ` (${pct(normalCdf(cfg.copyRoiZ), 0)} confident)` : "")
+          }
+          value={p.copyRoi === null ? "not measured" : pct(p.copyRoi, 1, { sign: true })}
+        />
+      </ul>
+    </div>
+  );
+}
 
 function checkValue(c: ScoreCheck): string {
   if (c.display) return c.display;
@@ -220,22 +295,14 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               <CardContent className="px-4 sm:px-6">
                 <ul className="space-y-2.5">
                   {score.checks.map((c) => (
-                    <li key={c.code} className="flex items-start gap-2 text-sm">
-                      {c.ok ? (
-                        <CheckCircle2
-                          className="text-yes mt-0.5 size-4 shrink-0"
-                          aria-label="Pass"
-                        />
-                      ) : (
-                        <XCircle className="text-no mt-0.5 size-4 shrink-0" aria-label="Fail" />
-                      )}
-                      <span className="flex-1">{c.label}</span>
-                      <span className="text-muted-foreground text-xs tabular-nums">
-                        {checkValue(c)}
-                      </span>
-                    </li>
+                    <CheckRow key={c.code} ok={c.ok} label={c.label} value={checkValue(c)} />
                   ))}
                 </ul>
+                <ProvenRecord
+                  metrics={score.metrics as Partial<TraderMetrics>}
+                  cfg={scoring}
+                  passed={score.passed}
+                />
               </CardContent>
             </Card>
 

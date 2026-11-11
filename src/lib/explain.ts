@@ -341,5 +341,5 @@ export function positionsNote(tier: string | null | undefined, positions: number
   if (tier === "candidate") {
     return "Candidate: history isn't stored between checks; it reloads at the next check (about weekly).";
   }
-  return "Position history is only kept for followed, Verified, Elite and Watchlist traders.";
+  return "Position history is only kept for followed, Proven, Elite, Verified and Watchlist traders.";
 }

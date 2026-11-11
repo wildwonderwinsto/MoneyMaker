@@ -26,18 +26,32 @@ after the trader was first picked):
 | Copyable?           | Still profitable when copied late (2 minutes by default) with slippage, dollar-weighted (rejected outright if copying clearly loses money); not a bot or market maker; holds long enough                                                                                                                                                              |
 | Still good?         | Profitable in the last 60 days, traded in the last 14 days                                                                                                                                                                                                                                                                                            |
 
-Traders who pass everything are **Verified** (or **Elite** when the score is ≥ 70). A newly
-picked trader who passes everything else is a **Candidate** while evidence on their new bets
-builds; they're rejected once those bets show an edge below 5 points, or after 180 days
-without proof. Near misses go on the **Watchlist** (up to 3 failed checks; only 1 while a Candidate's
-skill is still being tested — that limit keeps the re-check list short, it isn't a
-statistical test). Each trader's page shows every check and why it passed or
-failed. All thresholds can be changed in **Settings**.
+Tiers, best first:
+
+| Tier          | Means                                                                                                                                                                                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Proven**    | Verified or Elite, **and** copying them has paid since they were verified: their bets since then, replayed like the copy check (2 minutes late, slippage, fees), cover ≥ 30 days and ≥ 50 copied bets with a cautious copy return above 0 (same 90% confidence setting). |
+| **Elite**     | Passes everything with a score ≥ 70.                                                                                                                                                                                                                                     |
+| **Verified**  | Passes everything.                                                                                                                                                                                                                                                       |
+| **Candidate** | Newly picked and passes everything else while evidence on their new bets builds; rejected once those bets show an edge below 5 points, or after 180 days without proof.                                                                                                  |
+| **Watchlist** | Near misses: up to 3 failed checks (only 1 while a Candidate's skill is still being tested — that limit keeps the re-check list short, it isn't a statistical test).                                                                                                     |
+| **Rejected**  | Everyone else.                                                                                                                                                                                                                                                           |
+
+Proven is the only tier judged on what happened **after** a trader was verified, so it's the
+one that says the selection itself worked. The record starts at the first check that finds
+them Verified; a dip to the Watchlist doesn't reset it (the bad stretch stays in), and it
+restarts only when a rejected trader is picked again. A Proven trader who falls below any
+of it drops back to Elite/Verified (or lower, if a check fails). Existing Verified/Elite
+traders start their record at the first scoring run after this tier was added.
+
+Each trader's page shows every check, why it passed or failed, and their Proven record. All
+thresholds can be changed in **Settings**. The Traders page has a tab per tier (with counts
+and a short explanation on hover), then Following, Everyone and Hidden.
 
 A walk-forward **backtest** asks: "if I had picked traders this way each month, using only
 what was known then, how would copying them have done?" It compares against simply copying
 last month's top earners. Past months re-derived from today's leaderboards only contain
-traders who survived, so each month's real picks (top Verified traders and the month
+traders who survived, so each month's real picks (top Proven/Elite/Verified traders and the month
 leaderboard's top earners, bots left out) are also **recorded as they happen**. Recorded
 months replace the re-derived ones; once a month is over, each pick's month is rebuilt from
 their own activity. That removes survivorship from the picks, but it is still an estimate:

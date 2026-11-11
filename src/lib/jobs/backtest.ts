@@ -27,7 +27,7 @@ const monthsBack = (now: Date, back: number) =>
 
 /**
  * Record this month's picks once, on the month's first daily run: the strategy's top
- * Verified/Elite traders (after today's scoring) and the overall month leaderboard's top
+ * Proven/Elite/Verified traders (after today's scoring) and the overall month leaderboard's top
  * earners (from today's discovery). Later runs this month leave them untouched.
  */
 export async function recordMonthlySelections(
@@ -53,7 +53,7 @@ export async function recordMonthlySelections(
     const picks = await db
       .select({ wallet: traderScores.wallet })
       .from(traderScores)
-      .where(inArray(traderScores.tier, ["elite", "verified"]))
+      .where(inArray(traderScores.tier, ["proven", "elite", "verified"]))
       .orderBy(desc(traderScores.score))
       .limit(topK);
     picks.forEach((p, i) =>

@@ -63,6 +63,17 @@ export const ScoringConfigSchema = z
     maxDaysSinceTrade: z.number().int().min(1).default(14),
     /** Composite score needed for the Elite tier (0–100). */
     eliteScore: z.number().min(0).max(100).default(70),
+    /**
+     * Proven tier (owner, 2026-11-10): a Verified/Elite trader whose copies since they became
+     * Verified (replayed like the copy check) cover at least this many days…
+     */
+    provenMinDays: z.number().int().min(14).max(365).default(30),
+    /**
+     * …and at least this many copied bets, with a cautious copy return (copyRoiZ) above 0.
+     * At most 150: the since-Verified sample is capped at the job's replaysPerTrader (150),
+     * so a higher bar could never be met.
+     */
+    provenMinCopies: z.number().int().min(20).max(150).default(50),
   })
   .refine((c) => c.minEntryPrice <= c.maxEntryPrice, {
     message: "Minimum entry price can't be above the maximum entry price",

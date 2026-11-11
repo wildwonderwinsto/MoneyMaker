@@ -118,6 +118,18 @@ export interface TraderMetrics {
   /** Replays still running (valued at today's price). */
   copyOpenReplays: number;
   nCopyReplays: number;
+  /**
+   * Proven tier: copies of bets placed since the trader became Verified (epoch seconds the
+   * record starts; null = never Verified in this holdout). Same replay model as the copy
+   * check. Copies/returns null = not replayed this run.
+   */
+  sinceVerifiedFrom: number | null;
+  sinceVerifiedDays: number | null;
+  sinceVerifiedCopies: number | null;
+  /** Cautious: stake-weighted average minus `copyRoiZ` standard errors. */
+  sinceVerifiedCopyRoi: number | null;
+  sinceVerifiedCopyRoiMean: number | null;
+  sinceVerifiedOpenCopies: number | null;
   lastTradeAt: number | null;
   daysSinceTrade: number | null;
   primaryCategory: string | null;
@@ -422,6 +434,45 @@ function replaySpanDays(replays: CopyReplay[] | null): number | null {
   return ts.length ? (Math.max(...ts) - Math.min(...ts)) / DAY : null;
 }
 
+export interface SinceVerifiedRecord {
+  from: number | null;
+  days: number | null;
+  copies: number | null;
+  copyRoi: number | null;
+  copyRoiMean: number | null;
+  open: number | null;
+}
+
+/**
+ * The Proven tier's record: replayed copies of bets placed at or after `from` (when the
+ * trader became Verified). Days run from `from` to now; the cautious return uses the copy
+ * check's confidence setting (`copyRoiZ`). Pure (tested).
+ */
+export function sinceVerifiedRecord(
+  replays: CopyReplay[] | null,
+  from: number | null,
+  now: number,
+  cfg: ScoringConfig,
+): SinceVerifiedRecord {
+  if (from === null) {
+    return { from: null, days: null, copies: null, copyRoi: null, copyRoiMean: null, open: null };
+  }
+  const days = Math.max(0, (now - from) / DAY);
+  if (replays === null) {
+    return { from, days, copies: null, copyRoi: null, copyRoiMean: null, open: null };
+  }
+  const since = replays.filter((r) => typeof r.ts === "number" && r.ts >= from);
+  const stats = copyRoiStats(since);
+  return {
+    from,
+    days,
+    copies: since.length,
+    copyRoi: stats && stats.se !== null ? stats.mean - cfg.copyRoiZ * stats.se : null,
+    copyRoiMean: stats?.mean ?? null,
+    open: since.filter((r) => r.open).length,
+  };
+}
+
 /** Stake-weighted ROI of replayed copies (the plain average). */
 export function copyAdjustedRoi(replays: CopyReplay[]): number | null {
   return copyRoiStats(replays)?.mean ?? null;
@@ -459,6 +510,12 @@ export interface MetricsInput {
    * based on the earlier profits. Omitted = all bets (backtest re-derivations).
    */
   holdoutFrom?: number | null;
+  /**
+   * Proven tier: when the trader became Verified (epoch seconds; null = not yet), and the
+   * replayed copies of their bets since then (null = not replayed this run).
+   */
+  verifiedFrom?: number | null;
+  sinceVerifiedReplays?: CopyReplay[] | null;
 }
 
 export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderMetrics {
@@ -515,6 +572,12 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
   const replays = input.copyReplays;
   // Too few replays is not evidence either way: report "not measured".
   const copy = replays && replays.length >= cfg.minCopyReplays ? copyRoiStats(replays) : null;
+  const record = sinceVerifiedRecord(
+    input.sinceVerifiedReplays ?? null,
+    input.verifiedFrom ?? null,
+    now,
+    cfg,
+  );
 
   return {
     nClosed,
@@ -561,6 +624,12 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     copyReplayDays: replaySpanDays(replays),
     copyOpenReplays: replays?.filter((r) => r.open).length ?? 0,
     nCopyReplays: replays?.length ?? 0,
+    sinceVerifiedFrom: record.from,
+    sinceVerifiedDays: record.days,
+    sinceVerifiedCopies: record.copies,
+    sinceVerifiedCopyRoi: record.copyRoi,
+    sinceVerifiedCopyRoiMean: record.copyRoiMean,
+    sinceVerifiedOpenCopies: record.open,
     lastTradeAt,
     daysSinceTrade: lastTradeAt === null ? null : Math.max(0, (now - lastTradeAt) / DAY),
     primaryCategory,

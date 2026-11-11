@@ -61,6 +61,12 @@ export const traders = pgTable("traders", {
    */
   holdoutFrom: tsz(),
   /**
+   * First full check that found the trader Verified/Elite/Proven in the current holdout:
+   * the Proven tier's copy record counts only bets placed since then. Kept through dips to
+   * the Watchlist (the record stays honest), cleared when a re-pick restarts the holdout.
+   */
+  verifiedAt: tsz(),
+  /**
    * Last FULL check (whole history, every check). Candidates in between get cheap re-checks
    * (skill evidence only); a full one is due every 4 weeks and before any promotion.
    */
@@ -221,8 +227,19 @@ export const evidenceStates = pgTable("skill_evidence", {
   updatedAt: createdAt(),
 }).enableRLS();
 
-/** candidate = passes every check but hasn't made enough bets since first picked (holdout). */
-export type ScoreTier = "elite" | "verified" | "candidate" | "watchlist" | "rejected";
+/**
+ * Best first. proven = Verified/Elite whose copies since being verified made money;
+ * candidate = passes every check but hasn't made enough bets since first picked (holdout).
+ */
+export const TIER_ORDER = [
+  "proven",
+  "elite",
+  "verified",
+  "candidate",
+  "watchlist",
+  "rejected",
+] as const;
+export type ScoreTier = (typeof TIER_ORDER)[number];
 
 export interface ScoreCheck {
   code: string;
@@ -485,7 +502,7 @@ export const backtestRuns = pgTable("backtest_runs", {
 
 /**
  * Who each method would copy, recorded once per month by the first daily run of it:
- * "strategy" = the top Verified/Elite traders, "baseline" = the month leaderboard's top
+ * "strategy" = the top Proven/Elite/Verified traders, "baseline" = the month leaderboard's top
  * earners. Re-deriving old picks from today's pool only finds traders who survived; these
  * records are point-in-time, so the backtest uses them for every recorded month.
  */

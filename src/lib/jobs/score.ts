@@ -11,6 +11,7 @@ import type { Db } from "@/lib/db/client";
 import {
   evidenceStates,
   markets,
+  type ScoreTier,
   traderPnlDaily,
   traderPositions,
   traders,
@@ -143,6 +144,8 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
         // Forward holdout: skill counts only bets opened since the first check, or since the
         // wallet was re-selected (today, for a first check, so it starts as a Candidate).
         holdoutFrom: toEpoch(p.holdoutFrom ?? p.firstCheckedAt) ?? now,
+        // Proven tier: the since-Verified record (replayed in stage 2 for the shortlist).
+        verifiedFrom: toEpoch(p.verifiedAt),
       });
     }
     // When each market actually settled (the backtest must not know outcomes early).
@@ -179,6 +182,7 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
   return { inputs, meta };
 }
 
+/** The copy check's replays (last `replayLookbackDays`). */
 export async function buildCopyReplays(
   db: Db,
   wallet: string,
@@ -186,15 +190,54 @@ export async function buildCopyReplays(
   opts: ScoreOptions,
   now: number,
 ): Promise<CopyReplay[]> {
+  return (await buildReplays(db, wallet, cfg, opts, now, null)).replays;
+}
+
+export interface Replays {
+  /** The copy check's sample: buys in the last `replayLookbackDays`. */
+  replays: CopyReplay[];
+  /** Proven tier: a sample of the buys since `verifiedFrom`; null = not Verified yet. */
+  sinceVerified: CopyReplay[] | null;
+  /**
+   * Where the since-Verified record starts: `verifiedFrom`, or the oldest trade fetched when
+   * the trade cap cut the fetch short (days are only counted where trades were seen).
+   */
+  verifiedFrom: number | null;
+}
+
+/**
+ * Replay the leader's buys as if copied `copyDelaySeconds` late (slippage + taker fee,
+ * mirrored sells). Two even samples share one fetch and one replay per trade: the copy
+ * check's (last `replayLookbackDays`) and, once the trader is Verified, the Proven tier's
+ * (every bet since `verifiedFrom`, which can reach past the lookback).
+ */
+export async function buildReplays(
+  db: Db,
+  wallet: string,
+  cfg: ScoringConfig,
+  opts: ScoreOptions,
+  now: number,
+  verifiedFrom: number | null,
+): Promise<Replays> {
   // Same minimum as the copy engine's "Ignore trader trades under" (owner, 2026-11-10): it
   // used to be a separate scoring setting that could drift from what is actually copied.
   const { minLeaderUsd, skipInPlay } = await getRiskConfig(db);
-  const start = Math.floor(now - opts.replayLookbackDays * 86_400);
+  const lookbackStart = Math.floor(now - opts.replayLookbackDays * 86_400);
+  const start =
+    verifiedFrom === null ? lookbackStart : Math.min(lookbackStart, Math.floor(verifiedFrom));
   const trades: Activity[] = await collect(
     paginate((cursor) => getActivity({ user: wallet, type: "TRADE", start, cursor }), {
       maxItems: opts.maxReplayTrades,
     }),
   );
+  // Newest first and capped: a full fetch reaches `start`, a capped one only its oldest row.
+  const oldest = trades.reduce((a, t) => Math.min(a, t.timestamp), now);
+  const recordFrom =
+    verifiedFrom === null
+      ? null
+      : trades.length >= opts.maxReplayTrades
+        ? Math.max(verifiedFrom, oldest)
+        : verifiedFrom;
 
   // The raw trades are only used here, not stored: trader_trades was written but never read
   // (owner, 2026-11-09: 53% of live data in a local run).
@@ -230,28 +273,44 @@ export async function buildCopyReplays(
       // Combo bets can't be copied (no order book), so they don't take sample slots.
       !isComboCondition(t.conditionId),
   );
-  if (buys.length === 0) return [];
+  const recent = buys.filter((t) => toEpoch(t.ts)! >= lookbackStart);
+  const since = recordFrom === null ? [] : buys.filter((t) => toEpoch(t.ts)! >= recordFrom);
+  if (recent.length === 0 && since.length === 0) {
+    return {
+      replays: [],
+      sinceVerified: recordFrom === null ? null : [],
+      verifiedFrom: recordFrom,
+    };
+  }
   // Same rule as the engine: no buys after a game started. That needs each market's game
   // start, so twice the sample is looked up and in-play buys dropped before the final pick.
-  const candidates = evenSample(buys, opts.replaysPerTrader * 2);
+  const recentCandidates = evenSample(recent, opts.replaysPerTrader * 2);
+  const sinceCandidates = evenSample(since, opts.replaysPerTrader * 2);
   const marketsById = new Map(
-    (await getMarketsByConditionIds(candidates.map((s) => s.conditionId))).map((m) => [
-      m.conditionId,
-      m,
-    ]),
+    (
+      await getMarketsByConditionIds([
+        ...new Set([...recentCandidates, ...sinceCandidates].map((s) => s.conditionId)),
+      ])
+    ).map((m) => [m.conditionId, m]),
   );
   const inPlay = (t: (typeof buys)[number]) => {
     const start = gammaTime(marketsById.get(t.conditionId)?.gameStartTime);
     return skipInPlay && start !== null && toEpoch(t.ts)! >= start.getTime() / 1000;
   };
-  const sample = evenSample(
-    candidates.filter((t) => !inPlay(t)),
+  const recentSample = evenSample(
+    recentCandidates.filter((t) => !inPlay(t)),
     opts.replaysPerTrader,
   );
+  const sinceSample = evenSample(
+    sinceCandidates.filter((t) => !inPlay(t)),
+    opts.replaysPerTrader,
+  );
+  // A trade in both samples is replayed once.
+  const sample = [...new Map([...recentSample, ...sinceSample].map((t) => [t.id, t])).values()];
   const exits = leaderExits(rows);
   const mids = await getMidpoints(sample.map((s) => s.tokenId));
 
-  const replays = await mapPool(sample, 3, async (t): Promise<CopyReplay | null> => {
+  const replayed = await mapPool(sample, 3, async (t): Promise<CopyReplay | null> => {
     const ts = toEpoch(t.ts)!;
     const history = await getPriceHistory(t.tokenId, {
       startTs: ts,
@@ -288,7 +347,14 @@ export async function buildCopyReplays(
       open: !payouts && (exit?.soldFraction ?? 0) < 0.98,
     };
   });
-  return replays.filter((r): r is CopyReplay => r !== null);
+  const byId = new Map(sample.map((t, i) => [t.id, replayed[i]]));
+  const pick = (list: typeof sample) =>
+    list.map((t) => byId.get(t.id)).filter((r): r is CopyReplay => !!r);
+  return {
+    replays: pick(recentSample),
+    sinceVerified: recordFrom === null ? null : pick(sinceSample),
+    verifiedFrom: recordFrom,
+  };
 }
 
 interface TradeRow {
@@ -431,6 +497,28 @@ export function withRunningEvidence(
   return { ...m, eSkill: t.eSkill, eNoEdge: t.eNoEdge };
 }
 
+const VERIFIED_TIERS: ReadonlySet<ScoreTier> = new Set(["proven", "elite", "verified"]);
+
+/**
+ * Start the Proven tier's record the first time a full check finds the trader Verified,
+ * Elite or Proven. An existing start is kept (a dip to the Watchlist doesn't reset it, so
+ * the record keeps the bad stretch); the rotation clears it when a re-pick restarts the
+ * holdout.
+ */
+export async function stampVerified(
+  db: Db,
+  rows: Array<{ wallet: string; tier: ScoreTier }>,
+  at: Date,
+) {
+  const wallets = rows.filter((r) => VERIFIED_TIERS.has(r.tier)).map((r) => r.wallet);
+  for (const part of chunk(wallets, 500)) {
+    await db
+      .update(traders)
+      .set({ verifiedAt: sql`coalesce(${traders.verifiedAt}, ${at.toISOString()}::timestamptz)` })
+      .where(inArray(traders.wallet, part));
+  }
+}
+
 /** Days of earlier checks the luck test is pooled over (owner decision 2026-11-08). */
 const POOLED_BH_DAYS = 30;
 
@@ -548,8 +636,14 @@ export async function scoreAll(
 
   await mapPool(shortlist, 2, async (wallet) => {
     try {
-      const replays = await buildCopyReplays(db, wallet, cfg, opts, now);
-      const input = { ...inputs.get(wallet)!, copyReplays: replays };
+      const prev = inputs.get(wallet)!;
+      const r = await buildReplays(db, wallet, cfg, opts, now, prev.verifiedFrom ?? null);
+      const input = {
+        ...prev,
+        copyReplays: r.replays,
+        sinceVerifiedReplays: r.sinceVerified,
+        verifiedFrom: r.verifiedFrom,
+      };
       const m = measure(input);
       metrics.set(wallet, m);
       prelim.set(wallet, scoreTrader(m, cfg, ctx));
@@ -601,6 +695,7 @@ export async function scoreAll(
   }
 
   await saveEvidence(db, states);
+  await stampVerified(db, rows, checked);
 
   const tiers = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.tier] = (acc[r.tier] ?? 0) + 1;
@@ -610,7 +705,7 @@ export async function scoreAll(
   return {
     scored: rows.length,
     shortlisted: shortlist.length,
-    verified: (tiers.verified ?? 0) + (tiers.elite ?? 0),
+    verified: (tiers.verified ?? 0) + (tiers.elite ?? 0) + (tiers.proven ?? 0),
     rejected: rows.filter((r) => r.tier === "rejected").map((r) => r.wallet),
     candidates: rows.filter((r) => r.tier === "candidate").map((r) => r.wallet),
   };

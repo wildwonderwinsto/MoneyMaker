@@ -34,15 +34,22 @@ import {
   traderPositions,
   traders,
   traderScores,
+  TIER_ORDER as TIERS,
   type ScoreTier,
 } from "@/lib/db/schema";
 import { resultRows } from "@/lib/lease";
 import { groupSignals, summarize } from "@/lib/live";
 import { getRiskConfig, getScoringConfig } from "@/lib/settings";
 
-export type TierFilter = ScoreTier | "all" | "followed" | "hidden";
+import type { TierFilter } from "@/lib/tiers";
 
-const TIER_ORDER = sql`case ${traderScores.tier} when 'elite' then 0 when 'verified' then 1 when 'candidate' then 2 when 'watchlist' then 3 else 4 end`;
+export type { TierFilter } from "@/lib/tiers";
+
+/** Best tier first (Proven > Elite > Verified > Candidate > Watchlist > Rejected). */
+const TIER_ORDER = sql`case ${traderScores.tier} ${sql.join(
+  TIERS.map((t, i) => sql.raw(`when '${t}' then ${i}`)),
+  sql` `,
+)} else ${sql.raw(String(TIERS.length))} end`;
 
 export async function getTraderList(opts: {
   tier?: TierFilter;
@@ -52,8 +59,7 @@ export async function getTraderList(opts: {
   const db = getDb();
   const tier = opts.tier ?? "verified";
   const conditions = [];
-  if (tier === "verified") conditions.push(inArray(traderScores.tier, ["elite", "verified"]));
-  else if (tier === "followed") conditions.push(eq(follows.enabled, true));
+  if (tier === "followed") conditions.push(eq(follows.enabled, true));
   else if (tier !== "all" && tier !== "hidden") conditions.push(eq(traderScores.tier, tier));
   // Traders the admin said "no" to only show up under the Hidden filter.
   conditions.push(
@@ -95,20 +101,36 @@ export async function getTraderList(opts: {
 }
 export type TraderListItem = Awaited<ReturnType<typeof getTraderList>>[number];
 
-export async function getTierCounts() {
+/**
+ * How many traders each Traders-page tab holds, counted the way getTraderList filters them
+ * (same joins, hidden traders only under Hidden, optional category).
+ */
+export async function getTierCounts(category?: string) {
   const db = getDb();
-  const [rows, [hidden]] = await Promise.all([
-    db
-      .select({ tier: traderScores.tier, n: sql<number>`count(*)::int` })
-      .from(traderScores)
-      .leftJoin(hiddenTraders, eq(hiddenTraders.wallet, traderScores.wallet))
-      .where(isNull(hiddenTraders.wallet))
-      .groupBy(traderScores.tier),
-    db.select({ n: sql<number>`count(*)::int` }).from(hiddenTraders),
-  ]);
+  const isHidden = sql<boolean>`${hiddenTraders.wallet} is not null`;
+  const isFollowed = sql<boolean>`coalesce(${follows.enabled}, false)`;
+  const rows = await db
+    .select({
+      tier: traderScores.tier,
+      hidden: isHidden,
+      followed: isFollowed,
+      n: sql<number>`count(*)::int`,
+    })
+    .from(traderScores)
+    .innerJoin(traders, eq(traders.wallet, traderScores.wallet))
+    .leftJoin(follows, eq(follows.wallet, traderScores.wallet))
+    .leftJoin(hiddenTraders, eq(hiddenTraders.wallet, traderScores.wallet))
+    .where(category ? eq(traderScores.primaryCategory, category) : undefined)
+    .groupBy(traderScores.tier, isHidden, isFollowed);
+  const shown = rows.filter((r) => !r.hidden);
+  const tiers: Partial<Record<ScoreTier, number>> = {};
+  for (const r of shown) tiers[r.tier] = (tiers[r.tier] ?? 0) + r.n;
+  const sum = (list: typeof rows) => list.reduce((a, r) => a + r.n, 0);
   return {
-    tiers: Object.fromEntries(rows.map((r) => [r.tier, r.n])) as Partial<Record<ScoreTier, number>>,
-    hidden: hidden?.n ?? 0,
+    tiers,
+    all: sum(shown),
+    followed: sum(shown.filter((r) => r.followed)),
+    hidden: sum(rows.filter((r) => r.hidden)),
   };
 }
 

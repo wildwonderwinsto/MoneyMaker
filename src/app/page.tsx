@@ -5,29 +5,25 @@ import { Suspense } from "react";
 import { EmptyState, PageHeader } from "@/components/common";
 import { NavTab, PendingArea, PendingNavProvider } from "@/components/pending-nav";
 import { isAdmin } from "@/lib/admin";
+import { TierTabs } from "@/components/tier-tabs";
 import { TraderCard } from "@/components/trader-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/format";
 import { getDb } from "@/lib/db/client";
-import { getJobRuns, getTierCounts, getTraderList, type TierFilter } from "@/lib/queries";
+import { getJobRuns, getTierCounts, getTraderList } from "@/lib/queries";
 import { getScoringConfig } from "@/lib/settings";
+import { TIER_TABS, type TierFilter } from "@/lib/tiers";
 
 const CATEGORIES = ["all", "politics", "sports", "crypto", "economics", "tech", "culture"];
-const TIERS: Array<{ value: TierFilter; label: string; adminOnly?: boolean }> = [
-  { value: "verified", label: "Verified" },
-  { value: "candidate", label: "Candidates" },
-  { value: "watchlist", label: "Watchlist" },
-  { value: "followed", label: "Following" },
-  { value: "all", label: "Everyone" },
-  { value: "hidden", label: "Hidden", adminOnly: true },
-];
+/** With no tier in the URL: the best of these that has anyone in it. */
+const DEFAULT_TIERS: TierFilter[] = ["proven", "elite", "verified"];
 
 export default function TradersPage({ searchParams }: PageProps<"/">) {
   return (
     <>
       <PageHeader
         title="Top traders"
-        description="Polymarket traders ranked by consistency, not luck. Each one is tested against 19 checks: skill beyond what prices predicted (on bets placed after they were picked), many separate wins (no one-hit wonders), steady months, and still profitable when copied a couple of minutes late."
+        description="Polymarket traders ranked by consistency, not luck. Each one is tested against 19 checks: skill beyond what prices predicted (on bets placed after they were picked), many separate wins (no one-hit wonders), steady months, and still profitable when copied a couple of minutes late. Proven traders went on to make money for their copiers after they were verified."
       />
       <Suspense fallback={<GridSkeleton />}>
         <TraderGrid searchParams={searchParams} />
@@ -36,30 +32,40 @@ export default function TradersPage({ searchParams }: PageProps<"/">) {
   );
 }
 
+/** The tier is always in the URL, so a chosen tab survives a category change. */
 function href(params: { tier: string; category: string }) {
-  const sp = new URLSearchParams();
-  if (params.tier !== "verified") sp.set("tier", params.tier);
+  const sp = new URLSearchParams({ tier: params.tier });
   if (params.category !== "all") sp.set("category", params.category);
-  const q = sp.toString();
-  return q ? `/?${q}` : "/";
+  return `/?${sp}`;
 }
 
 async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["searchParams"] }) {
   await connection();
   const sp = await searchParams;
   const admin = await isAdmin();
-  const tiers = TIERS.filter((t) => admin || !t.adminOnly);
-  const tier = (tiers.find((t) => t.value === sp.tier)?.value ?? "verified") as TierFilter;
+  const tiers = TIER_TABS.filter((t) => admin || !t.adminOnly);
   const category = CATEGORIES.includes(String(sp.category)) ? String(sp.category) : "all";
+  const inCategory = category === "all" ? undefined : category;
 
-  const [list, { tiers: counts, hidden }, runs, scoring] = await Promise.all([
-    getTraderList({ tier, category: category === "all" ? undefined : category }),
-    getTierCounts(),
+  const [counts, runs, scoring] = await Promise.all([
+    getTierCounts(inCategory),
     getJobRuns(20),
     getScoringConfig(getDb()),
   ]);
+  const countOf = (t: TierFilter) =>
+    t === "all"
+      ? counts.all
+      : t === "followed"
+        ? counts.followed
+        : t === "hidden"
+          ? counts.hidden
+          : (counts.tiers[t] ?? 0);
+  const tier =
+    tiers.find((t) => t.value === sp.tier)?.value ??
+    DEFAULT_TIERS.find((t) => countOf(t) > 0) ??
+    "verified";
+  const list = await getTraderList({ tier, category: inCategory });
   const lastScore = runs.find((r) => (r.job === "daily" || r.job === "score") && r.status === "ok");
-  const verifiedCount = (counts.elite ?? 0) + (counts.verified ?? 0);
 
   return (
     <PendingNavProvider>
@@ -84,46 +90,30 @@ async function TraderGrid({ searchParams }: { searchParams: PageProps<"/">["sear
               </NavTab>
             ))}
           </div>
-          <div
-            className="bg-muted flex w-full gap-1 overflow-x-auto rounded-lg p-1 sm:w-auto"
-            role="tablist"
-            aria-label="Tier"
-          >
-            {tiers.map((t) => (
-              <NavTab
-                key={t.value}
-                group="tier"
-                href={href({ tier: t.value, category })}
-                selected={t.value === tier}
-                className="shrink-0 rounded-md px-3 py-1 text-sm font-medium whitespace-nowrap transition-colors"
-                activeClassName="bg-card text-foreground shadow-sm"
-                inactiveClassName="text-muted-foreground hover:text-foreground"
-              >
-                {t.label}
-                {t.value === "verified" && ` (${verifiedCount})`}
-                {t.value === "candidate" && ` (${counts.candidate ?? 0})`}
-                {t.value === "watchlist" && ` (${counts.watchlist ?? 0})`}
-                {t.value === "hidden" && ` (${hidden})`}
-              </NavTab>
-            ))}
-          </div>
+          <TierTabs
+            selected={tier}
+            tabs={tiers.map((t) => ({
+              value: t.value,
+              label: t.label,
+              group: t.group,
+              help: t.help(scoring),
+              count: countOf(t.value),
+              href: href({ tier: t.value, category }),
+            }))}
+          />
         </div>
 
         <p className="text-muted-foreground text-xs">
           {lastScore
             ? `Scores updated ${timeAgo(lastScore.finishedAt ?? lastScore.startedAt)} · `
             : "Not scored yet · "}
-          {Object.values(counts).reduce((a, b) => a + (b ?? 0), 0)} traders analysed
+          {counts.all} {inCategory ? `${inCategory} ` : ""}traders analysed
         </p>
 
         <PendingArea>
           {list.length === 0 ? (
             <EmptyState title="No traders here yet" icon={SearchX}>
-              {tier === "verified"
-                ? "Nobody has passed every check yet. That's the filter doing its job. Look at the Watchlist, or wait for the next daily scoring run."
-                : tier === "hidden"
-                  ? "No hidden traders. Press “No” on a trader to hide them from this list."
-                  : "Run the daily job (npm run job -- daily) to discover and score traders."}
+              {(tiers.find((t) => t.value === tier) ?? TIER_TABS[0]).empty(scoring)}
             </EmptyState>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

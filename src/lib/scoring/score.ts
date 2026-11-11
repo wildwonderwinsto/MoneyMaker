@@ -211,6 +211,37 @@ export function buildChecks(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
 /** Skill checks that are still building evidence (they can't count against the tier yet). */
 const PENDING_SKILL = new Set(["holdout_sample", "skill"]);
 
+export interface ProvenStatus {
+  proven: boolean;
+  days: number | null;
+  copies: number | null;
+  /** Cautious copy return since Verified (copyRoiZ standard errors below the average). */
+  copyRoi: number | null;
+}
+
+/**
+ * Proven (owner, 2026-11-10): copies of the trader's bets since they became Verified cover
+ * at least `provenMinDays` days and `provenMinCopies` copied bets, with a cautious copy
+ * return above 0. Only decides the tier of a trader who passes every check.
+ */
+export function provenStatus(m: TraderMetrics, cfg: ScoringConfig): ProvenStatus {
+  const days = m.sinceVerifiedDays ?? null;
+  const copies = m.sinceVerifiedCopies ?? null;
+  const copyRoi = m.sinceVerifiedCopyRoi ?? null;
+  return {
+    proven:
+      days !== null &&
+      copies !== null &&
+      copyRoi !== null &&
+      days >= cfg.provenMinDays &&
+      copies >= cfg.provenMinCopies &&
+      copyRoi > 0,
+    days,
+    copies,
+    copyRoi,
+  };
+}
+
 /** Weighted composite (0–100). Higher = stronger, more reliable edge. */
 export function compositeScore(m: TraderMetrics): number {
   const parts = [
@@ -241,7 +272,8 @@ export function scoreTrader(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
   const counted = pending ? failed.filter((c) => !PENDING_SKILL.has(c.code)) : failed;
 
   let tier: ScoreTier;
-  if (passed) tier = score >= cfg.eliteScore ? "elite" : "verified";
+  if (passed)
+    tier = provenStatus(m, cfg).proven ? "proven" : score >= cfg.eliteScore ? "elite" : "verified";
   else if (pending && counted.length === 0) tier = "candidate";
   // CAPACITY rule, not a statistical one (audit R4): while skill is pending, at most 1 other
   // failed check (owner, 2026-11-08), because the 3-miss rule put 104 of 150 on the

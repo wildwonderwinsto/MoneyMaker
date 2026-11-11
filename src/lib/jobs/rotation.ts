@@ -3,7 +3,7 @@
  * daily full checks.
  *
  * 1. Re-checks, in priority order, up to `recheckCap`: followed traders (never dropped, even
- *    past the cap) → Verified/Elite → Candidates not checked for a week (oldest check
+ *    past the cap) → Proven → Verified/Elite → Candidates not checked for a week (oldest check
  *    first) → Watchlist.
  * 2. The rest of the `slots` go to the best-ranked wallets from today's discovery that
  *    haven't been checked, or whose 30-day cool-down ended, or who traded at least
@@ -82,7 +82,7 @@ export async function pickDailyWallets(
     })
     .from(traderScores)
     .leftJoin(traders, eq(traders.wallet, traderScores.wallet))
-    .where(inArray(traderScores.tier, ["elite", "verified", "watchlist", "candidate"]))
+    .where(inArray(traderScores.tier, ["proven", "elite", "verified", "watchlist", "candidate"]))
     .orderBy(desc(traderScores.score));
   const candidateDue = now.getTime() - opts.candidateEveryDays * DAY_MS;
   const byTier = (tiers: string[]) =>
@@ -119,7 +119,13 @@ export async function pickDailyWallets(
   followed.forEach(take);
   // Candidates before Watchlist (owner, 2026-11-08): a large Watchlist would otherwise take
   // every slot and Candidates would never collect their post-pick bets' verdict.
-  for (const w of [...byTier(["elite", "verified"]), ...dueCandidates, ...byTier(["watchlist"])]) {
+  // Proven first: they're the ones most worth copying, so their record is kept freshest.
+  for (const w of [
+    ...byTier(["proven"]),
+    ...byTier(["elite", "verified"]),
+    ...dueCandidates,
+    ...byTier(["watchlist"]),
+  ]) {
     if (picked.length >= opts.recheckCap) break;
     take(w);
   }
@@ -158,7 +164,8 @@ export async function pickDailyWallets(
   for (let i = 0; i < returning.length; i += 500) {
     await db
       .update(traders)
-      .set({ holdoutFrom: now })
+      // A fresh holdout restarts the Proven record too: it must be earned after re-picking.
+      .set({ holdoutFrom: now, verifiedAt: null })
       .where(inArray(traders.wallet, returning.slice(i, i + 500)));
   }
   return {
