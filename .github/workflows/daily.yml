@@ -10,7 +10,7 @@ on:
     # - low US trading activity
     # Off the top of the hour: GitHub delays (or drops) scheduled runs under load, worst at
     # :00. One run on Nov 4 started ~8h late; Nov 5's never ran. The two backups below
-    # exit in seconds if today's run already succeeded (--skip-if-done-today).
+    # exit in seconds if a run succeeded in the last 12 hours (--skip-if-done-today).
     - cron: "17 10 * * *"
     - cron: "47 13 * * *"
     - cron: "37 17 * * *"
@@ -46,7 +46,7 @@ jobs:
           LIMIT: ${{ inputs.limit || '210' }} # via env, never inlined into the script
         run: |
           [[ "$LIMIT" =~ ^[0-9]+$ ]] || { echo "limit must be a number"; exit 1; }
-          # Scheduled runs skip if today's run already succeeded; manual runs always run.
+          # Scheduled runs skip if a run succeeded in the last 12 hours; manual runs always run.
           SKIP=""
           [[ "$GITHUB_EVENT_NAME" == "schedule" ]] && SKIP="--skip-if-done-today"
           npm run job -- daily --limit "$LIMIT" $SKIP

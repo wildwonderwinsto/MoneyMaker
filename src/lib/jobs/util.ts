@@ -1,4 +1,4 @@
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, eq, gte, lt, lte, sql } from "drizzle-orm";
 
 import type { Db } from "@/lib/db/client";
 import { jobRuns } from "@/lib/db/schema";
@@ -60,14 +60,18 @@ export async function runJob<T extends Record<string, unknown>>(
   }
 }
 
+/** A day's three schedules are 7 h 20 min apart at most; the next day's first is 16 h 40 min later. */
+export const RECENT_RUN_HOURS = 12;
+
 /**
- * True if `job` already finished successfully today (UTC calendar day). Lets backup
- * schedules skip when the main run went through; a run from yesterday never counts, even
- * if it started late in the day, and neither does a run that marked itself `full: false`
- * (a shrunken daily run).
+ * True if `job` succeeded in the last 12 hours. Lets backup schedules skip when the main
+ * run went through. It used to ask "since midnight UTC": GitHub starts scheduled runs up to
+ * 14 h late, so one day's run could land just after midnight and cancel all of the next
+ * day's (production, Nov 10: 41 h without scores). A run that marked itself `full: false`
+ * (a shrunken daily run) never counts.
  */
-export async function succeededToday(db: Db, job: string, now = new Date()): Promise<boolean> {
-  const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+export async function succeededRecently(db: Db, job: string, now = new Date()): Promise<boolean> {
+  const since = new Date(now.getTime() - RECENT_RUN_HOURS * 3_600_000);
   const [row] = await db
     .select({ id: jobRuns.id })
     .from(jobRuns)
@@ -75,7 +79,8 @@ export async function succeededToday(db: Db, job: string, now = new Date()): Pro
       and(
         eq(jobRuns.job, job),
         eq(jobRuns.status, "ok"),
-        gte(jobRuns.startedAt, midnight),
+        gte(jobRuns.startedAt, since),
+        lte(jobRuns.startedAt, now),
         sql`coalesce(${jobRuns.stats}->>'full', 'true') <> 'false'`,
       ),
     )

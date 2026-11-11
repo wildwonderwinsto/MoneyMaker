@@ -5,7 +5,7 @@
  *   npm run job -- score
  *   npm run job -- backtest [--months 6] [--top 10]
  *   npm run job -- daily [--limit 300] # discover → backfill → resolve → score → record picks → backtest → prune
- *       [--skip-if-done-today]          # (scheduled backups) exit if today's daily run already succeeded
+ *       [--skip-if-done-today]          # (scheduled backups) exit if a daily run succeeded in the last 12 h
  *   npm run job -- follow <wallet>     # follow a trader (paper copy)
  *   npm run job -- tick                # run one copy-engine tick locally
  */
@@ -20,7 +20,7 @@ import { backtestJob } from "@/lib/jobs/backtest";
 import { backfillMany, dailyJob } from "@/lib/jobs/daily";
 import { DEFAULT_DISCOVER, discoverCandidates } from "@/lib/jobs/discover";
 import { DEFAULT_SCORE, scoreAll } from "@/lib/jobs/score";
-import { runJob, succeededToday } from "@/lib/jobs/util";
+import { runJob, succeededRecently } from "@/lib/jobs/util";
 import { DEFAULT_BACKTEST } from "@/lib/scoring/backtest";
 import { getScoringConfig } from "@/lib/settings";
 
@@ -82,8 +82,8 @@ async function main() {
       await runJob(db, "backtest", (log) => backtestJob(db, cfg, backtestOpts, log));
       break;
     case "daily":
-      if (values["skip-if-done-today"] && (await succeededToday(db, "daily"))) {
-        console.log("[daily] already succeeded today (UTC); skipping this backup run");
+      if (values["skip-if-done-today"] && (await succeededRecently(db, "daily"))) {
+        console.log("[daily] already succeeded in the last 12 hours; skipping this backup run");
         break;
       }
       await runJob(db, "daily", (log) =>

@@ -14,7 +14,7 @@ import * as backtest from "@/lib/jobs/backtest";
 import { dailyJob } from "@/lib/jobs/daily";
 import * as discover from "@/lib/jobs/discover";
 import * as score from "@/lib/jobs/score";
-import { runJob, succeededToday } from "@/lib/jobs/util";
+import { runJob, succeededRecently } from "@/lib/jobs/util";
 import { DEFAULT_BACKTEST } from "@/lib/scoring/backtest";
 import { DEFAULT_SCORING_CONFIG as cfg } from "@/lib/scoring/config";
 
@@ -96,7 +96,7 @@ beforeEach(async () => {
 describe("daily job health", () => {
   it("a normal run succeeds and counts as today's run", async () => {
     await runJob(db, "daily", (log) => dailyJob(db, cfg, opts, log));
-    expect(await succeededToday(db, "daily")).toBe(true);
+    expect(await succeededRecently(db, "daily")).toBe(true);
   });
 
   it("fails, and scores/records/prunes nothing, when every backfill failed", async () => {
@@ -109,7 +109,7 @@ describe("daily job health", () => {
     expect(score.scoreAll).not.toHaveBeenCalled();
     expect(backtest.recordMonthlySelections).not.toHaveBeenCalled();
     expect(backfill.prunePositions).not.toHaveBeenCalled();
-    expect(await succeededToday(db, "daily")).toBe(false);
+    expect(await succeededRecently(db, "daily")).toBe(false);
   });
 
   it("scores only today's rotation picks, and prunes Candidates along with rejected traders", async () => {
@@ -146,7 +146,7 @@ describe("daily job health", () => {
     const run = await lastRun();
     expect(run.status).toBe("error");
     expect(run.stats).toMatchObject({ backfill: { traders: 6, failed: 4 } });
-    expect(await succeededToday(db, "daily")).toBe(false);
+    expect(await succeededRecently(db, "daily")).toBe(false);
   });
 
   it("records each step's time and API calls in the run's stats (0957678)", async () => {
@@ -184,7 +184,7 @@ describe("daily job health", () => {
     await runJob(db, "daily", (log) => dailyJob(db, cfg, opts, log));
     expect((await lastRun()).stats).toMatchObject({ backfill: { traders: 6, failed: 3 } });
     expect(backtest.recordMonthlySelections).toHaveBeenCalledTimes(1);
-    expect(await succeededToday(db, "daily")).toBe(true);
+    expect(await succeededRecently(db, "daily")).toBe(true);
   });
 
   it("a shrunken run (--limit 5, --per-board, --top) doesn't count as today's run or record picks", async () => {
@@ -197,7 +197,7 @@ describe("daily job health", () => {
     ];
     const runs = [];
     for (const o of small) runs.push(await runJob(db, "daily", (log) => dailyJob(db, cfg, o, log)));
-    expect(await succeededToday(db, "daily")).toBe(false);
+    expect(await succeededRecently(db, "daily")).toBe(false);
     expect(backtest.recordMonthlySelections).not.toHaveBeenCalled();
     expect(runs.map((r) => r.full)).toEqual([false, false, false]);
     // A bigger-than-default pool is still a full run.
@@ -205,6 +205,6 @@ describe("daily job health", () => {
       dailyJob(db, cfg, { ...opts, discover: { ...opts.discover, maxCandidates: 300 } }, log),
     );
     expect(backtest.recordMonthlySelections).toHaveBeenCalledTimes(1);
-    expect(await succeededToday(db, "daily")).toBe(true);
+    expect(await succeededRecently(db, "daily")).toBe(true);
   });
 });

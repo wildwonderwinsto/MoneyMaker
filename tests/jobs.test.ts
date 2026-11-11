@@ -29,7 +29,7 @@ import {
 } from "@/lib/jobs/backtest";
 import { DEFAULT_BACKTEST } from "@/lib/scoring/backtest";
 import { loadInputs } from "@/lib/jobs/score";
-import { succeededToday } from "@/lib/jobs/util";
+import { succeededRecently } from "@/lib/jobs/util";
 import * as data from "@/lib/polymarket/data";
 
 import { createTestDb } from "./helpers/db";
@@ -677,23 +677,45 @@ describe("monthly selections (point-in-time picks)", () => {
   });
 });
 
-describe("succeededToday", () => {
-  it("counts only a successful run that started today (UTC)", async () => {
+describe("succeededRecently", () => {
+  it("counts only a successful run from the last 12 hours", async () => {
     const now = new Date("2026-11-05T16:00:00Z");
-    expect(await succeededToday(db, "daily-test", now)).toBe(false);
+    expect(await succeededRecently(db, "daily-test", now)).toBe(false);
     // Yesterday late (a delayed run) and a failed run today don't count.
     await db.insert(jobRuns).values([
       { job: "daily-test", status: "ok", startedAt: new Date("2026-11-04T23:30:00Z") },
       { job: "daily-test", status: "error", startedAt: new Date("2026-11-05T10:20:00Z") },
       { job: "score", status: "ok", startedAt: new Date("2026-11-05T10:20:00Z") },
     ]);
-    expect(await succeededToday(db, "daily-test", now)).toBe(false);
+    expect(await succeededRecently(db, "daily-test", now)).toBe(false);
     await db
       .insert(jobRuns)
       .values({ job: "daily-test", status: "ok", startedAt: new Date("2026-11-05T10:25:00Z") });
-    expect(await succeededToday(db, "daily-test", now)).toBe(true);
-    // The next UTC day starts fresh.
-    expect(await succeededToday(db, "daily-test", new Date("2026-11-06T10:00:00Z"))).toBe(false);
+    expect(await succeededRecently(db, "daily-test", now)).toBe(true);
+    // The next day's first run is never skipped.
+    expect(await succeededRecently(db, "daily-test", new Date("2026-11-06T10:00:00Z"))).toBe(false);
+  });
+
+  // Production, Nov 9–11: GitHub started the scheduled runs 7–14 h late. Nov 9's landed at
+  // 00:50 UTC on Nov 10, counted as "today's", and all three Nov 10 runs skipped: scores
+  // went 41 h without an update.
+  it("a late run from yesterday's schedule doesn't cancel today's runs", async () => {
+    await db
+      .insert(jobRuns)
+      .values({ job: "late-test", status: "ok", startedAt: new Date("2026-11-10T00:50:00Z") });
+    // The same run's own backups, minutes to hours later, still skip…
+    expect(await succeededRecently(db, "late-test", new Date("2026-11-10T04:00:00Z"))).toBe(true);
+    // …but today's runs (which GitHub started at 17:52, 20:36 and 22:29) do not.
+    expect(await succeededRecently(db, "late-test", new Date("2026-11-10T17:52:00Z"))).toBe(false);
+  });
+
+  it("a backup just after midnight doesn't repeat a run that finished just before it", async () => {
+    await db
+      .insert(jobRuns)
+      .values({ job: "midnight-test", status: "ok", startedAt: new Date("2026-11-09T23:40:00Z") });
+    expect(await succeededRecently(db, "midnight-test", new Date("2026-11-10T00:10:00Z"))).toBe(
+      true,
+    );
   });
 });
 
