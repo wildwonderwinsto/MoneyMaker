@@ -6,12 +6,13 @@
  * - Markers: "B" badge for a buy (series-3), "S" badge for a sell or settlement (neutral
  *   gray, so a sale never reads as a loss) on the equity line (series-1). The letter is a
  *   second cue so identity never relies on color alone.
- * - Crosshair tooltip lists the trades at that moment. A range filter and zoom controls sit
+ * - Crosshair tooltip lists the trades at that moment. Pointing anywhere near a badge
+ *   shows that trade (the crosshair alone needed the exact pixel). A range filter and zoom controls sit
  *   above (wheel / pinch / drag also zoom and pan, see ./zoom); a readable table (newest
  *   first, with change and trades per period) sits below.
  */
 import { cn } from "cn";
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   CartesianGrid,
   ComposedChart,
@@ -142,8 +143,15 @@ function Tip({ active, payload }: TooltipContentProps) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload as Row | undefined;
   if (!row) return null;
+  return <TipBody row={row} />;
+}
+
+function TipBody({ row, style }: { row: Row; style?: React.CSSProperties }) {
   return (
-    <div className="bg-popover text-popover-foreground max-w-72 rounded-lg border px-3 py-2 text-xs shadow-md">
+    <div
+      className="bg-popover text-popover-foreground w-max max-w-72 rounded-lg border px-3 py-2 text-xs shadow-md"
+      style={style}
+    >
       <p className="text-muted-foreground">{fmtFull(row.ts)}</p>
       <p className="mt-0.5 font-medium tabular-nums">Equity {usd(row.equity)}</p>
       {row.fills?.slice(0, 5).map((f) => (
@@ -171,27 +179,74 @@ function Tip({ active, payload }: TooltipContentProps) {
 
 type DotProps = { cx?: number; cy?: number; value?: number | null; payload?: Row };
 
+/** The badge the mouse is on or near: which trade row, and where it is drawn. */
+interface Snap {
+  ts: number;
+  buy: boolean;
+  cx: number;
+  cy: number;
+}
+/** How far from a badge's centre the mouse still counts as on it (the badge itself is 7). */
+const BADGE_REACH = 18;
+
+/**
+ * The badge nearest the mouse, if one is within reach. Read from what is drawn (each badge
+ * carries its trade and position), so crowded badges go to the closest one, not the one on top.
+ */
+function nearestBadge(plot: HTMLElement, clientX: number, clientY: number) {
+  const svg = plot.querySelector("svg.recharts-surface");
+  if (!svg) return null;
+  const box = svg.getBoundingClientRect();
+  const x = clientX - box.left;
+  const y = clientY - box.top;
+  let best: { ts: number; buy: boolean; cx: number; cy: number } | null = null;
+  let bestD = BADGE_REACH;
+  for (const el of plot.querySelectorAll<SVGGElement>("[data-badge]")) {
+    const cx = Number(el.dataset.cx);
+    const cy = Number(el.dataset.cy);
+    const d = Math.hypot(cx - x, cy - y);
+    if (d <= bestD) {
+      bestD = d;
+      best = { ts: Number(el.dataset.ts), buy: el.dataset.badge === "B", cx, cy };
+    }
+  }
+  return best;
+}
+
 /**
  * Trade marker: a lettered badge ("B" buy, "S" sell / settlement). A sale isn't a loss,
  * so sells use a neutral color, not one that reads as red; the result is in the tooltip.
  * Hovered (`active`), the badge grows and gets an outline instead of a separate dot.
+ * `mark` tags it with which trade it is and where it sits, so the chart can find the badge
+ * nearest the mouse (see nearestBadge).
  */
 const Badge = ({
   cx,
   cy,
   value,
+  payload,
   letter,
   fill,
   active,
+  mark,
 }: DotProps & {
   letter: string;
   fill: string;
   active?: boolean;
+  mark?: boolean;
 }) => {
   if (value == null || cx == null || cy == null) return null;
   const r = active ? 9 : 7;
   return (
-    <g pointerEvents="none">
+    <g
+      pointerEvents="none"
+      {...(mark && {
+        "data-badge": letter,
+        "data-ts": payload?.ts,
+        "data-cx": cx,
+        "data-cy": cy,
+      })}
+    >
       <rect
         x={cx - r}
         y={cy - r}
@@ -218,8 +273,6 @@ const Badge = ({
 };
 const BUY_FILL = "var(--series-3)";
 const SELL_FILL = "var(--muted-foreground)";
-const Buy = (p: DotProps) => <Badge {...p} letter="B" fill={BUY_FILL} />;
-const Sell = (p: DotProps) => <Badge {...p} letter="S" fill={SELL_FILL} />;
 const BuyActive = (p: DotProps) => <Badge {...p} letter="B" fill={BUY_FILL} active />;
 const SellActive = (p: DotProps) => <Badge {...p} letter="S" fill={SELL_FILL} active />;
 /** The equity line's hover dot, hidden on trade rows so it never covers the badge. */
@@ -279,6 +332,55 @@ export function EquityChart({
     ];
   }, [rows, zoom.zoomed, zoom.lo, zoom.hi]);
   const span = zoom.hi - zoom.lo;
+  // The badge under (or near) the mouse. While set, the tooltip shows that trade instead of
+  // whichever row is nearest sideways, which is often a snapshot a pixel away.
+  const [snap, setSnap] = useState<Snap | null>(null);
+  const held = snap && !zoom.dragging ? snap : null;
+  const snapRow = held
+    ? view.find((r) => r.ts === held.ts && (held.buy ? r.buy : r.sell) !== undefined)
+    : undefined;
+  const snapped = held && snapRow ? { ...held, row: snapRow } : null;
+  const mouse = useRef<{ x: number; y: number } | null>(null);
+  const resnap = useCallback(() => {
+    const at = mouse.current;
+    const next = at && plotRef.current ? nearestBadge(plotRef.current, at.x, at.y) : null;
+    setSnap((prev) =>
+      prev?.ts === next?.ts &&
+      prev?.buy === next?.buy &&
+      prev?.cx === next?.cx &&
+      prev?.cy === next?.cy
+        ? prev
+        : next,
+    );
+  }, []);
+  // The badges move under a still mouse when the chart zooms, pans or gets new data (every
+  // 30 s on the Paper page): look again once the new positions are drawn.
+  useEffect(() => {
+    const id = requestAnimationFrame(resnap);
+    return () => cancelAnimationFrame(id);
+  }, [resnap, view, zoom.width]);
+  const badge = (buy: boolean) => {
+    const Dot = ({ key, ...p }: DotProps & { key?: React.Key | null }) => (
+      <Badge
+        key={key}
+        {...p}
+        letter={buy ? "B" : "S"}
+        fill={buy ? BUY_FILL : SELL_FILL}
+        active={snapped !== null && snapped.buy === buy && p.payload?.ts === snapped.ts}
+        mark
+      />
+    );
+    return Dot;
+  };
+  const track = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Mouse only: a finger scrubs the crosshair, and its "hover" would stick.
+    mouse.current = e.pointerType === "mouse" ? { x: e.clientX, y: e.clientY } : null;
+    resnap();
+  };
+  const untrack = () => {
+    mouse.current = null;
+    resnap();
+  };
   const buys = view.reduce((a, r) => a + (r.buy !== undefined ? r.fills!.length : 0), 0);
   const sells = view.reduce((a, r) => a + (r.sell !== undefined ? r.fills!.length : 0), 0);
 
@@ -331,7 +433,13 @@ export function EquityChart({
           </div>
         </div>
       </div>
-      <div ref={plotRef} className={zoomSurface(zoom)} style={{ height }}>
+      <div
+        ref={plotRef}
+        className={zoomSurface(zoom)}
+        style={{ height }}
+        onPointerMove={track}
+        onPointerLeave={untrack}
+      >
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={view} margin={{ top: 10, right: 14, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" />
@@ -356,8 +464,27 @@ export function EquityChart({
               domain={["auto", "auto"]}
             />
             <Tooltip
-              cursor={{ stroke: "var(--muted-foreground)", strokeWidth: 1, strokeDasharray: "3 3" }}
-              content={(props) => <Tip {...props} />}
+              // On a badge the tooltip shows even past the plot's edge (half a badge can).
+              active={snapped ? true : undefined}
+              cursor={
+                snapped
+                  ? false
+                  : { stroke: "var(--muted-foreground)", strokeWidth: 1, strokeDasharray: "3 3" }
+              }
+              // On a badge: pinned beside it, opening toward the middle of the chart.
+              position={snapped ? { x: snapped.cx, y: snapped.cy } : undefined}
+              content={(props) =>
+                snapped ? (
+                  <TipBody
+                    row={snapped.row}
+                    style={{
+                      transform: `translate(${snapped.cx > zoom.width / 2 ? "calc(-100% - 14px)" : "14px"}, ${snapped.cy > height / 2 ? "calc(-100% - 14px)" : "14px"})`,
+                    }}
+                  />
+                ) : (
+                  <Tip {...props} />
+                )
+              }
             />
             {baseline !== undefined && (
               <ReferenceLine
@@ -380,15 +507,15 @@ export function EquityChart({
               stroke="var(--series-1)"
               strokeWidth={2}
               dot={false}
-              activeDot={<EquityDot />}
+              activeDot={snapped ? false : <EquityDot />}
               isAnimationActive={false}
             />
             <Line
               dataKey="buy"
               name="Buy"
               stroke="none"
-              dot={<Buy />}
-              activeDot={<BuyActive />}
+              dot={badge(true)}
+              activeDot={snapped ? false : <BuyActive />}
               isAnimationActive={false}
               legendType="none"
             />
@@ -396,8 +523,8 @@ export function EquityChart({
               dataKey="sell"
               name="Sell"
               stroke="none"
-              dot={<Sell />}
-              activeDot={<SellActive />}
+              dot={badge(false)}
+              activeDot={snapped ? false : <SellActive />}
               isAnimationActive={false}
               legendType="none"
             />
