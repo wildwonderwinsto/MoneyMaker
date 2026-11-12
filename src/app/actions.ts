@@ -176,7 +176,8 @@ export async function setHiddenAction(wallet: string, hidden: boolean): Promise<
 /** What Sell all did, in one line. */
 function sellAllMessage(r: ExitResult): string {
   if (r.skipped) return "The engine was busy, so nothing was sold. Try again in a moment.";
-  if (r.sold === 0 && r.left === 0) return "No open positions to sell";
+  const kept = r.kept ?? 0;
+  if (r.sold === 0 && r.left === 0 && kept === 0) return "No open positions to sell";
   const parts: string[] = [];
   if (r.sold > 0) {
     parts.push(
@@ -188,17 +189,26 @@ function sellAllMessage(r: ExitResult): string {
       `${r.left} couldn't be sold now (no buyers, market closed, or below your sell floor) and stay open`,
     );
   }
+  if (kept > 0) {
+    parts.push(
+      r.sold > 0
+        ? `${kept} wouldn't sell at a profit and stay open`
+        : `None of your ${kept} sellable position${kept === 1 ? "" : "s"} would sell at a profit right now, so nothing was sold`,
+    );
+  }
   return parts.join(" · ");
 }
 
 /**
- * Sell every open paper position at the best bids right now (copies and hedges). Following
- * is untouched: new trades are still copied.
+ * Sell every open paper position at the best bids right now (copies and hedges), or with
+ * `profitOnly` just the ones that would sell at a profit. Following is untouched: new trades
+ * are still copied.
  */
-export async function sellAllAction(): Promise<ActionResult> {
+export async function sellAllAction(profitOnly = false): Promise<ActionResult> {
   try {
     await requireAdmin();
-    const r = await exitAll(getDb());
+    // Arguments come from the browser: anything but a real `true` means sell all.
+    const r = await exitAll(getDb(), Date.now(), { profitOnly: profitOnly === true });
     refresh();
     return { ok: !r.skipped, message: sellAllMessage(r) };
   } catch (err) {

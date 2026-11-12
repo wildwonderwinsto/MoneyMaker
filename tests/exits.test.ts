@@ -599,6 +599,113 @@ describe("Sell all (owner, 2026-11-10)", () => {
   });
 });
 
+describe("Sell profit only (owner, 2026-11-12)", () => {
+  const L2 = "0xleader2";
+  /** Best bid per token after the copies were bought at 50¢. */
+  const bidsAt = (prices: Record<string, number>) =>
+    vi.mocked(clob.getBook).mockImplementation(async (id: string) => ({
+      ...book(id),
+      bids: [{ price: prices[id], size: 10_000 }],
+    }));
+
+  it("sells what would sell for more than it cost and keeps the rest", async () => {
+    await db.insert(follows).values({ wallet: L2 });
+    await db.insert(cursors).values({ wallet: L2, lastTs: t0 - 60 });
+    rows = [
+      act({ transaction_hash: "0xbuy" }),
+      act({ proxy_wallet: L2, transaction_hash: "0xbuy2", token_id: NO, outcome_index: 1 }),
+    ];
+    await runTick(db, (t0 + 20) * 1000);
+    expect(await openShares()).toEqual([40, 40]);
+    bidsAt({ [YES]: 0.6, [NO]: 0.4 });
+    const r = await exitAll(db, (t0 + 40) * 1000, { profitOnly: true });
+    // 40 shares bought at 50¢ sell at 60¢: +$4. The other 40 would sell at 40¢, a loss.
+    expect(r).toMatchObject({ sold: 1, left: 0, kept: 1 });
+    expect(r.proceeds).toBeCloseTo(24, 6);
+    expect(r.pnl).toBeCloseTo(4, 6);
+    const left = await db.select().from(paperPositions).where(eq(paperPositions.status, "open"));
+    expect(left.map((p) => p.tokenId)).toEqual([NO]);
+  });
+
+  it("selling at exactly what it cost is not a profit", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    bidsAt({ [YES]: 0.5 });
+    const r = await exitAll(db, (t0 + 40) * 1000, { profitOnly: true });
+    expect(r).toEqual({ sold: 0, left: 0, proceeds: 0, pnl: 0, kept: 1 });
+    expect(await openShares()).toEqual([40]);
+  });
+
+  it("fees count: a sale that only wins before fees is kept", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    const [copy] = await db.select().from(paperPositions);
+    await writeSetting(db, "risk", {
+      ...DEFAULT_RISK_CONFIG,
+      sizingMode: "fixed",
+      fixedUsd: 20,
+      takerFeeBps: 500,
+    });
+    // 1¢ over the cost per share, but the 5% fee on the proceeds is more than that.
+    bidsAt({ [YES]: copy.costBasis / copy.shares + 0.01 });
+    const r = await exitAll(db, (t0 + 40) * 1000, { profitOnly: true });
+    expect(r).toMatchObject({ sold: 0, kept: 1 });
+    expect(await openShares()).toEqual([40]);
+  });
+
+  describe("a copy and its hedge are one bet", () => {
+    const hedgedCopy = async () => {
+      rows = [act({ transaction_hash: "0xbuy" })];
+      await runTick(db, (t0 + 20) * 1000);
+      const [copy] = await db.select().from(paperPositions);
+      const hedged = await executeHedge(db, copy.accountId, copy.id, "lock", DEFAULT_RISK_CONFIG, {
+        maxCost: Number.POSITIVE_INFINITY,
+      });
+      expect(hedged.ok).toBe(true);
+      const all = await db.select().from(paperPositions);
+      return all.reduce((sum, p) => sum + p.costBasis, 0);
+    };
+    const worth = async (prices: Record<string, number>) =>
+      (await db.select().from(paperPositions)).reduce(
+        (sum, p) => sum + p.shares * prices[p.tokenId],
+        0,
+      );
+
+    it("kept together when the pair would lose, though the copy alone is up", async () => {
+      const cost = await hedgedCopy();
+      const prices = { [YES]: 0.6, [NO]: 0.3 };
+      expect(await worth(prices)).toBeLessThan(cost);
+      bidsAt(prices);
+      const r = await exitAll(db, (t0 + 40) * 1000, { profitOnly: true });
+      expect(r).toEqual({ sold: 0, left: 0, proceeds: 0, pnl: 0, kept: 2 });
+      expect(await openShares()).toHaveLength(2);
+    });
+
+    it("sold together when the pair would win, though the hedge alone is down", async () => {
+      const cost = await hedgedCopy();
+      const prices = { [YES]: 0.9, [NO]: 0.3 };
+      const value = await worth(prices);
+      expect(value).toBeGreaterThan(cost);
+      bidsAt(prices);
+      const r = await exitAll(db, (t0 + 40) * 1000, { profitOnly: true });
+      expect(r).toMatchObject({ sold: 2, left: 0 });
+      expect(r.kept).toBeUndefined();
+      expect(r.pnl).toBeCloseTo(value - cost, 6);
+      expect(await openShares()).toEqual([]);
+    });
+  });
+
+  it("plain Sell all still sells the losers too", async () => {
+    rows = [act({ transaction_hash: "0xbuy" })];
+    await runTick(db, (t0 + 20) * 1000);
+    bidsAt({ [YES]: 0.4 });
+    const r = await exitAll(db, (t0 + 40) * 1000);
+    expect(r).toMatchObject({ sold: 1, left: 0 });
+    expect(r.kept).toBeUndefined();
+    expect(r.pnl).toBeCloseTo(-4, 6);
+  });
+});
+
 describe("skips that can never be retried don't block ones that can (N1/N2)", () => {
   const dead = (i: number, side: "BUY" | "SELL", wallet: string, accountId: number) => ({
     id: `dead${side}${i}`,

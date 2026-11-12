@@ -1522,6 +1522,8 @@ export interface ExitResult {
   left: number;
   proceeds: number;
   pnl: number;
+  /** Profit only: positions that could sell, but not at a profit, so were left alone. */
+  kept?: number;
   /** Set when nothing could be tried (engine busy). */
   skipped?: string;
 }
@@ -1539,13 +1541,25 @@ export function exitTrader(rawDb: Db, wallet: string, nowMs = Date.now()): Promi
  * Sell all: every open paper position (copies and hedges, every trader) at the best bids
  * right now, by the same rules as exitTrader. Following is untouched, so new trades are
  * still copied.
+ *
+ * `profitOnly` sells only what would bring in more than it cost, after fees, at those bids.
+ * A copy and its hedge are one bet, so they are judged together and sold (or kept) together.
  */
-export function exitAll(rawDb: Db, nowMs = Date.now()): Promise<ExitResult> {
-  return exitPositions(rawDb, null, nowMs);
+export function exitAll(
+  rawDb: Db,
+  nowMs = Date.now(),
+  opts: { profitOnly?: boolean } = {},
+): Promise<ExitResult> {
+  return exitPositions(rawDb, null, nowMs, opts.profitOnly === true);
 }
 
 /** Sell the open positions copied from `wallet` (null = all of them). */
-async function exitPositions(rawDb: Db, wallet: string | null, nowMs: number): Promise<ExitResult> {
+async function exitPositions(
+  rawDb: Db,
+  wallet: string | null,
+  nowMs: number,
+  profitOnly = false,
+): Promise<ExitResult> {
   const out: ExitResult = { sold: 0, left: 0, proceeds: 0, pnl: 0 };
   const lease = await waitForLease(rawDb, 30);
   if (!lease) return { ...out, skipped: "Engine busy" };
@@ -1573,57 +1587,80 @@ async function exitPositions(rawDb: Db, wallet: string | null, nowMs: number): P
     const ts = Math.floor(nowMs / 1000);
     // The floor is measured from the book as fetched, not one an earlier sale here thinned.
     const fetched = new Map(books);
+    // One position at a time, except profit only: there a hedge is taken with its copy.
+    const groups = new Map<number, PaperPosition[]>();
     for (const p of open) {
-      const market = info.get(p.conditionId);
-      const book = books.get(p.tokenId);
-      // Closed markets are paid out by settlement, not sold.
-      if (!market || market.closed || !book || book.bids.length === 0) {
-        out.left++;
-        continue;
+      const key = profitOnly && p.kind === "hedge" && p.hedgeOf !== null ? p.hedgeOf : p.id;
+      groups.set(key, [...(groups.get(key) ?? []), p]);
+    }
+    for (const group of groups.values()) {
+      const sales: { p: PaperPosition; book: OrderBook; fill: Fill }[] = [];
+      for (const p of group) {
+        const market = info.get(p.conditionId);
+        const book = books.get(p.tokenId);
+        // Closed markets are paid out by settlement, not sold.
+        if (!market || market.closed || !book || book.bids.length === 0) {
+          out.left++;
+          continue;
+        }
+        // The sell floor applies here too (UI-11). There's no trader price, so it's measured
+        // from the market midpoint; what can't sell above it stays open.
+        const ref = bookMidpoint(fetched.get(p.tokenId) ?? book);
+        const floor = cfg.sellFloorPct > 0 && ref !== null ? ref * (1 - cfg.sellFloorPct) : 0;
+        const fill = simulateSell(
+          book.bids,
+          p.shares,
+          floor,
+          cfg.takerFeeBps,
+          market.takerFeeRate ?? 0,
+        );
+        if (fill.shares <= 0) {
+          out.left++;
+          continue;
+        }
+        sales.push({ p, book, fill });
       }
-      // The sell floor applies here too (UI-11). There's no trader price, so it's measured
-      // from the market midpoint; what can't sell above it stays open.
-      const ref = bookMidpoint(fetched.get(p.tokenId) ?? book);
-      const floor = cfg.sellFloorPct > 0 && ref !== null ? ref * (1 - cfg.sellFloorPct) : 0;
-      const fill = simulateSell(
-        book.bids,
-        p.shares,
-        floor,
-        cfg.takerFeeBps,
-        market.takerFeeRate ?? 0,
-      );
-      if (fill.shares <= 0) {
-        out.left++;
-        continue;
+      if (profitOnly) {
+        // What this sale would lock in: proceeds after fees, less the cost of the shares sold.
+        const gain = sales.reduce(
+          (sum, { p, fill }) => sum + fill.notional - p.costBasis * (fill.shares / p.shares),
+          0,
+        );
+        if (gain <= 1e-9) {
+          out.kept = (out.kept ?? 0) + sales.length;
+          continue;
+        }
       }
-      const pnl = await db.transaction((tx) =>
-        applySell(
-          tx,
-          p,
-          {
-            id: `exit:${p.id}:${ts}`,
-            wallet: p.sourceWallet,
-            ts,
-            conditionId: p.conditionId,
-            tokenId: p.tokenId,
-            side: "SELL",
-            price: book.bids[0].price,
-            size: fill.shares,
-            usdc: fill.notional,
-            outcome: p.outcome,
-            title: p.title,
-            slug: p.slug,
-            icon: p.image,
-          },
-          fill,
-        ),
-      );
-      // Two positions on one token (e.g. copied from two traders) share its bids (C-F16).
-      consumeBook(books, p.tokenId, "bids", fill.shares);
-      out.sold++;
-      out.proceeds += fill.notional;
-      out.pnl += pnl;
-      if (fill.shares < p.shares - 1e-6) out.left++;
+      for (const { p, book, fill } of sales) {
+        const pnl = await db.transaction((tx) =>
+          applySell(
+            tx,
+            p,
+            {
+              id: `exit:${p.id}:${ts}`,
+              wallet: p.sourceWallet,
+              ts,
+              conditionId: p.conditionId,
+              tokenId: p.tokenId,
+              side: "SELL",
+              price: book.bids[0].price,
+              size: fill.shares,
+              usdc: fill.notional,
+              outcome: p.outcome,
+              title: p.title,
+              slug: p.slug,
+              icon: p.image,
+            },
+            fill,
+          ),
+        );
+        // Two positions on one token (e.g. copied from two traders) share its bids (C-F16).
+        consumeBook(books, p.tokenId, "bids", fill.shares);
+        out.sold++;
+        out.proceeds += fill.notional;
+        out.pnl += pnl;
+        if (fill.shares < p.shares - 1e-6) out.left++;
+      }
     }
     if (out.sold > 0) await maybeSnapshot(db, account.id, 0);
     return out;
