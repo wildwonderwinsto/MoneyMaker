@@ -19,7 +19,7 @@ import {
 import { ensureDefaultAccount, loadAccountState } from "@/lib/copy/account";
 import { hasCashToBuy } from "@/lib/copy/sizing";
 import { readEngineStatus } from "@/lib/copy/status";
-import { getDb } from "@/lib/db/client";
+import { getDb, type Db } from "@/lib/db/client";
 import {
   appSettings,
   backtestRuns,
@@ -40,6 +40,7 @@ import {
 } from "@/lib/db/schema";
 import { resultRows } from "@/lib/lease";
 import { groupSignals, summarize } from "@/lib/live";
+import { hashRows, memoSlot, reuseUnlessChanged } from "@/lib/page-cache";
 import { getRiskConfig, getScoringConfig } from "@/lib/settings";
 
 import type { TierFilter } from "@/lib/tiers";
@@ -178,12 +179,23 @@ export interface SignalOutcome {
 
 export async function getSignals(limit = 150) {
   const db = getDb();
-  const rows = await db
-    .select({ signal: signals, name: traders.name, profileImage: traders.profileImage })
-    .from(signals)
-    .leftJoin(traders, eq(traders.wallet, signals.wallet))
-    .orderBy(desc(signals.detectedAt), desc(signals.leaderTs))
-    .limit(limit);
+  // The feed's rows (decisions, retries, reasons, trader names) are reused between renders
+  // until any of them changes (Supabase egress); fills and positions below stay fresh.
+  const key = await hashRows(
+    db,
+    sql`select s.*, tr.name as trader_name, tr.profile_image as trader_image
+        from signals s left join traders tr on tr.wallet = s.wallet
+        order by s.detected_at desc, s.leader_ts desc, s.id limit ${limit}`,
+    sql`t.detected_at desc, t.leader_ts desc, t.id`,
+  );
+  const rows = await reuseUnlessChanged(`signals:${limit}`, key, () =>
+    db
+      .select({ signal: signals, name: traders.name, profileImage: traders.profileImage })
+      .from(signals)
+      .leftJoin(traders, eq(traders.wallet, signals.wallet))
+      .orderBy(desc(signals.detectedAt), desc(signals.leaderTs), asc(signals.id))
+      .limit(limit),
+  );
   const acted = [
     ...new Set(
       rows
@@ -240,25 +252,37 @@ export type SignalRow = Awaited<ReturnType<typeof getSignals>>[number];
  * grouping needs, in the feed's order.
  */
 export async function getLast24hSummary(now = Date.now()) {
-  const rows = await getDb()
-    .select({
-      id: signals.id,
-      wallet: signals.wallet,
-      tokenId: signals.tokenId,
-      side: signals.side,
-      decision: signals.decision,
-      reason: signals.reason,
-      reasonCode: signals.reasonCode,
-      groupId: signals.groupId,
-      leaderTs: signals.leaderTs,
-      leaderPrice: signals.leaderPrice,
-      leaderSize: signals.leaderSize,
-      leaderUsdc: signals.leaderUsdc,
-    })
-    .from(signals)
-    // detected_at is indexed and never before the trade; summarize() keeps trades < 24 h old.
-    .where(gte(signals.detectedAt, new Date(now - 86_400_000)))
-    .orderBy(desc(signals.detectedAt), desc(signals.leaderTs));
+  const db = getDb();
+  const since = new Date(now - 86_400_000);
+  // Reused between renders until a signal of the last 24 h is added, changed or ages out.
+  const key = await hashRows(
+    db,
+    sql`select id, wallet, token_id, side, decision, reason, reason_code, group_id, leader_ts,
+               leader_price, leader_size, leader_usdc, detected_at
+        from signals where detected_at >= ${since}`,
+    sql`t.id`,
+  );
+  const rows = await reuseUnlessChanged("signals:24h", key, () =>
+    db
+      .select({
+        id: signals.id,
+        wallet: signals.wallet,
+        tokenId: signals.tokenId,
+        side: signals.side,
+        decision: signals.decision,
+        reason: signals.reason,
+        reasonCode: signals.reasonCode,
+        groupId: signals.groupId,
+        leaderTs: signals.leaderTs,
+        leaderPrice: signals.leaderPrice,
+        leaderSize: signals.leaderSize,
+        leaderUsdc: signals.leaderUsdc,
+      })
+      .from(signals)
+      // detected_at is indexed and never before the trade; summarize() keeps trades < 24 h old.
+      .where(gte(signals.detectedAt, since))
+      .orderBy(desc(signals.detectedAt), desc(signals.leaderTs)),
+  );
   return summarize(groupSignals(rows), now);
 }
 
@@ -288,6 +312,83 @@ export async function getFollowList() {
  */
 const OUTER_POSITION_ID = sql`"paper_positions"."id"`;
 
+/**
+ * Changes whenever a fill is added or removed (fills are append-only until a reset) or any
+ * position field other than its price mark changes (status, shares, P&L, ...). Price marks
+ * are left out on purpose: they move every tick, and the page overlays them fresh.
+ */
+async function paperChangeKey(db: Db, accountId: number): Promise<string> {
+  const [[fills], positions] = await Promise.all([
+    db
+      .select({
+        n: sql<number>`count(*)::int`,
+        max: sql<number>`coalesce(max(${paperFills.id}), 0)::int`,
+      })
+      .from(paperFills)
+      .where(eq(paperFills.accountId, accountId)),
+    hashRows(
+      db,
+      sql`select id, status, kind, shares, cost_basis, avg_price, realized_pnl, opened_at,
+                 closed_at, source_wallet, title, outcome, image, hedge_of
+          from paper_positions where account_id = ${accountId}`,
+      sql`t.id`,
+    ),
+  ]);
+  return `${fills?.n}:${fills?.max}:${positions}`;
+}
+
+type EquitySnapshot = typeof equitySnapshots.$inferSelect;
+type EquityMemo = { n: number; max: string | null; lastTs: Date | null; rows: EquitySnapshot[] };
+
+/**
+ * The equity curve since `since`, every snapshot (no thinning). Snapshots are append-only
+ * until a reset, so after the first load each render fetches only the newer ones; any other
+ * change (reset, a late insert with an earlier time) shows up as a count mismatch and
+ * reloads everything.
+ */
+async function equityHistory(db: Db, accountId: number, since: Date): Promise<EquitySnapshot[]> {
+  const [stats] = await db
+    .select({
+      n: sql<number>`count(*)::int`,
+      max: sql<string | null>`max(${equitySnapshots.ts})::text`,
+    })
+    .from(equitySnapshots)
+    .where(eq(equitySnapshots.accountId, accountId));
+  const n = stats?.n ?? 0;
+  const max = stats?.max ?? null;
+  const slot = memoSlot<EquityMemo>(`equity:${accountId}`);
+  let cached = slot.get();
+  if (cached && (cached.n !== n || cached.max !== max)) {
+    const prev = cached;
+    cached = undefined;
+    if (prev.lastTs && n > prev.n) {
+      const added = await db
+        .select()
+        .from(equitySnapshots)
+        .where(and(eq(equitySnapshots.accountId, accountId), gt(equitySnapshots.ts, prev.lastTs)))
+        .orderBy(asc(equitySnapshots.ts));
+      if (prev.n + added.length === n) {
+        cached = {
+          n,
+          max,
+          lastTs: added.at(-1)?.ts ?? prev.lastTs,
+          rows: [...prev.rows.filter((r) => r.ts >= since), ...added],
+        };
+      }
+    }
+  }
+  if (!cached) {
+    const rows = await db
+      .select()
+      .from(equitySnapshots)
+      .where(and(eq(equitySnapshots.accountId, accountId), gte(equitySnapshots.ts, since)))
+      .orderBy(asc(equitySnapshots.ts));
+    cached = { n, max, lastTs: rows.at(-1)?.ts ?? null, rows };
+  }
+  slot.set(cached);
+  return cached.rows.filter((r) => r.ts >= since);
+}
+
 export async function getPaperOverview() {
   const db = getDb();
   const account = await ensureDefaultAccount(db);
@@ -297,111 +398,122 @@ export async function getPaperOverview() {
   // Per finished position: what we bought and how we got out (sells + settlement).
   const fillSum = (expr: string, where: string) =>
     sql<number>`coalesce((select sum(${sql.raw(expr)}) from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and ${sql.raw(where)}), 0)::float8`;
-  const [closed, equity, byTrader, allPositions, markersDesc, totals, investedRows] =
-    await Promise.all([
-      db
-        .select({
-          ...getTableColumns(paperPositions),
-          boughtShares: fillSum("f.shares", "f.side = 'BUY'"),
-          boughtUsd: fillSum("f.notional", "f.side = 'BUY'"),
-          exitShares: fillSum("f.shares", "f.side <> 'BUY'"),
-          exitUsd: fillSum("f.notional", "f.side <> 'BUY'"),
-          soldShares: fillSum("f.shares", "f.side = 'SELL'"),
-          settlement: sql<
-            string | null
-          >`(select f.side from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and f.kind = 'settlement' order by f.ts desc limit 1)`,
-        })
-        .from(paperPositions)
-        .where(and(eq(paperPositions.accountId, account.id), ne(paperPositions.status, "open")))
-        .orderBy(desc(paperPositions.closedAt))
-        .limit(100),
-      db
-        .select()
-        .from(equitySnapshots)
-        .where(and(eq(equitySnapshots.accountId, account.id), gte(equitySnapshots.ts, since)))
-        .orderBy(asc(equitySnapshots.ts)),
-      db
-        .select({
-          wallet: paperPositions.sourceWallet,
-          name: traders.name,
-          realized: sql<number>`sum(${paperPositions.realizedPnl})::float8`,
-          openCost: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.costBasis} else 0 end)::float8`,
-          openValue: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.shares} * coalesce(${paperPositions.currentPrice}, ${paperPositions.avgPrice}) else 0 end)::float8`,
-          trades: sql<number>`count(*)::int`,
-          open: sql<number>`count(*) filter (where ${paperPositions.status} = 'open')::int`,
-          finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy')::int`,
-          wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy' and ${paperPositions.realizedPnl} > 0)::int`,
-        })
-        .from(paperPositions)
-        .leftJoin(traders, eq(traders.wallet, paperPositions.sourceWallet))
-        .where(eq(paperPositions.accountId, account.id))
-        .groupBy(paperPositions.sourceWallet, traders.name),
-      db
-        .select({
-          id: paperPositions.id,
-          sourceWallet: paperPositions.sourceWallet,
-          title: paperPositions.title,
-          outcome: paperPositions.outcome,
-          image: paperPositions.image,
-          status: paperPositions.status,
-          kind: paperPositions.kind,
-          shares: paperPositions.shares,
-          costBasis: paperPositions.costBasis,
-          avgPrice: paperPositions.avgPrice,
-          currentPrice: paperPositions.currentPrice,
-          realizedPnl: paperPositions.realizedPnl,
-          openedAt: paperPositions.openedAt,
-          closedAt: paperPositions.closedAt,
-          invested: sql<number>`coalesce((select sum(f.notional) from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and f.side = 'BUY'), 0)::float8`,
-        })
-        .from(paperPositions)
-        .where(eq(paperPositions.accountId, account.id))
-        .orderBy(desc(paperPositions.openedAt))
-        .limit(1000),
-      // Buys, sells and settlements to mark on the equity chart.
-      db
-        .select({
-          id: paperFills.id,
-          ts: paperFills.ts,
-          side: paperFills.side,
-          kind: paperFills.kind,
-          notional: paperFills.notional,
-          shares: paperFills.shares,
-          avgPrice: paperFills.avgPrice,
-          realizedPnl: paperFills.realizedPnl,
-          positionId: paperFills.positionId,
-          title: paperPositions.title,
-          outcome: paperPositions.outcome,
-        })
-        .from(paperFills)
-        .leftJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
-        .where(and(eq(paperFills.accountId, account.id), gte(paperFills.ts, since)))
-        // The newest 2,000 (put back in time order below), not the oldest.
-        .orderBy(desc(paperFills.ts), desc(paperFills.id))
-        .limit(2000),
-      // Account-wide totals (the lists above are capped): realized includes partial sells
-      // of positions that are still open.
-      db
-        .select({
-          realized: sql<number>`coalesce(sum(${paperPositions.realizedPnl}), 0)::float8`,
-          // Win rate over finished copies; hedges are insurance, not bets on the trader.
-          finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy')::int`,
-          wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy' and ${paperPositions.realizedPnl} > 0)::int`,
-        })
-        .from(paperPositions)
-        .where(eq(paperPositions.accountId, account.id)),
-      // Money put in per trader (all buys), for per-trader return.
-      db
-        .select({
-          wallet: paperPositions.sourceWallet,
-          invested: sql<number>`coalesce(sum(${paperFills.notional}), 0)::float8`,
-        })
-        .from(paperFills)
-        .innerJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
-        .where(and(eq(paperFills.accountId, account.id), eq(paperFills.side, "BUY")))
-        .groupBy(paperPositions.sourceWallet),
-    ]);
-  const markers = markersDesc.reverse();
+  // Finished positions, the per-position list, chart markers and money put in change only
+  // when a fill lands or a position changes (price marks aside): reuse them between renders
+  // until then (Supabase egress). Prices of open positions are overlaid fresh below.
+  const heavyKey = await paperChangeKey(db, account.id);
+  const [heavy, equity, byTrader, totals] = await Promise.all([
+    reuseUnlessChanged(`paper:${account.id}`, heavyKey, async () => {
+      const [closed, allPositions, markersDesc, investedRows] = await Promise.all([
+        db
+          .select({
+            ...getTableColumns(paperPositions),
+            boughtShares: fillSum("f.shares", "f.side = 'BUY'"),
+            boughtUsd: fillSum("f.notional", "f.side = 'BUY'"),
+            exitShares: fillSum("f.shares", "f.side <> 'BUY'"),
+            exitUsd: fillSum("f.notional", "f.side <> 'BUY'"),
+            soldShares: fillSum("f.shares", "f.side = 'SELL'"),
+            settlement: sql<
+              string | null
+            >`(select f.side from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and f.kind = 'settlement' order by f.ts desc limit 1)`,
+          })
+          .from(paperPositions)
+          .where(and(eq(paperPositions.accountId, account.id), ne(paperPositions.status, "open")))
+          .orderBy(desc(paperPositions.closedAt))
+          .limit(100),
+        db
+          .select({
+            id: paperPositions.id,
+            sourceWallet: paperPositions.sourceWallet,
+            title: paperPositions.title,
+            outcome: paperPositions.outcome,
+            image: paperPositions.image,
+            status: paperPositions.status,
+            kind: paperPositions.kind,
+            shares: paperPositions.shares,
+            costBasis: paperPositions.costBasis,
+            avgPrice: paperPositions.avgPrice,
+            currentPrice: paperPositions.currentPrice,
+            realizedPnl: paperPositions.realizedPnl,
+            openedAt: paperPositions.openedAt,
+            closedAt: paperPositions.closedAt,
+            invested: sql<number>`coalesce((select sum(f.notional) from paper_fills f where f.position_id = ${OUTER_POSITION_ID} and f.side = 'BUY'), 0)::float8`,
+          })
+          .from(paperPositions)
+          .where(eq(paperPositions.accountId, account.id))
+          .orderBy(desc(paperPositions.openedAt))
+          .limit(1000),
+        // Buys, sells and settlements to mark on the equity chart.
+        db
+          .select({
+            id: paperFills.id,
+            ts: paperFills.ts,
+            side: paperFills.side,
+            kind: paperFills.kind,
+            notional: paperFills.notional,
+            shares: paperFills.shares,
+            avgPrice: paperFills.avgPrice,
+            realizedPnl: paperFills.realizedPnl,
+            positionId: paperFills.positionId,
+            title: paperPositions.title,
+            outcome: paperPositions.outcome,
+          })
+          .from(paperFills)
+          .leftJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
+          .where(and(eq(paperFills.accountId, account.id), gte(paperFills.ts, since)))
+          // The newest 2,000 (put back in time order below), not the oldest.
+          .orderBy(desc(paperFills.ts), desc(paperFills.id))
+          .limit(2000),
+        // Money put in per trader (all buys), for per-trader return.
+        db
+          .select({
+            wallet: paperPositions.sourceWallet,
+            invested: sql<number>`coalesce(sum(${paperFills.notional}), 0)::float8`,
+          })
+          .from(paperFills)
+          .innerJoin(paperPositions, eq(paperPositions.id, paperFills.positionId))
+          .where(and(eq(paperFills.accountId, account.id), eq(paperFills.side, "BUY")))
+          .groupBy(paperPositions.sourceWallet),
+      ]);
+      return { closed, allPositions, markersDesc, investedRows };
+    }),
+    equityHistory(db, account.id, since),
+    db
+      .select({
+        wallet: paperPositions.sourceWallet,
+        name: traders.name,
+        realized: sql<number>`sum(${paperPositions.realizedPnl})::float8`,
+        openCost: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.costBasis} else 0 end)::float8`,
+        openValue: sql<number>`sum(case when ${paperPositions.status} = 'open' then ${paperPositions.shares} * coalesce(${paperPositions.currentPrice}, ${paperPositions.avgPrice}) else 0 end)::float8`,
+        trades: sql<number>`count(*)::int`,
+        open: sql<number>`count(*) filter (where ${paperPositions.status} = 'open')::int`,
+        finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy')::int`,
+        wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy' and ${paperPositions.realizedPnl} > 0)::int`,
+      })
+      .from(paperPositions)
+      .leftJoin(traders, eq(traders.wallet, paperPositions.sourceWallet))
+      .where(eq(paperPositions.accountId, account.id))
+      .groupBy(paperPositions.sourceWallet, traders.name),
+    // Account-wide totals (the lists above are capped): realized includes partial sells
+    // of positions that are still open.
+    db
+      .select({
+        realized: sql<number>`coalesce(sum(${paperPositions.realizedPnl}), 0)::float8`,
+        // Win rate over finished copies; hedges are insurance, not bets on the trader.
+        finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy')::int`,
+        wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy' and ${paperPositions.realizedPnl} > 0)::int`,
+      })
+      .from(paperPositions)
+      .where(eq(paperPositions.accountId, account.id)),
+  ]);
+  const { closed, investedRows } = heavy;
+  // Shared with later renders: copy before reordering, and drop markers that aged out.
+  const markers = heavy.markersDesc.filter((m) => m.ts >= since).reverse();
+  const openNow = new Map(state.open.map((p) => [p.id, p]));
+  const allPositions = heavy.allPositions.map((p) => {
+    const o = openNow.get(p.id);
+    return o ? { ...p, currentPrice: o.currentPrice } : p;
+  });
   const investedBy = new Map(investedRows.map((r) => [r.wallet, r.invested]));
 
   // Open positions, most recent trade first (a later add or partial sell counts as recent);
