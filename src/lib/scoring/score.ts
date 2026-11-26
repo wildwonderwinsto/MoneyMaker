@@ -315,11 +315,18 @@ function assignTier(
     m.nHoldout !== undefined &&
     failed.some((c) => PENDING_SKILL.has(c.code)) &&
     !failed.some((c) => c.code === "no_edge" || c.code === "candidate_age");
-  const counted = pending ? failed.filter((c) => !PENDING_SKILL.has(c.code)) : failed;
+  // Copies never replayed (owner, 2026-11-26): Stage 2 replays only 60 traders a day, so
+  // one still waiting in line isn't demoted for it. Passing still needs a measured copy
+  // check: `passed` above counts it as failed, so Verified/Elite/Proven stay out of reach.
+  const copyPending =
+    (m.copyReplayedAt ?? null) === null && failed.some((c) => c.code === "copy_roi");
+  const counted = failed.filter(
+    (c) => !(pending && PENDING_SKILL.has(c.code)) && !(copyPending && c.code === "copy_roi"),
+  );
 
   if (passed)
     return provenStatus(m, cfg).proven ? "proven" : score >= cfg.eliteScore ? "elite" : "verified";
-  if (pending && counted.length === 0) return "candidate";
+  if ((pending || copyPending) && counted.length === 0) return "candidate";
   // CAPACITY rule, not a statistical one (audit R4): while skill is pending, at most 1 other
   // failed check (owner, 2026-11-08), because the 3-miss rule put 104 of 150 on the
   // Watchlist and Watchlist re-checks crowd out Candidates and new wallets. The 1 is not a

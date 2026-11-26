@@ -121,7 +121,7 @@ export function delayedEntryPrice(
 
 export async function loadInputs(db: Db, wallets: string[], now: number) {
   const inputs = new Map<string, MetricsInput>();
-  const meta = new Map<string, { category: string | null }>();
+  const meta = new Map<string, { category: string | null; fullCheckDue: boolean }>();
   for (const part of chunk(wallets, 50)) {
     const [positions, pnl, profiles] = await Promise.all([
       db.select().from(traderPositions).where(inArray(traderPositions.wallet, part)),
@@ -129,7 +129,7 @@ export async function loadInputs(db: Db, wallets: string[], now: number) {
       db.select().from(traders).where(inArray(traders.wallet, part)),
     ]);
     for (const p of profiles) {
-      meta.set(p.wallet, { category: p.leaderboardCategory });
+      meta.set(p.wallet, { category: p.leaderboardCategory, fullCheckDue: p.fullCheckDue });
       inputs.set(p.wallet, {
         wallet: p.wallet,
         positions: [],
@@ -531,6 +531,101 @@ const POOLED_BH_DAYS = 30;
  * over everyone tested recently, not just today's batch. Rows scored before the sequential
  * test have no evidence stored; they count as 1 (no evidence), so they still count as tests.
  */
+export interface ReplayCandidate {
+  wallet: string;
+  score: number;
+  /** A full check is due (cheap re-check found skill) or skill passed today. */
+  urgent: boolean;
+  /** When last replayed (epoch seconds), null = never. */
+  replayedAt: number | null;
+  /** Verified/Elite/Candidate once the copy check passes (not Watchlist). */
+  wouldPass: boolean;
+}
+
+/**
+ * Stage 2's replay order (owner, 2026-11-26), so the daily slots rotate through every
+ * eligible trader instead of replaying the same top scores each day:
+ * (a) urgent: full check due or skill passed today; (b) never replayed; (c) the rest,
+ * oldest replay first. Within a group, would-be Verified/Elite/Candidates go before the
+ * Watchlist (so followed Watchlist traders don't crowd Candidates out), then the oldest
+ * replay, then score. Pure (tested).
+ */
+export function replayOrder(list: ReplayCandidate[]): string[] {
+  const group = (c: ReplayCandidate) => (c.urgent ? 0 : c.replayedAt === null ? 1 : 2);
+  const age = (c: ReplayCandidate) => c.replayedAt ?? -Infinity;
+  return [...list]
+    .sort(
+      (a, b) =>
+        group(a) - group(b) ||
+        Number(b.wouldPass) - Number(a.wouldPass) ||
+        age(a) - age(b) ||
+        b.score - a.score,
+    )
+    .map((c) => c.wallet);
+}
+
+/** How long a trader's last copy replay stands in for one when not replayed today. */
+export const REPLAY_REUSE_DAYS = 14;
+
+/** The copy-check fields a replay measures, reused as a set. */
+const COPY_FIELDS = [
+  "copyAdjRoi",
+  "copyAdjRoiMean",
+  "copyRoiUpper",
+  "copyEffectiveN",
+  "copyReplayDays",
+  "copyOpenReplays",
+  "nCopyReplays",
+  "copyReplayedAt",
+] as const satisfies readonly (keyof TraderMetrics)[];
+/** The Proven tier's since-Verified record, reused with them while a Verified start exists. */
+const SINCE_VERIFIED_FIELDS = [
+  "sinceVerifiedFrom",
+  "sinceVerifiedDays",
+  "sinceVerifiedCopies",
+  "sinceVerifiedCopyRoi",
+  "sinceVerifiedCopyRoiMean",
+  "sinceVerifiedOpenCopies",
+] as const satisfies readonly (keyof TraderMetrics)[];
+
+/**
+ * When a stored score's copy fields were measured (epoch seconds), or null. Rows written
+ * before `copyReplayedAt` existed (2026-11-26) count as replayed when they hold replays:
+ * a run without a replay wrote 0 replays, so their computed time is the replay's.
+ */
+export function storedReplayedAt(row: {
+  metrics: Record<string, unknown>;
+  computedAt: Date;
+}): number | null {
+  const m = row.metrics;
+  if ("copyReplayedAt" in m) return typeof m.copyReplayedAt === "number" ? m.copyReplayedAt : null;
+  return typeof m.nCopyReplays === "number" && m.nCopyReplays > 0
+    ? Math.floor(row.computedAt.getTime() / 1000)
+    : null;
+}
+
+/**
+ * Owner, 2026-11-26: a trader not replayed today keeps their last replay's copy check for
+ * up to REPLAY_REUSE_DAYS, instead of failing it as "not measured". The since-Verified
+ * record comes along only while the trader still has a Verified start (a re-pick clears
+ * it). Pure (tested).
+ */
+export function withStoredReplay(
+  m: TraderMetrics,
+  stored: { metrics: Record<string, unknown>; computedAt: Date } | undefined,
+  hasVerifiedStart: boolean,
+  now: number,
+): TraderMetrics {
+  if (!stored || m.copyReplayedAt !== null) return m;
+  const at = storedReplayedAt(stored);
+  if (at === null || now - at > REPLAY_REUSE_DAYS * 86_400) return m;
+  const out: Record<string, unknown> = { ...m, copyReplayedAt: at };
+  for (const k of COPY_FIELDS) if (k !== "copyReplayedAt") out[k] = stored.metrics[k] ?? m[k];
+  if (hasVerifiedStart && typeof stored.metrics.sinceVerifiedFrom === "number")
+    for (const k of SINCE_VERIFIED_FIELDS) out[k] = stored.metrics[k] ?? m[k];
+  return out as unknown as TraderMetrics;
+}
+
 export async function recentTestedEValues(
   db: Db,
   since: Date,
@@ -586,8 +681,26 @@ export async function scoreAll(
   // Running skill evidence (owner, 2026-11-09): the full check folds new final events into
   // the same total the cheap re-checks use, so the two never disagree.
   const states = await loadEvidence(db, [...inputs.keys()]);
+  // Last stored scores: a recent copy replay stands in for one when not replayed today.
+  const stored = new Map<string, { metrics: Record<string, unknown>; computedAt: Date }>();
+  for (const part of chunk([...inputs.keys()], 500)) {
+    const prev = await db
+      .select({
+        wallet: traderScores.wallet,
+        metrics: traderScores.metrics,
+        computedAt: traderScores.computedAt,
+      })
+      .from(traderScores)
+      .where(inArray(traderScores.wallet, part));
+    for (const r of prev) stored.set(r.wallet, r);
+  }
   const measure = (input: MetricsInput) =>
-    withRunningEvidence(computeMetrics(input, cfg), input, states, cfg);
+    withStoredReplay(
+      withRunningEvidence(computeMetrics(input, cfg), input, states, cfg),
+      stored.get(input.wallet),
+      (input.verifiedFrom ?? null) !== null,
+      now,
+    );
   const metrics = new Map<string, TraderMetrics>();
   for (const [wallet, input] of inputs) metrics.set(wallet, measure(input));
   // Only wallets with enough post-pick bets are tested; the rest are Candidates.
@@ -629,20 +742,29 @@ export async function scoreAll(
   // from copy ROI. Those who'd be Verified/Elite/Candidate once copy ROI passes go first
   // (owner, 2026-11-26): before replay, copy ROI fails for everyone, so a Candidate looked
   // like a Watchlist trader, and one ranked past the cut went unreplayed and was demoted.
-  const shortlist = [...prelim.entries()]
-    .filter(([, r]) => {
-      const failed = r.checks.filter((c) => !c.ok && c.code !== "copy_roi");
-      return failed.length === 0 || r.tier === "watchlist" || r.tier === "candidate";
-    })
-    .map(([w, r]) => {
-      const ifCopyable = tierIfCopyable(metrics.get(w)!, r, cfg);
-      return { w, score: r.score, first: ifCopyable !== "watchlist" && ifCopyable !== "rejected" };
-    })
-    .sort((a, b) => Number(b.first) - Number(a.first) || b.score - a.score)
-    .slice(0, opts.shortlistSize)
-    .map(({ w }) => w);
+  // Order (owner, 2026-11-26): see replayOrder; the 60 slots rotate through everyone.
+  const shortlist = replayOrder(
+    [...prelim.entries()]
+      .filter(([, r]) => {
+        const failed = r.checks.filter((c) => !c.ok && c.code !== "copy_roi");
+        return failed.length === 0 || r.tier === "watchlist" || r.tier === "candidate";
+      })
+      .map(([w, r]) => {
+        const ifCopyable = tierIfCopyable(metrics.get(w)!, r, cfg);
+        return {
+          wallet: w,
+          score: r.score,
+          urgent:
+            (meta.get(w)?.fullCheckDue ?? false) ||
+            r.checks.some((c) => c.code === "skill" && c.ok),
+          replayedAt: metrics.get(w)!.copyReplayedAt,
+          wouldPass: ifCopyable !== "watchlist" && ifCopyable !== "rejected",
+        };
+      }),
+  ).slice(0, opts.shortlistSize);
   log(`stage 2: replaying copies for ${shortlist.length} shortlisted traders`);
 
+  const replayed = new Set<string>();
   await mapPool(shortlist, 2, async (wallet) => {
     try {
       const prev = inputs.get(wallet)!;
@@ -656,6 +778,7 @@ export async function scoreAll(
       const m = measure(input);
       metrics.set(wallet, m);
       prelim.set(wallet, scoreTrader(m, cfg, ctx));
+      replayed.add(wallet);
     } catch (err) {
       log(`copy replay failed for ${wallet}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -697,10 +820,15 @@ export async function scoreAll(
         firstCheckedAt: sql`coalesce(${traders.firstCheckedAt}, ${checked.toISOString()}::timestamptz)`,
         lastCheckedAt: checked,
         lastFullCheckAt: checked,
-        fullCheckDue: false,
         marketsAtCheck: sql`${traders.marketsTraded}`,
       })
       .where(inArray(traders.wallet, part));
+  }
+  // A due full check is done only once its copies were replayed (owner, 2026-11-26): it used
+  // to be cleared either way, so a Candidate proven by a cheap re-check but left out of the
+  // replays lost its place at the front of the line. Due ones replay first, so rarely so.
+  for (const part of chunk([...replayed], 500)) {
+    await db.update(traders).set({ fullCheckDue: false }).where(inArray(traders.wallet, part));
   }
 
   await saveEvidence(db, states);

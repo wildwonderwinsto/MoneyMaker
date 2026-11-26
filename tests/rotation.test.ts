@@ -63,7 +63,7 @@ async function scored(wallet: string, tier: string, score: number, lastCheckedAt
 }
 
 describe("pickDailyWallets", () => {
-  it("re-checks followed → Verified/Elite → due Candidates → Watchlist, up to the cap", async () => {
+  it("re-checks followed, then Verified/Elite → due Candidates → Watchlist up to the cap", async () => {
     // Owner decision (2026-11-08, revised): Candidates before Watchlist, or a big Watchlist
     // (104 in a live run) takes every slot and Candidates are never re-checked.
     await db.insert(follows).values([{ wallet: "0xf1" }, { wallet: "0xpaused", enabled: false }]);
@@ -72,10 +72,12 @@ describe("pickDailyWallets", () => {
     await scored("0xw", "watchlist", 50, daysAgo(1));
     await scored("0xc-due", "candidate", 60, daysAgo(8));
     await scored("0xc-notdue", "candidate", 90, daysAgo(2));
-    const r = await pickDailyWallets(db, [], opts, NOW);
-    // Cap 4: followed, then V/E by score, then the due candidate. Watchlist didn't fit.
+    const r = await pickDailyWallets(db, [], { ...opts, recheckCap: 3 }, NOW);
+    // The followed trader doesn't use the cap of 3: V/E by score, then the due candidate.
+    // Watchlist didn't fit.
     expect(r.wallets).toEqual(["0xf1", "0xe-high", "0xv-low", "0xc-due"]);
     expect(r.recheck).toBe(4);
+    expect(r.followed).toBe(1);
 
     const roomy = await pickDailyWallets(db, [], { ...opts, recheckCap: 10 }, NOW);
     expect(roomy.wallets).toEqual(["0xf1", "0xe-high", "0xv-low", "0xc-due", "0xw"]);
@@ -215,13 +217,57 @@ describe("pickDailyWallets", () => {
     expect((s.metrics as { recentRedeemMergeShare: number }).recentRedeemMergeShare).toBe(0.75);
   });
 
-  it("never drops a followed trader, even past the cap", async () => {
-    const many = Array.from({ length: 6 }, (_, i) => ({ wallet: `0xf${i}` }));
-    await db.insert(follows).values(many);
+  // Owner, 2026-11-26: 78 follows were all re-checked daily inside the 120 re-checks.
+  it("followed traders get their own daily cap, oldest check first, outside the re-check cap", async () => {
+    await db.insert(follows).values(Array.from({ length: 5 }, (_, i) => ({ wallet: `0xf${i}` })));
+    // Checked 1, 2, 3, 4 days ago; 0xf4 never.
+    for (let i = 0; i < 4; i++)
+      await db.insert(traders).values({ wallet: `0xf${i}`, lastCheckedAt: daysAgo(i + 1) });
     await scored("0xe", "elite", 90, daysAgo(1));
-    const r = await pickDailyWallets(db, [], opts, NOW);
-    expect(r.wallets.slice(0, 6).sort()).toEqual(many.map((m) => m.wallet).sort());
-    expect(r.wallets).not.toContain("0xe"); // cap already used up by followed traders
+    const r = await pickDailyWallets(db, [], { ...opts, followedCap: 3, recheckCap: 1 }, NOW);
+    expect(r.wallets.slice(0, 3)).toEqual(["0xf4", "0xf3", "0xf2"]);
+    expect(r.followed).toBe(3);
+    // The tiers' re-check still gets its slot.
+    expect(r.wallets).toContain("0xe");
+    expect(r.wallets).not.toContain("0xf0");
+    expect(DEFAULT_ROTATION.followedCap).toBe(30);
+  });
+
+  // Owner, 2026-11-26: re-picking reset every returning wallet's holdout, wiping a
+  // Candidate's post-pick evidence and a Verified trader's Proven record.
+  it("a returning wallet in a live tier keeps its holdout; a Rejected one restarts it", async () => {
+    const back = { lastCheckedAt: daysAgo(10), marketsTraded: 150, marketsAtCheck: 100 };
+    for (const [wallet, tier] of [
+      ["0xcand", "candidate"],
+      ["0xwatch", "watchlist"],
+      ["0xver", "verified"],
+      ["0xrej", "rejected"],
+    ]) {
+      await db
+        .insert(traders)
+        .values({ wallet, ...back, holdoutFrom: daysAgo(40), verifiedAt: daysAgo(30) });
+      await db.insert(traderScores).values({
+        wallet,
+        tier: tier as "candidate",
+        score: 10,
+        passed: false,
+        nResolved: 0,
+        nEvents: 0,
+      });
+    }
+    // No re-check slots, so discovery (50+ new markets) is what picks them.
+    const ranked = ["0xcand", "0xwatch", "0xver", "0xrej"];
+    const r = await pickDailyWallets(db, ranked, { ...opts, recheckCap: 0 }, NOW);
+    expect(r.wallets).toEqual(ranked);
+    expect(r.returning).toBe(1);
+    const rows = await db.select().from(traders);
+    const of = (w: string) => rows.find((t) => t.wallet === w)!;
+    for (const w of ["0xcand", "0xwatch", "0xver"]) {
+      expect(of(w).holdoutFrom).toEqual(daysAgo(40));
+      expect(of(w).verifiedAt).toEqual(daysAgo(30));
+    }
+    expect(of("0xrej").holdoutFrom).toEqual(NOW);
+    expect(of("0xrej").verifiedAt).toBeNull();
   });
 
   it("fills the rest with new wallets; rejected ones cool down 30 days unless they traded 50+ new markets", async () => {

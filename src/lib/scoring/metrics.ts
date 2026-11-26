@@ -126,6 +126,11 @@ export interface TraderMetrics {
   copyOpenReplays: number;
   nCopyReplays: number;
   /**
+   * When the copy fields were measured (epoch seconds): now when replayed this run, the
+   * earlier replay's time when reused from it (jobs/score.ts), null = never replayed.
+   */
+  copyReplayedAt: number | null;
+  /**
    * Proven tier: copies of bets placed since the trader became Verified (epoch seconds the
    * record starts; null = never Verified in this holdout). Same replay model as the copy
    * check. Copies/returns null = not replayed this run.
@@ -657,6 +662,7 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     copyReplayDays: replaySpanDays(replays),
     copyOpenReplays: replays?.filter((r) => r.open).length ?? 0,
     nCopyReplays: replays?.length ?? 0,
+    copyReplayedAt: replays ? now : null,
     sinceVerifiedFrom: record.from,
     sinceVerifiedDays: record.days,
     sinceVerifiedCopies: record.copies,

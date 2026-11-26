@@ -98,7 +98,8 @@ export async function dailyJob(
     }
   };
   const discovered = await step("discovery", () => discoverCandidates(db, cfg, opts.discover, log));
-  // Followed traders need a fresh usual stake for sizing; the rotation always includes them.
+  // Followed traders need a fresh usual stake for sizing; the rotation re-checks them in turn
+  // (followedCap a day, oldest check first).
   const followed = (
     await db.select({ wallet: follows.wallet }).from(follows).where(eq(follows.enabled, true))
   ).map((f) => f.wallet);
