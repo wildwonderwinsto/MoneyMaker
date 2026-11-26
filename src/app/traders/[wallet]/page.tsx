@@ -199,7 +199,13 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
     copyDelaySeconds?: number;
     nClosed?: number;
     nHoldout?: number | null;
+    worstMarketLoss?: number | null;
+    worstLossShare?: number | null;
+    sizingSkill?: number | null;
+    equalWeightRoi?: number | null;
   };
+  // Added 2026-11-26: scores saved before then don't have these until the next scoring run.
+  const notYet = "Shown after the next scoring run";
   const name = traderName(trader);
   const passed = score?.checks.filter((c) => c.ok).length ?? 0;
   const monthly = monthlyCumulative(metrics.monthlyPnl);
@@ -261,7 +267,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
         <p className="text-muted-foreground">This trader hasn&apos;t been scored yet.</p>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
             <StatTile
               label="Realized P&L"
               value={usd(score.totalPnl, { compact: true, sign: true })}
@@ -315,6 +321,42 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
               label="Biggest win share"
               value={pct(score.topMarketShare, 0)}
               hint="of all profits (lower = steadier)"
+            />
+            <StatTile
+              label="Worst single loss"
+              value={usd(metrics.worstMarketLoss, { compact: true })}
+              tone={(metrics.worstMarketLoss ?? 0) < 0 ? "loss" : undefined}
+              hint={
+                metrics.worstMarketLoss === undefined
+                  ? notYet
+                  : metrics.worstMarketLoss === 0
+                    ? "No market lost money"
+                    : typeof metrics.worstLossShare === "number"
+                      ? `${pct(metrics.worstLossShare, 0)} of all profits, in one market`
+                      : "in one market"
+              }
+            />
+            <StatTile
+              label="Sizing skill"
+              value={pct(metrics.sizingSkill, 1, { sign: true })}
+              tone={
+                typeof metrics.sizingSkill === "number"
+                  ? metrics.sizingSkill >= 0
+                    ? "gain"
+                    : "loss"
+                  : undefined
+              }
+              hint={
+                metrics.sizingSkill === undefined
+                  ? notYet
+                  : typeof metrics.sizingSkill === "number" &&
+                      typeof metrics.equalWeightRoi === "number"
+                    ? `${pct(metrics.equalWeightRoi + metrics.sizingSkill, 1, { sign: true })} by dollars vs. ${pct(metrics.equalWeightRoi, 1, { sign: true })} per bet: ` +
+                      (metrics.sizingSkill >= 0
+                        ? "their big bets do better"
+                        : "their big bets do worse")
+                    : "Big bets vs. small ones"
+              }
             />
           </div>
 

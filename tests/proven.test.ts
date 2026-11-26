@@ -314,6 +314,24 @@ describe("since-Verified replays", () => {
     expect(none.replays.length).toBe(r.replays.length);
   });
 
+  // Owner, 2026-11-26: the copy check replays only what the engine would buy (0.03–0.92 by
+  // default, bounds included like the engine); it used to keep 0.02–0.97.
+  it("replays only buys inside the copy engine's entry-price band", async () => {
+    const prices = [0.02, 0.03, 0.5, 0.92, 0.95];
+    const all = prices.map((price, i) => ({ ...buy(2 + i, i), price }));
+    vi.mocked(data.getActivity).mockImplementation(async () => ({
+      data: all,
+      pagination: { has_more: false, next_cursor: null },
+    }));
+    const r = await buildReplays(db, "0xleader", cfg, DEFAULT_SCORE, now, null);
+    expect(r.replays.map((x) => x.ts).sort()).toEqual(
+      all
+        .filter((t) => t.price >= 0.03 && t.price <= 0.92)
+        .map((t) => t.timestamp)
+        .sort(),
+    );
+  });
+
   it("a fetch cut short by the trade cap starts the record at the oldest trade it has", async () => {
     const all = Array.from({ length: 100 }, (_, i) => buy(2 + 2 * i, i));
     vi.mocked(data.getActivity).mockImplementation(async () => ({

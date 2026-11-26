@@ -243,18 +243,36 @@ export function provenStatus(m: TraderMetrics, cfg: ScoringConfig): ProvenStatus
 }
 
 /**
- * Weighted composite (0–100). Higher = stronger, more reliable edge. Owner, 2026-11-11:
- * profitable months count for more (15 → 25), taken from skill (30 → 25) and return on
- * risk (20 → 15), so steady traders sort above streaky ones with a similar record.
+ * Profitable months, shrunk toward 50% for few months: (wins + 2) / (months + 4), so 15 of
+ * 18 (0.77) beats 3 of 3 (0.71). Used by the composite score only; the pass/fail check
+ * stays on the raw share.
+ */
+export function shrunkProfitableMonths(m: Pick<TraderMetrics, "months" | "profitableMonthsPct">) {
+  if (m.profitableMonthsPct === null || m.months <= 0) return 0;
+  const wins = Math.round(m.profitableMonthsPct * m.months);
+  return (wins + 2) / (m.months + 4);
+}
+
+/** Recovery factor on a log scale: 2× → 0.46, 5× → 0.75, 10× or more → 1, 0 or less → 0. */
+export function recoveryPart(recoveryFactor: number | null): number {
+  return clamp(Math.log1p(Math.max(0, recoveryFactor ?? 0)) / Math.log(11));
+}
+
+/**
+ * Weighted composite (0–100). Higher = stronger, more reliable edge. Owner, 2026-11-26:
+ * copy return (the only part with delay, slippage and fees) 10 → 20 points and 0 when not
+ * measured (it was 5, above a measured +8%); skill 25 → 20; return on risk 15 → 10;
+ * profitable months keep 25 but shrunk for few months; recovery factor replaces the daily
+ * dollar Sharpe (which punished big winning days and grew with bet size).
  */
 export function compositeScore(m: TraderMetrics): number {
   const parts = [
-    25 * clamp((m.zSkill ?? 0) / 4),
-    15 * clamp((m.roiShrunk ?? 0) / 0.3),
-    25 * (m.profitableMonthsPct ?? 0),
-    10 * clamp((m.sharpe ?? 0) / 3),
+    20 * clamp((m.zSkill ?? 0) / 4),
+    10 * clamp((m.roiShrunk ?? 0) / 0.3),
+    25 * shrunkProfitableMonths(m),
+    10 * recoveryPart(m.recoveryFactor),
     10 * (1 - (m.topMarketShare ?? 1)),
-    10 * (m.copyAdjRoi === null ? 0.5 : clamp(m.copyAdjRoi / 0.2)),
+    20 * clamp((m.copyAdjRoi ?? 0) / 0.2),
     5 * clamp(Math.log(Math.max(1, m.nResolved)) / Math.log(500)),
   ];
   return Math.round(parts.reduce((a, b) => a + b, 0) * 10) / 10;
@@ -262,9 +280,33 @@ export function compositeScore(m: TraderMetrics): number {
 
 export function scoreTrader(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreContext): ScoreResult {
   const checks = buildChecks(m, cfg, ctx);
+  const score = compositeScore(m);
+  return {
+    tier: assignTier(checks, m, cfg, score),
+    score,
+    passed: checks.every((c) => c.ok),
+    checks,
+  };
+}
+
+/**
+ * The tier this trader would get if the copy check passed. Before Stage 2's replays, copy
+ * ROI isn't measured and fails for everyone; this tells the shortlist who is a would-be
+ * Verified/Elite/Candidate rather than a Watchlist trader.
+ */
+export function tierIfCopyable(m: TraderMetrics, r: ScoreResult, cfg: ScoringConfig): ScoreTier {
+  const checks = r.checks.map((c) => (c.code === "copy_roi" ? { ...c, ok: true } : c));
+  return assignTier(checks, m, cfg, r.score);
+}
+
+function assignTier(
+  checks: ScoreCheck[],
+  m: TraderMetrics,
+  cfg: ScoringConfig,
+  score: number,
+): ScoreTier {
   const failed = checks.filter((c) => !c.ok);
   const passed = failed.length === 0;
-  const score = compositeScore(m);
 
   // Skill not proven yet, but not disproven or timed out either: the skill checks are
   // pending (Candidate), and the tier is judged on the rest.
@@ -275,18 +317,15 @@ export function scoreTrader(m: TraderMetrics, cfg: ScoringConfig, ctx: ScoreCont
     !failed.some((c) => c.code === "no_edge" || c.code === "candidate_age");
   const counted = pending ? failed.filter((c) => !PENDING_SKILL.has(c.code)) : failed;
 
-  let tier: ScoreTier;
   if (passed)
-    tier = provenStatus(m, cfg).proven ? "proven" : score >= cfg.eliteScore ? "elite" : "verified";
-  else if (pending && counted.length === 0) tier = "candidate";
+    return provenStatus(m, cfg).proven ? "proven" : score >= cfg.eliteScore ? "elite" : "verified";
+  if (pending && counted.length === 0) return "candidate";
   // CAPACITY rule, not a statistical one (audit R4): while skill is pending, at most 1 other
   // failed check (owner, 2026-11-08), because the 3-miss rule put 104 of 150 on the
   // Watchlist and Watchlist re-checks crowd out Candidates and new wallets. The 1 is not a
   // confidence level; it trades some skilled traders for slots — in the power sim most
   // skilled traders not found were rejected here (copy_roi and recent both noisy).
-  else if (counted.length <= (pending ? 1 : 3) && !counted.some((c) => HARD_CHECKS.has(c.code)))
-    tier = "watchlist";
-  else tier = "rejected";
-
-  return { tier, score, passed, checks };
+  if (counted.length <= (pending ? 1 : 3) && !counted.some((c) => HARD_CHECKS.has(c.code)))
+    return "watchlist";
+  return "rejected";
 }

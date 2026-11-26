@@ -92,6 +92,13 @@ export interface TraderMetrics {
   topMarketShare: number | null;
   top3Share: number | null;
   pnlExTop3: number;
+  /** Worst single-market result in USDC (≤ 0); null = no finished positions. Display only. */
+  worstMarketLoss: number | null;
+  /** That loss as a share of gross profit (mirror of topMarketShare). Display only. */
+  worstLossShare: number | null;
+  /** Stake-weighted ROI minus equal-weighted ROI (see sizingSkill). Display only. */
+  sizingSkill: number | null;
+  equalWeightRoi: number | null;
   months: number;
   profitableMonthsPct: number | null;
   maxDrawdown: number;
@@ -347,11 +354,34 @@ export function concentration(positions: PositionRecord[]) {
       .slice(0, k)
       .filter((x) => x > 0)
       .reduce((a, b) => a + b, 0);
+  const worst = pnls.at(-1);
   return {
     topMarketShare: gross > 0 ? top(1) / gross : null,
     top3Share: gross > 0 ? top(3) / gross : null,
     pnlExTop3: net - top(3),
+    worstMarketLoss: worst === undefined ? null : Math.min(0, worst),
+    worstLossShare: worst === undefined || gross <= 0 ? null : Math.max(0, -worst) / gross,
   };
+}
+
+/** Smallest position cost counted by `sizingSkill` (cents-sized bets swing the plain average). */
+const SIZING_MIN_COST = 1;
+
+/**
+ * Sizing skill (display only, owner 2026-11-26): stake-weighted ROI minus the plain average
+ * ROI per finished position. Above 0: their bigger bets do better than their small ones, so
+ * copying their conviction (the engine sizes up to 3×) helps; below 0: it hurts.
+ */
+export function sizingSkill(closed: PositionRecord[]): {
+  sizingSkill: number | null;
+  equalWeightRoi: number | null;
+} {
+  const bets = closed.filter((p) => cost(p) >= SIZING_MIN_COST);
+  if (bets.length === 0) return { sizingSkill: null, equalWeightRoi: null };
+  const totalCost = bets.reduce((a, p) => a + cost(p), 0);
+  const stakeWeighted = bets.reduce((a, p) => a + p.realizedPnl, 0) / totalCost;
+  const equalWeightRoi = mean(bets.map((p) => p.realizedPnl / cost(p)));
+  return { sizingSkill: stakeWeighted - equalWeightRoi, equalWeightRoi };
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +631,9 @@ export function computeMetrics(input: MetricsInput, cfg: ScoringConfig): TraderM
     topMarketShare: conc.topMarketShare,
     top3Share: conc.top3Share,
     pnlExTop3: conc.pnlExTop3,
+    worstMarketLoss: conc.worstMarketLoss,
+    worstLossShare: conc.worstLossShare,
+    ...sizingSkill(closed),
     months: activeMonths.length,
     profitableMonthsPct: activeMonths.length
       ? activeMonths.filter((m) => m.pnl > 0).length / activeMonths.length

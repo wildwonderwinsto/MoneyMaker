@@ -39,7 +39,7 @@ import {
   type PositionRecord,
   type TraderMetrics,
 } from "@/lib/scoring/metrics";
-import { scoreTrader, type ScoreResult } from "@/lib/scoring/score";
+import { scoreTrader, tierIfCopyable, type ScoreResult } from "@/lib/scoring/score";
 import { eBenjaminiHochbergThreshold } from "@/lib/scoring/stats";
 import { getRiskConfig } from "@/lib/settings";
 
@@ -221,7 +221,9 @@ export async function buildReplays(
 ): Promise<Replays> {
   // Same minimum as the copy engine's "Ignore trader trades under" (owner, 2026-11-10): it
   // used to be a separate scoring setting that could drift from what is actually copied.
-  const { minLeaderUsd, skipInPlay } = await getRiskConfig(db);
+  // The price band too (owner, 2026-11-26): it was 0.02–0.97, so wins on 0.93–0.97 favourites
+  // counted toward a copy check for trades the engine (0.03–0.92 by default) never copies.
+  const { minLeaderUsd, skipInPlay, minEntryPrice, maxEntryPrice } = await getRiskConfig(db);
   const lookbackStart = Math.floor(now - opts.replayLookbackDays * 86_400);
   const start =
     verifiedFrom === null ? lookbackStart : Math.min(lookbackStart, Math.floor(verifiedFrom));
@@ -267,8 +269,9 @@ export async function buildReplays(
     (t) =>
       t.side === "BUY" &&
       t.usdcSize >= minLeaderUsd &&
-      t.price > cfg.minEntryPrice &&
-      t.price < 0.97 &&
+      // Same comparisons as the engine, which skips a price above the max or below the min.
+      t.price >= minEntryPrice &&
+      t.price <= maxEntryPrice &&
       toEpoch(t.ts)! < now - cfg.copyDelaySeconds - 900 &&
       // Combo bets can't be copied (no order book), so they don't take sample slots.
       !isComboCondition(t.conditionId),
@@ -623,15 +626,21 @@ export async function scoreAll(
   log(`recent activity checked for ${live.length} traders (${profileFailures} lookups failed)`);
 
   // Stage 2: shortlist = everyone who would pass, be a Candidate or be watchlisted apart
-  // from copy ROI.
+  // from copy ROI. Those who'd be Verified/Elite/Candidate once copy ROI passes go first
+  // (owner, 2026-11-26): before replay, copy ROI fails for everyone, so a Candidate looked
+  // like a Watchlist trader, and one ranked past the cut went unreplayed and was demoted.
   const shortlist = [...prelim.entries()]
     .filter(([, r]) => {
       const failed = r.checks.filter((c) => !c.ok && c.code !== "copy_roi");
       return failed.length === 0 || r.tier === "watchlist" || r.tier === "candidate";
     })
-    .sort((a, b) => b[1].score - a[1].score)
+    .map(([w, r]) => {
+      const ifCopyable = tierIfCopyable(metrics.get(w)!, r, cfg);
+      return { w, score: r.score, first: ifCopyable !== "watchlist" && ifCopyable !== "rejected" };
+    })
+    .sort((a, b) => Number(b.first) - Number(a.first) || b.score - a.score)
     .slice(0, opts.shortlistSize)
-    .map(([w]) => w);
+    .map(({ w }) => w);
   log(`stage 2: replaying copies for ${shortlist.length} shortlisted traders`);
 
   await mapPool(shortlist, 2, async (wallet) => {
