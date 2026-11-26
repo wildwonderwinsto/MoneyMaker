@@ -111,7 +111,7 @@ async function SettingsContent() {
           {followList.length === 0 ? (
             <p className="text-muted-foreground text-sm">
               Not following anyone yet. Pick verified traders on the{" "}
-              <Link href="/" className="underline">
+              <Link href="/traders" className="underline">
                 Traders
               </Link>{" "}
               page.

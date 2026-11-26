@@ -437,7 +437,7 @@ describe("running skill evidence across checks (owner, 2026-11-09)", () => {
 });
 
 describe("the number of checks the pages promise (batch 6)", () => {
-  it("home page and README match what a trader under test is checked against", async () => {
+  it("the Traders page and README match what a trader under test is checked against", async () => {
     const { readFileSync } = await import("node:fs");
     const { DAY, inputAt, skilledTrader } = await import("./helpers/skillPipeline");
     const { computeMetrics } = await import("@/lib/scoring/metrics");
@@ -447,7 +447,7 @@ describe("the number of checks the pages promise (batch 6)", () => {
     const m = computeMetrics(input, cfg);
     expect(m.nHoldout).not.toBeNull(); // every checked trader has a holdout now
     const n = buildChecks(m, cfg, { eThreshold: 1, candidates: 1 }).length;
-    for (const file of ["src/app/page.tsx", "README.md"]) {
+    for (const file of ["src/app/traders/page.tsx", "README.md"]) {
       const said = readFileSync(file, "utf8").match(/(\d+) checks/);
       expect(said, file).not.toBeNull();
       expect(Number(said![1]), file).toBe(n);

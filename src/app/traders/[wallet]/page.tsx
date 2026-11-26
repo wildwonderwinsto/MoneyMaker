@@ -207,7 +207,7 @@ async function TraderDetail({ params }: { params: PageProps<"/traders/[wallet]">
   return (
     <div className="space-y-4 sm:space-y-6">
       <Link
-        href="/"
+        href="/traders"
         className="text-muted-foreground hover:text-foreground -my-2 inline-block py-2 text-sm"
       >
         ← All traders

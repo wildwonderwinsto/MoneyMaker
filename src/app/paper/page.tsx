@@ -139,7 +139,7 @@ async function PaperContent() {
           {p.open.length === 0 ? (
             <EmptyState title="No open positions" icon={LineChartIcon}>
               Follow traders on the{" "}
-              <Link href="/" className="underline">
+              <Link href="/traders" className="underline">
                 Traders
               </Link>{" "}
               page. Their next qualifying trade will be copied here.

@@ -10,6 +10,16 @@ const nextConfig: NextConfig = {
     turbopackFileSystemCacheForDev: false,
   },
   cacheComponents: true,
+  // The trader list moved from / to /traders: old links with a tier or category filter
+  // (bookmarks, shared links) land on the list, with their query string carried over.
+  async redirects() {
+    return ["tier", "category"].map((key) => ({
+      source: "/",
+      has: [{ type: "query" as const, key }],
+      destination: "/traders",
+      permanent: false,
+    }));
+  },
   partialPrefetching: true,
   typescript: {
     // Render's free build machine runs out of memory type-checking. Types are still

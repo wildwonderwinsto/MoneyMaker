@@ -103,7 +103,7 @@ async function LiveContent() {
               {status.following === 0 ? (
                 <>
                   Follow a few traders on the{" "}
-                  <Link href="/" className="underline">
+                  <Link href="/traders" className="underline">
                     Traders
                   </Link>{" "}
                   page. Their new trades will show up here.

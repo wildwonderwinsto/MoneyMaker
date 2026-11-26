@@ -1,12 +1,13 @@
 "use client";
 
 import { cn } from "cn";
-import { Activity, FlaskConical, LineChart, Settings, Users } from "lucide-react";
+import { Activity, FlaskConical, House, LineChart, Settings, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const LINKS = [
-  { href: "/", label: "Traders", short: "Traders", icon: Users },
+  { href: "/", label: "Home", short: "Home", icon: House },
+  { href: "/traders", label: "Traders", short: "Traders", icon: Users },
   { href: "/live", label: "Live", short: "Live", icon: Activity },
   { href: "/paper", label: "Paper trading", short: "Paper", icon: LineChart },
   { href: "/backtest", label: "Backtest", short: "Backtest", icon: FlaskConical },
@@ -14,7 +15,7 @@ const LINKS = [
 ] as const;
 
 const activeFor = (pathname: string) => (href: string) =>
-  href === "/" ? pathname === "/" || pathname.startsWith("/traders") : pathname.startsWith(href);
+  href === "/" ? pathname === "/" : pathname.startsWith(href);
 
 /**
  * Highlights the current section. usePathname() suspends on dynamic routes under Cache
@@ -59,7 +60,7 @@ export function MobileNav({ isActive = () => false }: { isActive?: (href: string
       aria-label="Main"
       className="bg-card/95 fixed inset-x-0 bottom-0 z-40 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden"
     >
-      <ul className="grid grid-cols-5">
+      <ul className="grid grid-cols-6">
         {LINKS.map(({ href, short, icon: Icon }) => (
           <li key={href}>
             <Link

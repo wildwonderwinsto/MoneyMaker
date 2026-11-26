@@ -292,6 +292,7 @@ export async function getFollowList() {
       .select({
         follow: follows,
         name: traders.name,
+        profileImage: traders.profileImage,
         tier: traderScores.tier,
         score: traderScores.score,
       })
@@ -304,6 +305,64 @@ export async function getFollowList() {
       .orderBy(desc(follows.enabled), desc(follows.createdAt))
   );
 }
+
+/**
+ * The home page: account headline numbers and how each followed trader is doing for us.
+ * Small on purpose (open positions, one row per trader): it is the page people land on.
+ */
+export async function getHomeOverview() {
+  const db = getDb();
+  const account = await ensureDefaultAccount(db);
+  const [state, [totals], followList, perTrader] = await Promise.all([
+    loadAccountState(db, account.id),
+    db
+      .select({
+        realized: sql<number>`coalesce(sum(${paperPositions.realizedPnl}), 0)::float8`,
+        finished: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy')::int`,
+        wins: sql<number>`count(*) filter (where ${paperPositions.status} <> 'open' and ${paperPositions.kind} = 'copy' and ${paperPositions.realizedPnl} > 0)::int`,
+      })
+      .from(paperPositions)
+      .where(eq(paperPositions.accountId, account.id)),
+    getFollowList(),
+    db
+      .select({
+        wallet: paperPositions.sourceWallet,
+        pnl: sql<number>`sum(${paperPositions.realizedPnl} + case when ${paperPositions.status} = 'open' then ${paperPositions.shares} * coalesce(${paperPositions.currentPrice}, ${paperPositions.avgPrice}) - ${paperPositions.costBasis} else 0 end)::float8`,
+        open: sql<number>`count(*) filter (where ${paperPositions.status} = 'open')::int`,
+      })
+      .from(paperPositions)
+      .where(eq(paperPositions.accountId, account.id))
+      .groupBy(paperPositions.sourceWallet),
+  ]);
+  const results = new Map(perTrader.map((r) => [r.wallet, r]));
+  const unrealized = state.open.reduce(
+    (a, p) => a + p.shares * (p.currentPrice ?? p.avgPrice) - p.costBasis,
+    0,
+  );
+  return {
+    equity: state.equity,
+    cash: state.cash,
+    startingBalance: account.startingBalance,
+    totalReturn: state.equity / account.startingBalance - 1,
+    openCount: state.open.length,
+    unrealized,
+    realized: totals?.realized ?? 0,
+    winRate: totals?.finished ? totals.wins / totals.finished : null,
+    finishedCount: totals?.finished ?? 0,
+    followed: followList
+      .filter((f) => f.follow.enabled)
+      .map((f) => ({
+        wallet: f.follow.wallet,
+        name: f.name,
+        profileImage: f.profileImage,
+        tier: f.tier,
+        pnl: results.get(f.follow.wallet)?.pnl ?? 0,
+        open: results.get(f.follow.wallet)?.open ?? 0,
+      }))
+      .sort((a, b) => b.pnl - a.pnl),
+  };
+}
+export type HomeOverview = Awaited<ReturnType<typeof getHomeOverview>>;
 
 /**
  * The outer row's position id, for correlated subqueries over paper_fills. Not
