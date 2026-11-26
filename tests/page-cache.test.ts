@@ -158,3 +158,23 @@ describe("Live page", () => {
     expect([before.total, after.total]).toEqual([1, 2]);
   });
 });
+
+describe("raw SQL parameters", () => {
+  // PGlite (tests) accepts a Date parameter in raw sql``; postgres-js with prepare: false
+  // (production) throws "The string argument must be of type string ... Received Date".
+  it("never passes a Date to db.execute", async () => {
+    const execute = vi.spyOn(db, "execute");
+    await openPosition();
+    await getPaperOverview();
+    await getSignals(200);
+    await getLast24hSummary();
+    expect(execute).toHaveBeenCalled();
+    const dialect = (
+      db as unknown as { dialect: { sqlToQuery: (q: unknown) => { params: unknown[] } } }
+    ).dialect;
+    for (const [query] of execute.mock.calls) {
+      const { params } = dialect.sqlToQuery(query);
+      expect(params.filter((p) => p instanceof Date)).toEqual([]);
+    }
+  });
+});

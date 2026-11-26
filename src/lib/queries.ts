@@ -259,7 +259,7 @@ export async function getLast24hSummary(now = Date.now()) {
     db,
     sql`select id, wallet, token_id, side, decision, reason, reason_code, group_id, leader_ts,
                leader_price, leader_size, leader_usdc, detected_at
-        from signals where detected_at >= ${since}`,
+        from signals where detected_at >= ${since.toISOString()}::timestamptz`,
     sql`t.id`,
   );
   const rows = await reuseUnlessChanged("signals:24h", key, () =>
