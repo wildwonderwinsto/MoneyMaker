@@ -40,7 +40,14 @@ describe("start over", () => {
     }
     all.sort();
     expect([...WIPED_TABLES, ...KEPT_TABLES].sort()).toEqual(all);
-    expect(KEPT_TABLES).toEqual(["app_settings", "paper_accounts"]);
+    expect(KEPT_TABLES).toEqual([
+      "app_settings",
+      "custom_bets",
+      "custom_fills",
+      "custom_portfolios",
+      "custom_snapshots",
+      "paper_accounts",
+    ]);
   });
 
   it("empties the data, keeps settings, resets the paper account", async () => {

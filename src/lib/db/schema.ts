@@ -552,3 +552,88 @@ export const jobRuns = pgTable(
   },
   (t) => [index().on(t.job, t.startedAt)],
 ).enableRLS();
+
+// ---------------------------------------------------------------------------
+// Personal bets (owner, 2026-11-26): hand-placed paper bets, apart from the copy engine.
+// Their own tables so the engine, Start over's account reset and the copy account's
+// numbers never see them. Several portfolios, each with its own balance.
+// ---------------------------------------------------------------------------
+
+export const customPortfolios = pgTable("custom_portfolios", {
+  id: serial().primaryKey(),
+  name: text().notNull(),
+  startingBalance: money().notNull(),
+  cash: money().notNull(),
+  createdAt: createdAt(),
+  resetAt: tsz(),
+}).enableRLS();
+
+/** One row per bet placed (bets on the same outcome aren't merged). */
+export const customBets = pgTable(
+  "custom_bets",
+  {
+    id: serial().primaryKey(),
+    portfolioId: integer()
+      .notNull()
+      .references(() => customPortfolios.id, { onDelete: "cascade" }),
+    conditionId: text().notNull(),
+    tokenId: text().notNull(),
+    /** Index into the market's outcomes: picks the payout once it resolves. */
+    outcomeIndex: integer().notNull(),
+    outcome: text(),
+    title: text(),
+    slug: text(),
+    eventSlug: text(),
+    image: text(),
+    /** Polymarket taker fee rate when the bet was placed; also charged on a sale. */
+    feeRate: doublePrecision().notNull().default(0),
+    shares: doublePrecision().notNull().default(0),
+    avgPrice: money(10, 6).notNull().default(0),
+    costBasis: money().notNull().default(0),
+    realizedPnl: money().notNull().default(0),
+    currentPrice: money(10, 6),
+    status: text().$type<PaperPositionStatus>().notNull().default("open"),
+    openedAt: createdAt(),
+    closedAt: tsz(),
+    updatedAt: createdAt(),
+  },
+  (t) => [index().on(t.portfolioId, t.status)],
+).enableRLS();
+
+export const customFills = pgTable(
+  "custom_fills",
+  {
+    id: serial().primaryKey(),
+    portfolioId: integer()
+      .notNull()
+      .references(() => customPortfolios.id, { onDelete: "cascade" }),
+    betId: integer()
+      .notNull()
+      .references(() => customBets.id, { onDelete: "cascade" }),
+    kind: text().$type<PaperFillKind>().notNull(),
+    /** BUY, SELL, or WIN / LOSS / SPLIT for a settlement. */
+    side: text().notNull(),
+    shares: doublePrecision().notNull(),
+    avgPrice: money(10, 6).notNull(),
+    /** USDC paid (buy) or received (sell, settlement), fees included. */
+    notional: money().notNull(),
+    fee: money().notNull().default(0),
+    realizedPnl: money(),
+    ts: createdAt(),
+  },
+  (t) => [index().on(t.portfolioId, t.ts), index().on(t.betId)],
+).enableRLS();
+
+export const customSnapshots = pgTable(
+  "custom_snapshots",
+  {
+    portfolioId: integer()
+      .notNull()
+      .references(() => customPortfolios.id, { onDelete: "cascade" }),
+    ts: tsz().notNull(),
+    equity: money().notNull(),
+    cash: money().notNull(),
+    positionsValue: money().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.portfolioId, t.ts] })],
+).enableRLS();

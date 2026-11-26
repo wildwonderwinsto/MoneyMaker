@@ -1,4 +1,10 @@
-import { ChevronDown, ChevronRight, LineChart as LineChartIcon, Shield } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  LineChart as LineChartIcon,
+  Shield,
+  Ticket,
+} from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { connection } from "next/server";
@@ -7,6 +13,7 @@ import { Suspense } from "react";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { EquityChart } from "@/components/charts/equity-chart";
 import { EmptyState, MarketThumb, PageHeader, Signed, StatTile } from "@/components/common";
+import { CreatePortfolioForm } from "@/components/custom-bets";
 import { ResetPaperForm } from "@/components/forms";
 import { LockedAction } from "@/components/locked-action";
 import { SellAllButton } from "@/components/sell-all-button";
@@ -20,6 +27,9 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isAdmin } from "@/lib/admin";
+import { portfolioSummaries } from "@/lib/custom/bets";
+import { syncBets } from "@/lib/custom/polymarket";
+import { getDb } from "@/lib/db/client";
 import { cents, num, pct, timeAgo, traderName, usd } from "@/lib/format";
 import { getPaperOverview, type PaperOverview } from "@/lib/queries";
 
@@ -208,7 +218,66 @@ async function PaperContent() {
           )}
         </CardContent>
       </Card>
+
+      {/* Personal bets: private, so only the admin sees this (visitors get nothing). */}
+      {admin && <PersonalBets />}
     </div>
+  );
+}
+
+/** Collapsed list of hand-placed bet portfolios, apart from the copy engine. */
+async function PersonalBets() {
+  const db = getDb();
+  await syncBets(db);
+  const portfolios = await portfolioSummaries(db);
+  return (
+    <details id="personal-bets" className="group bg-card scroll-mt-20 rounded-xl border">
+      <summary className="hover:bg-muted/40 text-muted-foreground flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-sm">
+        <Ticket className="size-4" aria-hidden />
+        <span className="flex-1">
+          Personal bets
+          {portfolios.length > 0 &&
+            ` · ${portfolios.length} portfolio${portfolios.length === 1 ? "" : "s"}`}
+        </span>
+        <ChevronDown
+          className="size-4 shrink-0 transition-transform group-open:rotate-180"
+          aria-hidden
+        />
+      </summary>
+      <div className="space-y-4 border-t px-4 pt-3 pb-4">
+        <p className="text-muted-foreground text-sm">
+          Your own paper bets on any Polymarket market, with their own fake money. Separate from the
+          copy engine: nothing here changes the account above.
+        </p>
+        {portfolios.length > 0 && (
+          <ul className="divide-y rounded-lg border">
+            {portfolios.map(({ portfolio: p, equity, totalReturn, openCount }) => (
+              <li key={p.id}>
+                <Link
+                  href={`/paper/custom/${p.id}`}
+                  className="hover:bg-muted/50 flex items-center gap-3 px-3 py-2.5"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{p.name}</span>
+                    <span className="text-muted-foreground text-xs">
+                      {openCount} open · {usd(p.cash)} cash
+                    </span>
+                  </span>
+                  <span className="text-right tabular-nums">
+                    <span className="block font-semibold">{usd(equity)}</span>
+                    <span className="block text-xs">
+                      <Signed value={totalReturn}>{pct(totalReturn, 1, { sign: true })}</Signed>
+                    </span>
+                  </span>
+                  <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+        <CreatePortfolioForm />
+      </div>
+    </details>
   );
 }
 

@@ -4,7 +4,7 @@
  * Every data table is emptied with TRUNCATE (frees the disk space at once; DELETE leaves it
  * to vacuum) in one transaction, under the copy engine's lease so no tick writes midway.
  * Kept: app_settings (settings, the engine's lease and status) and the paper account row,
- * which goes back to its starting balance. Refused while a daily job is running: it would
+ * which goes back to its starting balance, and the personal bets. Refused while a daily job is running: it would
  * keep writing into the emptied tables.
  */
 import { and, eq, gt, sql } from "drizzle-orm";
@@ -38,8 +38,18 @@ export const WIPED_TABLES = [
   "traders",
 ] as const;
 
-/** Kept: settings + engine lease/status, and the paper account (reset, not deleted). */
-export const KEPT_TABLES = ["app_settings", "paper_accounts"] as const;
+/**
+ * Kept: settings + engine lease/status, the paper account (reset, not deleted), and the
+ * personal bets, which are apart from the copy engine (owner, 2026-11-26).
+ */
+export const KEPT_TABLES = [
+  "app_settings",
+  "custom_bets",
+  "custom_fills",
+  "custom_portfolios",
+  "custom_snapshots",
+  "paper_accounts",
+] as const;
 
 /** Same cut-off runJob uses: a "running" row older than this was a killed run. */
 const STUCK_JOB_MS = 3 * 3_600_000;

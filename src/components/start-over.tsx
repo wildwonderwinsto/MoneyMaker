@@ -56,7 +56,8 @@ export function StartOver() {
           backtest&apos;s track record starts again); market data and job history.
         </li>
         <li>
-          <span className="text-foreground">Kept:</span> your copy-engine and scoring settings.
+          <span className="text-foreground">Kept:</span> your copy-engine and scoring settings, and
+          your personal bets.
         </li>
         <li>There&apos;s no undo. The next daily run discovers traders again.</li>
       </ul>
