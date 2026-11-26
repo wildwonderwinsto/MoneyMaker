@@ -4,7 +4,7 @@
  * checked today" (J1).
  */
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import type { Db } from "@/lib/db/client";
 import {
@@ -140,6 +140,10 @@ describe("pickDailyWallets", () => {
     // The grinder's history, first picked today: skill pending, only copy_roi missing →
     // Watchlist in stage 1, so its recent activity is looked up — and it's a redeem bot.
     const g = steadyGrinder();
+    // The fixture's history ends on a fixed date (2026-11-01); score on that day, or from
+    // two weeks later the wallet fails "traded in the last 14 days" before the bot check runs.
+    vi.useFakeTimers({ toFake: ["Date"], now: (g.now + 3600) * 1000 });
+    onTestFinished(() => void vi.useRealTimers());
     await db.insert(traders).values({
       wallet: "0xredeembot",
       lastBackfillAt: new Date(),

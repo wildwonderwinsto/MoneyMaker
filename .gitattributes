@@ -1,0 +1,4 @@
+# Keep LF everywhere (Prettier checks for it), also on Windows checkouts with core.autocrlf.
+* text=auto eol=lf
+*.ico binary
+*.png binary
